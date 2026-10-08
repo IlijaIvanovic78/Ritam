@@ -1,0 +1,715 @@
+/* Napredak (prog-): statistika po nedelji/mesecu i poslednjih 12 nedelja.
+   Raspored se prilagođava širini sadržaja stranice (container query), pa radi
+   i kad desktop bočna traka zauzme deo ekrana. */
+
+.prog-body {
+  container: prog / inline-size;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+@media (min-width: 860px) {
+  .prog-body {
+    gap: 20px;
+  }
+}
+
+/* Telefon: prekidač Nedelja/Mesec ima dugmad od 40px (+ okvir), ali zaglavlje ostaje visoko kao
+   na ostalim stranicama, pa naslov ne skače pri promeni taba. */
+@media (max-width: 859px) {
+  .prog .page-head .seg {
+    margin-block: -4px;
+  }
+}
+
+.prog-fade {
+  transition: opacity 160ms var(--ease);
+}
+
+/* Prethodni podaci ostaju vidljivi (prigušeni) dok se učitava novi period. */
+.prog-fade.is-stale {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.prog-note {
+  font-size: 14px;
+  color: var(--text-2);
+}
+
+.prog-note-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.prog-count {
+  margin-right: 8px;
+  font-size: 13px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Izbor perioda ---- */
+
+.prog-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px 8px;
+  min-height: 44px;
+}
+
+.prog-nav {
+  display: flex;
+  gap: 2px;
+  margin-left: -8px;
+  flex-shrink: 0;
+}
+
+.prog-period {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.prog-period-title {
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.3;
+  font-variant-numeric: tabular-nums;
+}
+
+.prog-period-sub {
+  font-size: 13px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.prog-reset {
+  flex-shrink: 0;
+}
+
+/* ---- KPI ---- */
+
+.prog-kpis {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.prog-kpi {
+  min-width: 0;
+  padding: 12px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.prog-kpi-label {
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.prog-kpi-value {
+  margin: 4px 0 0;
+  font-size: 24px;
+  font-weight: 650;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.prog-kpi-unit {
+  margin-left: 5px;
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--text-2);
+}
+
+.prog-kpi-cap {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@container prog (min-width: 560px) {
+  .prog-kpis {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .prog-kpi {
+    padding: 14px 16px;
+  }
+}
+
+@container prog (min-width: 760px) {
+  .prog-kpi-value {
+    font-size: 28px;
+  }
+}
+
+/* ---- Dve kolone na širem ekranu ---- */
+
+.prog-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+/* Kolona je samostalan stub kartica (visoka kartica u jednoj ne ostavlja rupu u drugoj). Na uskom
+   ekranu kolone nestaju i kartice idu redom: grafik, kategorije, zadaci, 12 nedelja. */
+.prog-col {
+  display: contents;
+}
+
+.prog-order-1 {
+  order: 1;
+}
+
+.prog-order-2 {
+  order: 2;
+}
+
+.prog-order-3 {
+  order: 3;
+}
+
+.prog-order-4 {
+  order: 4;
+}
+
+@container prog (min-width: 700px) {
+  .prog-grid {
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+    gap: 20px;
+  }
+
+  .prog-col {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    min-width: 0;
+  }
+}
+
+/* ---- Legenda ---- */
+
+.prog-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.prog-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.prog-legend-scale {
+  display: inline-flex;
+  gap: 3px;
+}
+
+.prog-swatch {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.prog-swatch.is-done {
+  background: var(--done);
+}
+
+.prog-swatch.is-partial {
+  background: var(--partial);
+}
+
+.prog-swatch.is-skipped {
+  background: var(--skipped);
+}
+
+.prog-legend-line {
+  display: inline-block;
+  width: 14px;
+  height: 1px;
+  background: var(--text-3);
+}
+
+/* ---- Nedelja: stubičasti grafik ---- */
+
+.prog-wk-plot {
+  width: 100%;
+}
+
+.prog-wk-plot svg {
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.prog-wk-axis {
+  stroke: var(--border-strong);
+  stroke-width: 1;
+}
+
+.prog-wk-thr {
+  stroke: var(--text-3);
+  stroke-width: 1;
+  opacity: 0.6;
+}
+
+.prog-wk-hit {
+  fill: transparent;
+  transition: fill 120ms var(--ease);
+}
+
+.prog-wk-slot.is-today .prog-wk-hit {
+  fill: color-mix(in srgb, var(--now) 8%, transparent);
+}
+
+.prog-wk-slot.is-link {
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  .prog-wk-slot.is-link:hover .prog-wk-hit {
+    fill: color-mix(in srgb, var(--text) 5%, transparent);
+  }
+}
+
+@media (hover: hover) {
+  .prog-wk-slot.is-today.is-link:hover .prog-wk-hit {
+    fill: color-mix(in srgb, var(--now) 14%, transparent);
+  }
+}
+
+.prog-wk-slot:focus {
+  outline: none;
+}
+
+.prog-wk-slot:focus-visible .prog-wk-hit {
+  stroke: var(--focus);
+  stroke-width: 2;
+}
+
+.prog-wk-bar.is-done {
+  fill: var(--done);
+}
+
+.prog-wk-bar.is-partial {
+  fill: var(--partial);
+}
+
+.prog-wk-bar.is-skipped {
+  fill: var(--skipped);
+}
+
+.prog-wk-none {
+  fill: var(--border-strong);
+}
+
+/* Danas dok je u toku i ispod praga: samo obris, bez boje ocene (rezultat još nije konačan). */
+.prog-wk-bar.is-live {
+  fill: none;
+  stroke: var(--text-3);
+  stroke-width: 1.5;
+}
+
+.prog-wk-val {
+  font-size: 12px;
+  font-weight: 600;
+  fill: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  /* Oreol u boji kartice: linija "prag za niz" ne precrtava broj iznad stuba. */
+  paint-order: stroke;
+  stroke: var(--surface);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+
+.prog-wk-val.is-none {
+  font-weight: 400;
+  fill: var(--text-3);
+}
+
+.prog-wk-val.is-live {
+  font-weight: 500;
+  fill: var(--text-3);
+}
+
+.prog-wk-wd {
+  font-size: 12px;
+  fill: var(--text-2);
+}
+
+.prog-wk-num {
+  font-size: 11px;
+  fill: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.prog-wk-slot.is-today .prog-wk-wd,
+.prog-wk-slot.is-today .prog-wk-num {
+  fill: var(--text);
+  font-weight: 650;
+}
+
+.prog-wk-slot.is-future .prog-wk-wd {
+  fill: var(--text-3);
+}
+
+/* ---- Intenzitet heatmapa (jedna boja, svetlo → tamno) ----
+   Koraci po temi su u tokenima (--heat-0 … --heat-3). Nivoi 0–2 nose tekst u --text, nivo 3
+   --heat-ink-3 (u tamnoj temi taman), nivo 4 je puna --done boja sa tekstom u --surface (vidi
+   .prog-cal-cell.prog-heat-*); kontrast teksta >= 4.5 u obe teme. Već nivo 0 (0–19%) se jasno
+   razlikuje od dana koji nije praćen (--surface-2). */
+
+.prog-heat-none {
+  background: var(--surface-2);
+}
+
+.prog-heat-0 {
+  background: color-mix(in srgb, var(--done) var(--heat-0), var(--surface));
+}
+
+.prog-heat-1 {
+  background: color-mix(in srgb, var(--done) var(--heat-1), var(--surface));
+}
+
+.prog-heat-2 {
+  background: color-mix(in srgb, var(--done) var(--heat-2), var(--surface));
+}
+
+.prog-heat-3 {
+  background: color-mix(in srgb, var(--done) var(--heat-3), var(--surface));
+}
+
+.prog-heat-4 {
+  background: var(--done);
+}
+
+.prog-heat-future {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+/* Danas u toku (ispod praga): neutralno, samo okvir. */
+.prog-heat-live,
+.prog-swatch.is-live {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--text-3);
+}
+
+/* ---- Mesec: kalendar ---- */
+
+.prog-cal {
+  container-type: inline-size;
+  max-width: 480px;
+}
+
+.prog-cal-head,
+.prog-cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.prog-cal-head {
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: var(--text-3);
+  text-align: center;
+}
+
+.prog-cal-cell {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: flex-start;
+  min-width: 0;
+  min-height: 36px;
+  aspect-ratio: 1;
+  padding: 4px 5px;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.1;
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+  transition: box-shadow 120ms var(--ease);
+}
+
+.prog-cal-cell.prog-heat-none {
+  color: var(--text-2);
+}
+
+.prog-cal-cell.prog-heat-future {
+  color: var(--text-3);
+}
+
+.prog-cal-cell.prog-heat-live {
+  color: var(--text-2);
+}
+
+.prog-cal-cell.prog-heat-3 {
+  color: var(--heat-ink-3);
+}
+
+.prog-cal-cell.prog-heat-4 {
+  color: var(--surface);
+}
+
+@media (hover: hover) {
+  button.prog-cal-cell:hover {
+    box-shadow: inset 0 0 0 1px var(--text-3);
+  }
+
+  button.prog-cal-cell.prog-heat-live:hover {
+    box-shadow: inset 0 0 0 1.5px var(--text-2);
+  }
+}
+
+.prog-cal-cell.is-today {
+  outline: 1.5px solid var(--text);
+  outline-offset: 1px;
+}
+
+/* Danas u toku već ima okvir (kao stavka "u toku" u legendi) — bez drugog prstena oko njega. */
+.prog-cal-cell.is-today.prog-heat-live:not(:focus-visible),
+.prog-hm-cell.is-today.prog-heat-live:not(:focus-visible) {
+  outline: none;
+  box-shadow: inset 0 0 0 1.5px var(--text-2);
+}
+
+.prog-cal-cell:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.prog-cal-num {
+  font-weight: 550;
+}
+
+.prog-cal-pct {
+  display: none;
+  align-self: flex-end;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+/* Telefon (kalendar ~290–360px): procenat sitnije, ali vidljiv — boja nije jedini podatak. */
+@container (min-width: 280px) {
+  .prog-cal-pct {
+    display: block;
+    font-size: 10px;
+  }
+}
+
+@container (min-width: 360px) {
+  .prog-cal-pct {
+    font-size: 11px;
+  }
+
+  .prog-cal-cell {
+    padding: 5px 6px;
+  }
+}
+
+/* ---- Poslednjih 12 nedelja ---- */
+
+.prog-hm-grid {
+  display: grid;
+  grid-template-columns: auto repeat(12, minmax(0, 24px));
+  justify-content: start; /* višak širine ne ide u kolonu sa oznakama dana */
+  gap: 3px;
+  align-items: center;
+}
+
+.prog-hm-month {
+  min-width: 0;
+  height: 16px;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: visible;
+}
+
+.prog-hm-wd {
+  padding-right: 6px;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--text-3);
+}
+
+.prog-hm-cell {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  padding: 0;
+  border-radius: 3px;
+  transition: box-shadow 120ms var(--ease);
+}
+
+@media (hover: hover) {
+  button.prog-hm-cell:hover {
+    box-shadow: inset 0 0 0 1px var(--text-3);
+  }
+
+  button.prog-hm-cell.prog-heat-live:hover {
+    box-shadow: inset 0 0 0 1.5px var(--text-2);
+  }
+}
+
+.prog-hm-cell.is-today {
+  outline: 1.5px solid var(--text-2);
+  outline-offset: 1px;
+}
+
+.prog-hm-cell:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.prog-hm-loading {
+  display: grid;
+  place-items: center;
+  min-height: 160px;
+}
+
+/* ---- Po kategoriji ---- */
+
+.prog-cats,
+.prog-cats-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.prog-cat.is-dim {
+  opacity: 0.6;
+}
+
+.prog-cat-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.prog-cat-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 550;
+}
+
+.prog-cat-pct {
+  font-size: 14px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.prog-cat-bar {
+  margin-top: 7px;
+}
+
+.prog-cat-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 5px;
+  font-size: 13px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.prog-cat-of {
+  color: var(--text-3);
+}
+
+.prog-cats-sep {
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+/* ---- Završeni zadaci ---- */
+
+.prog-tasks {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.prog-tasks-date {
+  margin-bottom: 2px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.prog-tasks-date a {
+  border-radius: 4px;
+}
+
+@media (hover: hover) {
+  .prog-tasks-date a:hover {
+    color: var(--text);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+}
+
+.prog-task {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.prog-task-check {
+  margin-top: 2px;
+  color: var(--done);
+}
+
+.prog-task-title {
+  order: 2;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* ✓ · tačka · naslov (kao na Danas); visina reda teksta centrira tačku na prvom redu. */
+.prog-task-cat {
+  order: 1;
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+}

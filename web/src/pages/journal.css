@@ -1,0 +1,217 @@
+/* Dnevnik: jedna čitljiva kolona, unosi razdvojeni tankim linijama (bez kartica). */
+
+.jr-page {
+  --jr-col: 720px;
+}
+
+/* Zaglavlje, pretraga i lista dele istu kolonu, poravnatu levo kao i ostale stranice
+   (naslov ne skače pri prelasku sa taba na tab). */
+.jr-page > * {
+  width: 100%;
+  max-width: var(--jr-col);
+}
+
+/* ---- Pretraga ---- */
+
+.jr-search {
+  position: relative;
+}
+
+.jr-search-icon {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  color: var(--text-3);
+  pointer-events: none;
+}
+
+.jr-search .jr-search-input {
+  padding-left: 40px;
+  padding-right: 44px;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+/* Sopstveno dugme za brisanje umesto browserovog (isto na svim platformama). */
+.jr-search-input::-webkit-search-cancel-button,
+.jr-search-input::-webkit-search-decoration {
+  -webkit-appearance: none;
+  appearance: none;
+  display: none;
+}
+
+.jr-search .jr-search-clear {
+  position: absolute;
+  right: 1px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-3);
+}
+
+/* ---- Lista ---- */
+
+.jr-results {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  transition: opacity 120ms var(--ease);
+}
+
+.jr-results.is-stale {
+  opacity: 0.55;
+}
+
+.jr-month-title {
+  padding-bottom: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.jr-entry {
+  padding: 14px 0 16px;
+  border-top: 1px solid var(--border);
+}
+
+/* Telefon: datum pa meta ispod (uvek isto poravnanje); šire: meta desno od datuma. */
+.jr-entry-head {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  margin-bottom: 6px;
+}
+
+@media (min-width: 600px) {
+  .jr-entry-head {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 2px 16px;
+  }
+}
+
+.jr-date {
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+/* Veća dodirna površina bez promene visine reda (padding + negativna margina). */
+.jr-date-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 9px 0;
+  margin: -9px 0;
+  border-radius: var(--radius-sm);
+}
+
+@media (hover: hover) {
+  .jr-date-link:hover {
+    text-decoration: underline;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 3px;
+  }
+}
+
+.jr-date-icon {
+  color: var(--text-3);
+  transition: transform 120ms var(--ease), color 120ms;
+}
+
+@media (hover: hover) {
+  .jr-date-link:hover .jr-date-icon {
+    color: var(--text-2);
+    transform: translateX(2px);
+  }
+}
+
+.jr-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  font-size: 13px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.jr-meta-item {
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.jr-meta-item + .jr-meta-item::before {
+  content: '·';
+  margin: 0 8px;
+  color: var(--text-3);
+}
+
+/* ---- Tekst beleške ---- */
+
+.jr-text {
+  position: relative; /* offsetTop pogodaka pretrage se meri u odnosu na tekst */
+  font-size: 15px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.jr-text.is-clamped {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 6;
+  line-clamp: 6;
+  overflow: hidden;
+}
+
+.jr-mark {
+  margin: 0 -1px;
+  padding: 0 1px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--partial) 24%, transparent);
+  color: inherit;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
+.jr-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 40px;
+  margin-bottom: -10px;
+  padding: 0;
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  font-weight: 550;
+  color: var(--text-2);
+  transition: color 120ms;
+}
+
+@media (hover: hover) {
+  .jr-toggle:hover {
+    color: var(--text);
+  }
+}
+
+/* ---- Učitaj još ---- */
+
+.jr-more {
+  display: flex;
+  justify-content: center;
+}
+
+@media (max-width: 859px) {
+  .jr-more .btn {
+    width: 100%;
+  }
+}

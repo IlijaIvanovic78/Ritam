@@ -1,0 +1,159 @@
+/* Podešavanja: uska kolona kartica sa redovima "naziv + objašnjenje | kontrola". */
+
+.set-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  max-width: 680px;
+}
+
+.set-row {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.set-row + .set-row {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.set-row-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.set-row-label {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.set-row-hint {
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.set-row-control {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* Šira kartica: kontrola desno od teksta. */
+@media (min-width: 600px) {
+  .set-row {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 24px;
+  }
+
+  .set-row-control {
+    align-items: flex-end;
+    flex-shrink: 0;
+  }
+}
+
+.set-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.set-time {
+  flex: 0 0 auto;
+}
+
+.set-error {
+  font-size: 13px;
+  color: var(--danger);
+}
+
+/* Čeka odgovor servera — kontrola se ne dira dok ne stigne. */
+.set-busy {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.set-seg-num .seg-btn {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Telefon (od 360px): opcije dele punu širinu ravnomerno. */
+@media (max-width: 599px) {
+  .set-seg-wrap,
+  .set-seg {
+    width: 100%;
+  }
+
+  .set-seg {
+    display: flex;
+  }
+
+  .set-seg .seg-btn {
+    flex: 1 1 0;
+    padding: 0 4px;
+    height: 40px;
+  }
+}
+
+/* ---- Instalacija ---- */
+
+.set-install {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.set-steps {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.set-steps > div {
+  display: grid;
+  grid-template-columns: 72px 1fr;
+  gap: 12px;
+  font-size: 14px;
+}
+
+.set-steps dt {
+  font-weight: 550;
+  color: var(--text);
+}
+
+.set-steps dd {
+  margin: 0;
+  color: var(--text-2);
+}
+
+/* ---- Ostalo ---- */
+
+.set-confirm-meta {
+  margin-top: 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+.set-version {
+  padding: 4px 2px 0;
+  font-size: 13px;
+  color: var(--text-3);
+}
+
+/* ---- Raspored ispočetka: objašnjenje, opcija, pa akcija ---- */
+
+.set-reset {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+}

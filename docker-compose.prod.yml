@@ -1,0 +1,41 @@
+# Produkcija na VPS-u: Caddy (HTTPS, automatski sertifikat) ispred aplikacije.
+#   docker compose -f docker-compose.prod.yml up -d --build
+# U .env postavi APP_PASSWORD, DOMAIN (DNS A zapis → IP servera) i po želji SESSION_SECRET,
+# vrednosti u jednostrukim navodnicima (vidi .env.example).
+# Portovi 80 i 443 moraju biti otvoreni. Aplikacija nije direktno izložena — samo preko Caddy-ja.
+
+services:
+  ritam:
+    build: .
+    image: ritam:latest
+    restart: unless-stopped
+    environment:
+      APP_PASSWORD: ${APP_PASSWORD:?Postavi APP_PASSWORD u .env}
+      SESSION_SECRET: ${SESSION_SECRET:-}
+      # Zahtevi stižu preko Caddy-ja: adresa klijenta (za ograničenje prijave) je u X-Forwarded-For.
+      TRUST_PROXY: "1"
+      TZ: Europe/Belgrade
+    volumes:
+      - ritam-data:/data
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      ritam:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN:?Postavi DOMAIN u .env}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  ritam-data:
+  caddy-data:
+  caddy-config:

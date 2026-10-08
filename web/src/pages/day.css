@@ -1,0 +1,1347 @@
+/* Stranica Dan. Sve klase imaju prefiks day-. Samo tokeni (boje kategorija dolaze iz podataka). */
+
+/* ---- Zaglavlje ---- */
+
+.day-head .page-title {
+  font-size: 20px;
+}
+
+.day-date {
+  position: relative;
+  display: inline-flex;
+  max-width: 100%;
+}
+
+.day-date-btn {
+  display: inline-block;
+  margin: -2px -6px;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  text-align: left;
+  letter-spacing: inherit;
+  transition: background-color 120ms var(--ease);
+}
+
+@media (hover: hover) {
+  .day-date-btn:hover {
+    background: var(--surface-2);
+  }
+}
+
+/* Strelica ide uz poslednju reč i kad se naslov prelomi u dva reda. */
+.day-date-last {
+  white-space: nowrap;
+}
+
+.day-date-chev {
+  display: inline-block;
+  margin-left: 4px;
+  vertical-align: -2px;
+  color: var(--text-3);
+}
+
+/* Skriveni native izbor datuma; otvara se preko showPicker() ispod naslova. */
+.day-date-input {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.day-sub {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 22px;
+  min-width: 0;
+}
+
+.day-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 4px;
+  background: var(--now-bg);
+  color: var(--now);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* "Danas" u podnaslovu (telefon): mala, ali sa većom dodirnom površinom. */
+.day-today-btn {
+  position: relative;
+  height: 26px;
+  padding: 0 10px;
+  font-size: 13px;
+}
+
+.day-today-btn::after {
+  content: '';
+  position: absolute;
+  inset: -8px -4px;
+}
+
+/* Telefon: kratak naslov i dugmad u prvom redu, podnaslov ispod preko cele širine (jedan red). */
+@media (max-width: 859px) {
+  .day-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 0 8px;
+  }
+
+  .day-head .page-head-text {
+    display: contents;
+  }
+
+  .day-head .page-title {
+    grid-row: 1;
+    grid-column: 1;
+    min-width: 0;
+  }
+
+  /* Dodirna površina bar 40px (SPEC 7), bez pomeranja rasporeda. */
+  .day-date-btn {
+    padding: 8px 6px;
+    margin: -8px -6px;
+  }
+
+  .day-head .page-actions {
+    grid-row: 1;
+    grid-column: 2;
+    gap: 0;
+    margin-right: -8px;
+  }
+
+  .day-head .page-sub {
+    grid-row: 2;
+    grid-column: 1 / -1;
+    min-width: 0;
+  }
+
+  /* Ista visina sa dugmetom "Danas" i bez njega: sadržaj se ne pomera pri listanju dana. */
+  .day-sub {
+    flex-wrap: nowrap;
+    min-height: 26px;
+  }
+
+  .day-sub > * {
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  .day-sub > .truncate {
+    flex-shrink: 1;
+    min-width: 0;
+  }
+}
+
+@media (min-width: 860px) {
+  /* Naslov i podnaslov levo, strelice i meni u visini naslova (ne sredine celog bloka). */
+  .day-head {
+    align-items: flex-start;
+  }
+
+  .day-head .page-title {
+    font-size: 24px;
+  }
+
+  .day-head .page-actions .btn-sm {
+    margin-right: 6px;
+  }
+}
+
+/* ---- Meni (⋯) ---- */
+
+.day-menu-wrap {
+  position: relative;
+}
+
+.day-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 40;
+  min-width: 232px;
+  padding: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-pop);
+  animation: day-menu-in 140ms var(--ease);
+}
+
+.day-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  padding: 0 12px;
+  border-radius: var(--radius-sm);
+  font-size: 15px;
+  text-align: left;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.day-menu-item .icon {
+  color: var(--text-2);
+}
+
+.day-menu-item:focus-visible {
+  background: var(--surface-2);
+  outline: none;
+}
+
+@media (hover: hover) {
+  .day-menu-item:not(:disabled):hover {
+    background: var(--surface-2);
+  }
+}
+
+.day-menu-item:disabled,
+.day-menu-item:disabled .icon {
+  color: var(--text-3);
+}
+
+@media (min-width: 860px) {
+  .day-menu-item {
+    min-height: 36px;
+    font-size: 14px;
+  }
+}
+
+@keyframes day-menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+/* ---- Raspored kolona ---- */
+
+.day-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  gap: 16px;
+}
+
+.day-col {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+/* Dve kolone tek kad ima mesta za obe (sa bočnom trakom ispod ~1000px kolone bi bile preuske). */
+@media (min-width: 1000px) {
+  .day-grid {
+    grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+    gap: 20px;
+  }
+
+  .day-col {
+    gap: 20px;
+  }
+}
+
+/* Spinner se pojavljuje tek posle kratke pauze (bez treperenja pri brzom učitavanju). */
+.day-loader {
+  animation: day-fade-in 200ms var(--ease) 150ms both;
+}
+
+@keyframes day-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* ---- "Sada" kartica ---- */
+
+.day-now {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+}
+
+.day-now-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--now);
+}
+
+.day-now-main {
+  display: flex;
+  align-items: stretch;
+  gap: 12px;
+}
+
+.day-now-bar {
+  flex-shrink: 0;
+  width: 3px;
+  border-radius: 2px;
+}
+
+.day-now-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+}
+
+.day-now-title {
+  font-size: 18px;
+  font-weight: 650;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+  overflow-wrap: anywhere;
+}
+
+.day-now-sub {
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.day-now-left {
+  flex-shrink: 0;
+  align-self: center;
+  text-align: right;
+  font-size: 13px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.day-now-left strong {
+  display: block;
+  font-size: 18px;
+  font-weight: 650;
+  color: var(--text);
+}
+
+.day-now-pbar {
+  height: 4px;
+}
+
+/* Dan bez blokova: samo podsetnik za neocenjene blokove od juče. */
+.day-now-only {
+  align-items: flex-start;
+  padding-block: 12px;
+}
+
+.day-now-over {
+  font-size: 15px;
+  font-weight: 550;
+}
+
+.day-now-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.day-now-next {
+  flex: 1 1 220px;
+  min-width: 0;
+  display: flex;
+  gap: 4px;
+  font-size: 14px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+/* Naslov se skraćuje, vreme ostaje vidljivo u istom redu. */
+.day-now-next-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text);
+  font-weight: 550;
+}
+
+.day-now-due {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 32px;
+  margin: -4px -6px;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--partial);
+}
+
+@media (hover: hover) {
+  .day-now-due:hover {
+    background: var(--partial-bg);
+  }
+}
+
+@media (max-width: 859px) {
+  .day-now-due {
+    min-height: 40px;
+  }
+}
+
+/* ---- Prvo pokretanje (nema šablona) ---- */
+
+.day-welcome {
+  padding: 20px 20px 18px;
+}
+
+.day-welcome-title {
+  font-size: 18px;
+  font-weight: 650;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+}
+
+.day-welcome-lead {
+  margin-top: 6px;
+  max-width: 46ch;
+  color: var(--text-2);
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+.day-welcome-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 18px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 15px;
+  line-height: 1.4;
+  color: var(--text-2);
+}
+
+.day-welcome-step {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 8px;
+}
+
+.day-welcome-num {
+  display: inline-flex;
+  justify-content: center;
+  color: var(--text-3);
+  font-size: 14px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.day-welcome-step-title {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* Ikonica uz prvi red teksta (i kad se korak prelama u dva reda). */
+.day-welcome-step.is-done .day-welcome-num {
+  align-self: start;
+  margin-top: 2px;
+  color: var(--done);
+}
+
+.day-welcome-step.is-done .day-welcome-step-title {
+  color: var(--text-2);
+}
+
+.day-welcome-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+@media (max-width: 859px) {
+  .day-welcome {
+    padding: 18px 16px 16px;
+  }
+
+  /* Na telefonu dugmad jedno ispod drugog, preko cele širine. */
+  .day-welcome-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
+/* ---- Vremenska linija ---- */
+
+.day-timeline .card-body {
+  padding: 4px 0 0;
+}
+
+.day-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 4px 12px 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.day-banner .icon,
+.day-banner .spinner {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.day-banner-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Akcija u traci: ne povećava traku (dugme je više od teksta). */
+.day-banner-action {
+  flex-shrink: 0;
+  align-self: center;
+  margin: -6px -6px -6px 0;
+}
+
+.day-list {
+  display: flex;
+  flex-direction: column;
+  transition: opacity 120ms;
+}
+
+.day-list.is-busy {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.day-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-right: 6px;
+  border-top: 1px solid var(--border);
+  transition: background-color 120ms var(--ease);
+}
+
+.day-list > :first-child {
+  border-top: 0;
+}
+
+.day-row-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+  padding: 11px 0 11px 12px;
+  text-align: left;
+}
+
+.day-row-main:focus-visible {
+  outline-offset: -2px;
+  border-radius: var(--radius-sm);
+}
+
+.day-time {
+  flex-shrink: 0;
+  width: 42px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  font-size: 13px;
+  line-height: 1.35;
+  font-variant-numeric: tabular-nums;
+}
+
+.day-time-end {
+  color: var(--text-3);
+}
+
+.day-bar {
+  flex-shrink: 0;
+  width: 3px;
+  border-radius: 2px;
+}
+
+.day-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+}
+
+.day-title {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  font-size: 15px;
+  font-weight: 550;
+  line-height: 1.3;
+}
+
+.day-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px 6px;
+  font-size: 13px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.day-meta-note {
+  display: inline-flex;
+  color: var(--text-3);
+}
+
+.day-now-tag {
+  font-weight: 600;
+  color: var(--now);
+}
+
+.day-due-tag {
+  color: var(--partial);
+}
+
+.day-row.is-skipped .day-title {
+  color: var(--text-2);
+}
+
+.day-row.is-now {
+  background: var(--now-bg);
+}
+
+/* Tanka linija napretka kroz trenutni blok. */
+.day-row-progress {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  background: var(--now);
+  pointer-events: none;
+  transition: width 300ms var(--ease);
+}
+
+@media (hover: hover) {
+  .day-row:hover {
+    background: var(--surface-2);
+  }
+
+  .day-row.is-now:hover {
+    background: color-mix(in srgb, var(--now) 14%, var(--surface));
+  }
+}
+
+/* Praznina između blokova */
+.day-gap {
+  padding: 5px 12px 5px 77px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.day-gap.is-now {
+  background: var(--now-bg);
+  color: var(--now);
+}
+
+.day-gap-now {
+  font-weight: 600;
+}
+
+.day-add-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 48px;
+  padding: 0 12px;
+  border-top: 1px solid var(--border);
+  border-radius: 0 0 calc(var(--radius-lg) - 1px) calc(var(--radius-lg) - 1px);
+  color: var(--text-2);
+  font-size: 14px;
+  font-weight: 550;
+  text-align: left;
+  transition: background-color 120ms var(--ease), color 120ms;
+}
+
+@media (hover: hover) {
+  .day-add-row:not(:disabled):hover {
+    background: var(--surface-2);
+    color: var(--text);
+  }
+}
+
+.day-add-row:not(:disabled):active {
+  background: var(--surface-2);
+}
+
+.day-add-row:disabled {
+  opacity: 0.5;
+}
+
+.day-add-row:focus-visible {
+  outline-offset: -2px;
+}
+
+/* Ikonica u koloni vremena, tekst poravnat sa naslovima blokova. */
+.day-add-icon {
+  display: flex;
+  width: 42px;
+  margin-right: 13px;
+}
+
+/* ---- Kontrola statusa ---- */
+
+.day-status {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.day-status-btn {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius);
+  color: var(--text-3);
+  transition: background-color 120ms var(--ease), color 120ms, opacity 120ms;
+}
+
+/* Hover samo na uređajima sa mišem (na telefonu bi ostao "zalepljen" posle dodira). */
+@media (hover: hover) {
+  .day-status-btn:not(:disabled):hover {
+    background: var(--surface-3);
+    color: var(--text);
+  }
+
+  .day-status.has-value .day-status-btn:not(.is-active):hover {
+    opacity: 1;
+  }
+}
+
+.day-status.has-value .day-status-btn:not(.is-active) {
+  opacity: 0.55;
+}
+
+.day-status-btn.is-active.is-done {
+  background: var(--done-bg);
+  color: var(--done);
+}
+
+.day-status-btn.is-active.is-partial {
+  background: var(--partial-bg);
+  color: var(--partial);
+}
+
+.day-status-btn.is-active.is-skipped {
+  background: var(--skipped-bg);
+  color: var(--skipped);
+}
+
+.day-status-btn:disabled {
+  opacity: 0.35;
+}
+
+/* Popunjen deo ikone ◐ je teži od linija ✓ i ✕ — dok nije izabrana, ne sme da izgleda istaknuto. */
+.day-status-btn:not(.is-active) .icon [fill='currentColor'],
+.day-sum-status.is-zero .icon [fill='currentColor'] {
+  fill-opacity: 0.4;
+}
+
+.day-status-btn:focus-visible {
+  outline-offset: -1px;
+}
+
+.day-row.is-due .day-status-btn {
+  color: var(--text-2);
+}
+
+@media (min-width: 860px) {
+  .day-status-btn {
+    width: 34px;
+    height: 34px;
+  }
+}
+
+/* Telefon: naslovu bloka ostaje uska kolona pored tri dugmeta statusa (≥ 40px), pa su razmaci
+   tešnji, a oznake ne prelamaju red nepredvidivo (ista vrsta reda = ista visina). */
+@media (max-width: 859px) {
+  .day-row-main {
+    gap: 8px;
+    padding-left: 10px;
+  }
+
+  .day-status {
+    gap: 0;
+  }
+
+  /* Trenutni blok je već označen pozadinom, linijom napretka i karticom "Sada" iznad;
+     oznaka "sada" ostaje samo za čitače ekrana. */
+  .day-now-tag {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  /* "čeka ocenu" uvek u svom redu (inače zavisi od dužine "Kategorija · trajanje"). */
+  .day-due-tag {
+    flex-basis: 100%;
+  }
+
+  /* Poravnato sa naslovima blokova: 10 + 42 (vreme) + 8 + 3 (traka) + 8. */
+  .day-gap {
+    padding-left: 71px;
+  }
+
+  .day-add-row {
+    padding: 0 10px;
+  }
+
+  .day-add-icon {
+    margin-right: 9px;
+  }
+}
+
+/* ---- Pregled ---- */
+
+.day-sum-top {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.day-summary .ring-label {
+  font-size: 15px;
+}
+
+.day-sum-stats {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.day-sum-line {
+  font-size: 14px;
+  color: var(--text-2);
+}
+
+.day-sum-line strong {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.day-sum-statuses {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-size: 13px;
+}
+
+.day-sum-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-weight: 600;
+}
+
+.day-sum-status.is-done {
+  color: var(--done);
+}
+
+.day-sum-status.is-partial {
+  color: var(--partial);
+}
+
+.day-sum-status.is-skipped {
+  color: var(--skipped);
+}
+
+.day-sum-status.is-zero {
+  color: var(--text-3);
+  font-weight: 500;
+}
+
+.day-sum-pending {
+  color: var(--text-3);
+}
+
+.day-sum-cats {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.day-sum-cat {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.day-sum-cat-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.day-sum-cat-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.day-sum-cat-time {
+  flex-shrink: 0;
+  font-size: 13px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+/* ---- Zadaci ---- */
+
+.day-card-count {
+  margin-right: 8px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.day-carry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  font-size: 14px;
+}
+
+.day-carry p {
+  min-width: 0;
+}
+
+.day-task-add {
+  display: flex;
+  gap: 8px;
+}
+
+.day-task-add .icon-btn {
+  flex-shrink: 0;
+  width: 42px;
+  height: 42px;
+}
+
+/* Prazan dan u kartici Blokovi: "Dodaj blok" i (ako ima šablona) "Primeni šablon…". */
+.day-empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
+.day-empty-line {
+  margin-top: 12px;
+  font-size: 14px;
+  color: var(--text-3);
+}
+
+.day-task-list {
+  display: flex;
+  flex-direction: column;
+  margin: 8px -8px -6px;
+}
+
+.day-task {
+  display: flex;
+  align-items: center;
+  border-radius: var(--radius);
+  transition: background-color 120ms var(--ease), opacity 120ms;
+}
+
+@media (hover: hover) {
+  .day-task:hover {
+    background: var(--surface-2);
+  }
+}
+
+.day-task.is-temp {
+  opacity: 0.6;
+}
+
+.day-check {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 44px;
+  border-radius: var(--radius);
+}
+
+.day-check:focus-visible {
+  outline-offset: -2px;
+}
+
+.day-check-box {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  /* --text-3, ne --border-strong: krug mora da se vidi (kontrast >= 3:1, i na crnoj pozadini). */
+  border: 1.5px solid var(--text-3);
+  color: var(--surface);
+  transition: background-color 120ms var(--ease), border-color 120ms;
+}
+
+@media (hover: hover) {
+  .day-check:not(:disabled):hover .day-check-box {
+    border-color: var(--text-2);
+  }
+}
+
+.day-task.is-done .day-check-box {
+  background: var(--done);
+  border-color: var(--done);
+}
+
+.day-task-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 8px 8px 8px 2px;
+  border-radius: var(--radius);
+  font-size: 15px;
+  text-align: left;
+}
+
+.day-task-title:focus-visible {
+  outline-offset: -2px;
+}
+
+.day-task-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.day-task.is-done .day-task-text {
+  color: var(--text-3);
+  text-decoration: line-through;
+}
+
+/* ---- Beleške ---- */
+
+.day-save-state {
+  margin-right: 8px;
+  font-size: 13px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.day-save-state.is-error {
+  color: var(--danger);
+}
+
+.day-link-btn {
+  position: relative;
+  font-size: 13px;
+  font-weight: 550;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* Telefon: dodirna površina ~40px oko teksta linka, bez pomeranja rasporeda. */
+@media (max-width: 859px) {
+  .day-link-btn::before {
+    content: '';
+    position: absolute;
+    inset: -11px -6px;
+  }
+}
+
+.day-notes-input {
+  min-height: 120px;
+}
+
+/* Nesačuvan tekst sa ovog uređaja iz ranije, a beleška se u međuvremenu promenila. */
+.day-notes-restore {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  margin-bottom: 10px;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  background: var(--partial-bg);
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.day-rating {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-top: 14px;
+}
+
+.day-rating-label {
+  font-size: 14px;
+  font-weight: 550;
+  color: var(--text-2);
+}
+
+/* ---- Sheet-ovi (blok, zadatak, šablon) ---- */
+
+.day-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.day-form-times {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 6px 12px;
+}
+
+.day-form-times-msg {
+  grid-column: 1 / -1;
+}
+
+.day-form-seg {
+  display: flex;
+  width: 100%;
+}
+
+.day-form-seg .seg-btn {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 36px;
+  padding: 0 6px;
+}
+
+@media (max-width: 859px) {
+  .day-form-seg .seg-btn {
+    height: 40px;
+  }
+}
+
+/* Novi blok koji ide na kraj dana iako izgleda kao jutarnji (npr. 00:30–08:30). */
+.day-form-warn {
+  color: var(--partial);
+}
+
+.day-split {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+.day-sheet-note {
+  font-size: 13px;
+  color: var(--text-3);
+}
+
+.day-sheet-lead {
+  font-size: 14px;
+  color: var(--text-2);
+}
+
+.day-btn-danger {
+  color: var(--danger);
+}
+
+@media (hover: hover) {
+  .day-btn-danger:not(:disabled):hover {
+    color: var(--danger);
+    background: color-mix(in srgb, var(--danger) 10%, transparent);
+  }
+}
+
+@media (min-width: 860px) {
+  .day-foot-left {
+    margin-right: auto;
+  }
+}
+
+/* "Zameni sa…": izgleda kao dugme, a klik/dodir ide na nevidljiv <select> preko njega. */
+.day-swap {
+  position: relative;
+  min-width: 0;
+}
+
+.day-swap-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.day-swap-select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  appearance: none;
+  font-size: 16px; /* iOS ne zumira */
+  cursor: pointer;
+}
+
+.day-swap-select:disabled {
+  cursor: default;
+}
+
+.day-swap.is-disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.day-swap:has(.day-swap-select:focus-visible) {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* Telefon: četiri dugmeta u podnožju — širina po sadržaju i uži razmaci, da stanu i na 360px. */
+@media (max-width: 859px) {
+  .sheet-foot:has(.day-swap) {
+    gap: 4px;
+  }
+
+  .sheet-foot:has(.day-swap) .btn {
+    flex: 1 1 auto;
+    padding: 0 8px;
+  }
+}
+
+.day-date-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* Datum zadatka: vidljivo dugme sa datumom na srpskom, ispod njega skriveno native polje. */
+.day-task-date {
+  position: relative;
+  flex: 1 1 160px;
+  min-width: 0;
+}
+
+.day-task-date-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  text-align: left;
+}
+
+.day-task-date-btn .icon {
+  color: var(--text-3);
+}
+
+.day-tpl-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.day-tpl {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  text-align: left;
+  transition: background-color 120ms var(--ease), border-color 120ms;
+}
+
+@media (hover: hover) {
+  .day-tpl:hover {
+    background: var(--surface-2);
+  }
+}
+
+.day-tpl.is-current {
+  border-color: var(--text-3);
+}
+
+.day-tpl-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.day-tpl-name {
+  font-weight: 600;
+}
+
+.day-tpl-bar {
+  position: relative;
+  display: block;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+
+.day-tpl-bar > span {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-right: 1px solid var(--surface);
+}
+
+.day-tpl-meta {
+  font-size: 13px;
+  color: var(--text-2);
+}

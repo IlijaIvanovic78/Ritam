@@ -1,0 +1,5 @@
+# Caddy automatski pribavlja i obnavlja HTTPS sertifikat za DOMAIN (iz .env).
+{$DOMAIN} {
+	encode zstd gzip
+	reverse_proxy ritam:3000
+}

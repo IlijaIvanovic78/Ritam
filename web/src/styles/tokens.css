@@ -1,0 +1,138 @@
+/* Dizajn tokeni. Topli neutralni tonovi, jedna "mastilo" boja za primarne akcije,
+   statusne boje samo za stanje blokova. Bez gradijenata i staklenih efekata. */
+
+:root {
+  color-scheme: light;
+
+  --bg: #f6f5f2;
+  --surface: #ffffff;
+  --surface-2: #f1f0ec;
+  --surface-3: #e8e6e1;
+  --border: #e4e2dc;
+  --border-strong: #d0cdc5;
+
+  --text: #1d1d1b;
+  --text-2: #5c5b56;
+  --text-3: #6f6d66;
+
+  --accent: #1d1d1b; /* primarna dugmad */
+  --accent-contrast: #ffffff;
+  --focus: #2f6db5;
+  /* Izabrana stavka Segmented kontrole i dugme prekidača: svetlije od staze. */
+  --raised: #ffffff;
+  --raised-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+  --toggle-knob: #ffffff;
+  /* Dugme uključenog prekidača (na stazi u --done): uvek svetlije od staze. */
+  --toggle-knob-on: #ffffff;
+
+  --done: #2e7d4f;
+  --done-bg: #e2f0e7;
+  --partial: #946010;
+  --partial-bg: #f7ecd6;
+  --skipped: #b4483c;
+  --skipped-bg: #f6e2de;
+  --danger: #b4483c;
+  --danger-contrast: #ffffff; /* tekst na --danger */
+  --now: #2f6db5;
+  --now-bg: #edf3fb;
+
+  /* Napredak: udeo --done u ćelijama heatmape po nivou 0–3 (nivo 4 je puna --done); tekst na nivou 3. */
+  --heat-0: 26%;
+  --heat-1: 36%;
+  --heat-2: 46%;
+  --heat-3: 56%;
+  --heat-ink-3: var(--text);
+
+  --shadow-pop: 0 12px 32px rgba(20, 20, 18, 0.14), 0 2px 6px rgba(20, 20, 18, 0.06);
+  --backdrop: rgba(20, 20, 18, 0.32);
+
+  --radius-sm: 6px;
+  --radius: 8px;
+  --radius-lg: 12px;
+
+  --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --mono: ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, Consolas, monospace;
+
+  --tabbar-h: 58px;
+  --sidebar-w: 224px;
+  --page-max: 1120px;
+
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+    --bg: #0a0a0a;
+    --surface: #111111;
+    --surface-2: #181818;
+    --surface-3: #232323;
+    --border: #1f1f1f;
+    --border-strong: #2e2e2e;
+    --text: #ededeb;
+    --text-2: #a3a3a0;
+    --text-3: #858583;
+    --accent: #ededeb;
+    --accent-contrast: #0a0a0a;
+    --focus: #8ab4f0;
+    --raised: #2a2a2a;
+    --raised-shadow: inset 0 0 0 1px #333333;
+    --toggle-knob: #858583;
+    --toggle-knob-on: #ededeb;
+    --done: #5fbf85;
+    --done-bg: rgba(95, 191, 133, 0.13);
+    --partial: #d9a74a;
+    --partial-bg: rgba(217, 167, 74, 0.13);
+    --skipped: #e07b6b;
+    --skipped-bg: rgba(224, 123, 107, 0.13);
+    --danger: #e07b6b;
+    --danger-contrast: #0a0a0a;
+    --now: #8ab4f0;
+    --now-bg: rgba(138, 180, 240, 0.07);
+    /* Ravnomerniji koraci na crnoj podlozi; nivo 0 se i dalje razlikuje od nepraćenog dana. */
+    --heat-0: 22%;
+    --heat-1: 36%;
+    --heat-2: 52%;
+    --heat-3: 70%;
+    --heat-ink-3: var(--bg);
+    --shadow-pop: 0 0 0 1px #262626, 0 18px 44px rgba(0, 0, 0, 0.7);
+    --backdrop: rgba(0, 0, 0, 0.68);
+  }
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #0a0a0a;
+  --surface: #111111;
+  --surface-2: #181818;
+  --surface-3: #232323;
+  --border: #1f1f1f;
+  --border-strong: #2e2e2e;
+  --text: #ededeb;
+  --text-2: #a3a3a0;
+  --text-3: #858583;
+  --accent: #ededeb;
+  --accent-contrast: #0a0a0a;
+  --focus: #8ab4f0;
+  --raised: #2a2a2a;
+  --raised-shadow: inset 0 0 0 1px #333333;
+  --toggle-knob: #858583;
+  --toggle-knob-on: #ededeb;
+  --done: #5fbf85;
+  --done-bg: rgba(95, 191, 133, 0.13);
+  --partial: #d9a74a;
+  --partial-bg: rgba(217, 167, 74, 0.13);
+  --skipped: #e07b6b;
+  --skipped-bg: rgba(224, 123, 107, 0.13);
+  --danger: #e07b6b;
+  --danger-contrast: #0a0a0a;
+  --now: #8ab4f0;
+  --now-bg: rgba(138, 180, 240, 0.07);
+  --heat-0: 22%;
+  --heat-1: 36%;
+  --heat-2: 52%;
+  --heat-3: 70%;
+  --heat-ink-3: var(--bg);
+  --shadow-pop: 0 0 0 1px #262626, 0 18px 44px rgba(0, 0, 0, 0.7);
+  --backdrop: rgba(0, 0, 0, 0.68);
+}

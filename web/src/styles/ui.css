@@ -1,0 +1,825 @@
+/* Stilovi zajedničkih komponenti iz web/src/ui. */
+
+/* ---- Dugmad ---- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 40px;
+  padding: 0 14px;
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+  font-size: 15px;
+  font-weight: 550;
+  line-height: 1;
+  white-space: nowrap;
+  transition: background-color 120ms var(--ease), border-color 120ms var(--ease), opacity 120ms;
+  user-select: none;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+}
+
+.btn-sm {
+  height: 32px;
+  padding: 0 10px;
+  font-size: 14px;
+  border-radius: var(--radius-sm);
+}
+
+.btn-block {
+  width: 100%;
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+@media (hover: hover) {
+  .btn-primary:not(:disabled):hover {
+    background: color-mix(in srgb, var(--accent) 86%, var(--bg));
+  }
+}
+
+.btn-secondary {
+  background: var(--surface);
+  border-color: var(--border-strong);
+}
+
+@media (hover: hover) {
+  .btn-secondary:not(:disabled):hover {
+    background: var(--surface-2);
+  }
+}
+
+.btn-ghost {
+  color: var(--text-2);
+}
+
+@media (hover: hover) {
+  .btn-ghost:not(:disabled):hover {
+    background: var(--surface-2);
+    color: var(--text);
+  }
+}
+
+.btn-danger {
+  background: var(--danger);
+  color: var(--danger-contrast);
+}
+
+@media (hover: hover) {
+  .btn-danger:not(:disabled):hover {
+    background: color-mix(in srgb, var(--danger) 88%, #000);
+  }
+}
+
+.icon-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius);
+  color: var(--text-2);
+  transition: background-color 120ms var(--ease), color 120ms;
+}
+
+@media (hover: hover) {
+  .icon-btn:not(:disabled):hover {
+    background: var(--surface-2);
+    color: var(--text);
+  }
+}
+
+.icon-btn:disabled {
+  opacity: 0.4;
+}
+
+/* Dodir (telefon): kratka povratna informacija; hover je samo za miš. */
+.icon-btn:not(:disabled):active,
+.btn-ghost:not(:disabled):active,
+.btn-secondary:not(:disabled):active {
+  background: var(--surface-2);
+}
+
+.icon-btn-sm {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+}
+
+.icon-btn-secondary {
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+}
+
+/* ---- Forme ---- */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.field-label {
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--text-2);
+}
+
+.field-hint {
+  font-size: 13px;
+  color: var(--text-3);
+}
+
+.field-error {
+  font-size: 13px;
+  color: var(--danger);
+}
+
+.input {
+  width: 100%;
+  min-width: 0;
+  height: 42px;
+  padding: 0 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  font-size: 16px; /* >= 16px da iOS ne zumira */
+  transition: border-color 120ms, box-shadow 120ms;
+}
+
+.input:focus {
+  outline: none;
+  border-color: var(--focus);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 18%, transparent);
+}
+
+.input::placeholder {
+  color: var(--text-3);
+}
+
+/* 24h izbor vremena: dva select-a (sat : minuti). */
+.time-input {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.time-input .time-input-part {
+  width: 3.6rem;
+  flex: 0 0 auto;
+  padding: 0 20px 0 9px;
+  background-position: right 4px center;
+  font-variant-numeric: tabular-nums;
+}
+
+.time-input-sep {
+  color: var(--text-3);
+  font-weight: 600;
+  padding: 0 1px;
+}
+
+.select {
+  appearance: none;
+  padding-right: 34px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23858583' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+}
+
+.textarea {
+  height: auto;
+  min-height: 84px;
+  padding: 10px 12px;
+  line-height: 1.5;
+  resize: none;
+  overflow: hidden;
+}
+
+/* ---- Kartice ---- */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  min-width: 0;
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 16px 0;
+  min-height: 44px;
+}
+
+.card-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.card-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-right: -8px;
+}
+
+.card-body {
+  padding: 12px 16px 16px;
+}
+
+.card-flush .card-body {
+  padding: 8px 0 8px;
+}
+
+/* ---- Prazno stanje, spinner ---- */
+
+.empty {
+  padding: 28px 16px;
+  text-align: center;
+}
+
+.empty-title {
+  font-weight: 600;
+}
+
+.empty-text {
+  margin-top: 4px;
+  color: var(--text-2);
+  font-size: 14px;
+}
+
+.empty-action {
+  margin-top: 14px;
+  display: flex;
+  justify-content: center;
+}
+
+.spinner {
+  display: inline-block;
+  width: 22px;
+  height: 22px;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--text-2);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.spinner-sm {
+  width: 16px;
+  height: 16px;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---- Napredak ---- */
+
+.pbar {
+  position: relative;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+
+.pbar-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 3px;
+  background: var(--text);
+  transition: width 240ms var(--ease);
+}
+
+.ring {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.ring svg {
+  position: absolute;
+  inset: 0;
+}
+
+.ring-track {
+  stroke: var(--surface-3);
+}
+
+.ring-fill {
+  stroke: var(--done);
+  transition: stroke-dasharray 300ms var(--ease);
+}
+
+.ring-label {
+  position: relative;
+  font-size: 13px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Segmentirana kontrola ---- */
+
+.seg {
+  display: inline-flex;
+  padding: 3px;
+  gap: 2px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+
+.seg-btn {
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 550;
+  color: var(--text-2);
+  white-space: nowrap;
+  transition: background-color 120ms, color 120ms;
+}
+
+@media (hover: hover) {
+  .seg-btn:hover {
+    color: var(--text);
+  }
+}
+
+.seg-btn:not(.is-active):active {
+  color: var(--text);
+}
+
+.seg-btn.is-active {
+  background: var(--raised);
+  color: var(--text);
+  box-shadow: var(--raised-shadow);
+}
+
+.seg-sm .seg-btn {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 13px;
+}
+
+/* ---- Kategorije ---- */
+
+.cat-dot {
+  display: inline-block;
+  flex-shrink: 0;
+  border-radius: 50%;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 17px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  font-size: 14px;
+  color: var(--text-2);
+  transition: background-color 120ms, border-color 120ms, color 120ms;
+}
+
+@media (hover: hover) {
+  .chip:hover {
+    color: var(--text);
+  }
+}
+
+.chip:not(.is-active):active {
+  background: var(--surface-2);
+}
+
+.chip.is-active {
+  border-color: var(--cat, var(--text));
+  background: color-mix(in srgb, var(--cat, var(--text)) 12%, var(--surface));
+  color: var(--text);
+  font-weight: 550;
+}
+
+/* Izbor kategorije sa pravljenjem nove u hodu. */
+.cat-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.chip-add {
+  gap: 4px;
+  padding: 0 12px 0 9px;
+  border-style: dashed;
+  background: transparent;
+  color: var(--text-3);
+}
+
+/* Polje za naziv nove kategorije, u redu sa čipovima. */
+.chip-new {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 1 1 240px;
+  min-width: 0;
+  max-width: 380px;
+}
+
+.chip-new .chip-new-input {
+  flex: 1 1 auto;
+  height: 34px;
+  border-radius: 17px;
+}
+
+.chip-new .icon-btn {
+  flex-shrink: 0;
+}
+
+/* ---- Prekidač ---- */
+
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  min-height: 32px;
+}
+
+.toggle input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+}
+
+.toggle-track {
+  position: relative;
+  width: 38px;
+  height: 22px;
+  border-radius: 11px;
+  background: var(--surface-3);
+  border: 1px solid var(--border-strong);
+  transition: background-color 150ms;
+  flex-shrink: 0;
+}
+
+.toggle-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--toggle-knob);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  transition: transform 150ms var(--ease), background-color 150ms;
+}
+
+.toggle input:checked + .toggle-track {
+  background: var(--done);
+  border-color: var(--done);
+}
+
+.toggle input:checked + .toggle-track .toggle-thumb {
+  transform: translateX(16px);
+  background: var(--toggle-knob-on);
+}
+
+.toggle input:focus-visible + .toggle-track {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.toggle.is-disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.toggle-label {
+  font-size: 14px;
+}
+
+/* ---- Ocena ---- */
+
+.rating {
+  display: flex;
+  gap: 6px;
+}
+
+.rating-btn {
+  width: 40px;
+  height: 36px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  transition: background-color 120ms, color 120ms, border-color 120ms;
+}
+
+@media (hover: hover) {
+  .rating-btn:hover {
+    color: var(--text);
+  }
+}
+
+.rating-btn.is-on {
+  background: var(--text);
+  border-color: var(--text);
+  color: var(--bg);
+}
+
+/* Ocene ispod izabrane: tiho popunjene (skala se i dalje čita), puna je samo izabrana. */
+.rating-btn.is-below {
+  background: var(--surface-3);
+  border-color: var(--border-strong);
+  color: var(--text-2);
+}
+
+.rating-dots {
+  display: inline-flex;
+  gap: 3px;
+  vertical-align: middle;
+}
+
+.rating-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--surface-3);
+}
+
+.rating-dot.is-on {
+  background: var(--text-2);
+}
+
+/* ---- Sheet / dijalog ---- */
+
+.sheet {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  max-width: 100vw;
+  max-height: 100dvh;
+  overflow: visible;
+}
+
+.sheet::backdrop {
+  background: var(--backdrop);
+}
+
+.sheet[open] {
+  animation: sheet-fade 160ms var(--ease);
+}
+
+.sheet-panel {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  box-shadow: var(--shadow-pop);
+  max-height: 100%;
+}
+
+.sheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px max(8px, env(safe-area-inset-right)) 4px max(20px, env(safe-area-inset-left));
+  flex-shrink: 0;
+}
+
+.sheet-title {
+  font-size: 17px;
+  font-weight: 600;
+  min-width: 0;
+}
+
+.sheet-body {
+  padding: 8px max(20px, env(safe-area-inset-right)) 16px max(20px, env(safe-area-inset-left));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.sheet-foot {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  padding: 12px max(20px, env(safe-area-inset-right)) 12px max(20px, env(safe-area-inset-left));
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.confirm-body {
+  color: var(--text-2);
+}
+
+/* Telefon: donji sheet. Dok je tastatura otvorena (--kb, --vvh iz lib/viewport.ts) sheet stoji
+   iznad nje, da se vide polje i dugme za čuvanje. */
+@media (max-width: 859px) {
+  .sheet {
+    margin: auto 0 var(--kb, 0px);
+    width: 100%;
+    max-height: min(92dvh, var(--vvh, 92dvh));
+  }
+
+  .sheet-panel {
+    border-radius: 16px 16px 0 0;
+    max-height: min(92dvh, var(--vvh, 92dvh));
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .kb-open .sheet-panel {
+    padding-bottom: 0;
+  }
+
+  .sheet[open] .sheet-panel {
+    animation: sheet-up 220ms var(--ease);
+  }
+
+  .sheet-foot .btn {
+    flex: 1;
+  }
+}
+
+/* Desktop: centriran dijalog */
+@media (min-width: 860px) {
+  .sheet {
+    margin: auto;
+    width: min(520px, calc(100vw - 32px));
+    max-height: min(86vh, 820px);
+  }
+
+  .sheet-sm {
+    width: min(400px, calc(100vw - 32px));
+  }
+
+  .sheet-lg {
+    width: min(880px, calc(100vw - 32px));
+  }
+
+  .sheet-panel {
+    border-radius: var(--radius-lg);
+    max-height: min(86vh, 820px);
+  }
+}
+
+@keyframes sheet-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes sheet-up {
+  from {
+    transform: translateY(24px);
+    opacity: 0.6;
+  }
+}
+
+/* ---- Toast ---- */
+
+.toaster {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  /* Iznad donje trake, a dok je tastatura otvorena iznad nje. */
+  bottom: max(calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 12px), calc(var(--kb, 0px) + 12px));
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(420px, calc(100vw - 32px));
+  pointer-events: none;
+}
+
+@media (min-width: 860px) {
+  .toaster {
+    bottom: 24px;
+  }
+
+  /* Po sredini sadržaja, ne celog prozora (levo je bočna traka). U sheet-u ostaje po sredini ekrana. */
+  body:has(.shell-side) .toaster:not(.toaster-top) {
+    left: calc(50% + var(--sidebar-w) / 2);
+  }
+}
+
+/* Dok je otvoren sheet, toaster je unutar njegovog <dialog>-a (inače ne bi primao dodir), na vrhu
+   ekrana: ne pokriva dugmad u podnožju sheet-a i ne stoji iznad tastature. */
+.toaster.toaster-top {
+  top: calc(env(safe-area-inset-top) + 12px);
+  bottom: auto;
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 8px 10px 14px;
+  border-radius: var(--radius);
+  background: var(--text);
+  color: var(--bg);
+  font-size: 14px;
+  box-shadow: var(--shadow-pop);
+  /* Dodir prolazi kroz poruku do sadržaja ispod (npr. upravo dodat red na dnu liste); × radi. */
+  pointer-events: none;
+  animation: toast-in 180ms var(--ease);
+}
+
+.toast-error {
+  background: var(--danger);
+  color: var(--danger-contrast);
+}
+
+.toast-close {
+  pointer-events: auto;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  font-size: 18px;
+  line-height: 1;
+  opacity: 0.7;
+  color: inherit;
+}
+
+@media (hover: hover) {
+  .toast-close:hover {
+    opacity: 1;
+  }
+}
+
+@keyframes toast-in {
+  from {
+    transform: translateY(8px);
+    opacity: 0;
+  }
+}
+
+/* ---- Telefon: dodirne površine bar 40px (SPEC 7) ---- */
+
+@media (max-width: 859px) {
+  .btn-sm {
+    height: 40px;
+  }
+
+  .icon-btn-sm {
+    width: 40px;
+    height: 40px;
+  }
+
+  .seg-btn {
+    height: 40px;
+  }
+
+  .seg-sm .seg-btn {
+    height: 40px;
+  }
+
+  .chip {
+    height: 40px;
+    border-radius: 20px;
+  }
+
+  .chip-new .chip-new-input {
+    height: 40px;
+    border-radius: 20px;
+  }
+
+  .rating-btn {
+    height: 40px;
+  }
+
+  .toast-close {
+    width: 40px;
+    height: 40px;
+  }
+}

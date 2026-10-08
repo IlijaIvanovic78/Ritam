@@ -1,0 +1,3 @@
+# Lična aplikacija — ne indeksirati.
+User-agent: *
+Disallow: /

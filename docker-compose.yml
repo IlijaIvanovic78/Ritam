@@ -1,0 +1,19 @@
+# Lokalno pokretanje: docker compose up -d --build  →  http://localhost:3000
+# Lozinka se čita iz .env (vidi .env.example).
+
+services:
+  ritam:
+    build: .
+    image: ritam:latest
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      APP_PASSWORD: ${APP_PASSWORD:?Postavi APP_PASSWORD u .env}
+      SESSION_SECRET: ${SESSION_SECRET:-}
+      TZ: Europe/Belgrade
+    volumes:
+      - ritam-data:/data
+
+volumes:
+  ritam-data:
