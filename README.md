@@ -18,10 +18,7 @@ jednostrukim navodnicima (`APP_PASSWORD='…'`): bez njih Docker Compose menja z
 lozinka ne bi radila.
 
 `docker-compose.yml` vezuje aplikaciju samo na `127.0.0.1:3001`, pa je na serveru dostupna samo preko
-reverse proxy-ja (nginx, Caddy…) na istoj mašini. Proxy treba da prosledi `X-Forwarded-For` i
-`X-Forwarded-Proto` (npr. nginx: `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;` i
-`proxy_set_header X-Forwarded-Proto $scheme;`). Za VPS bez sopstvenog proxy-ja postoji
-`docker-compose.prod.yml` sa Caddy-jem (vidi Opciju B ispod).
+Nginx-a na istoj mašini. Gotov config je u `deploy/nginx/ritamorg.com.conf`, a koraci su u Opciji B ispod.
 
 Zaustavljanje: `docker compose down`. Podaci ostaju u Docker volumenu `<ime foldera>_ritam-data`
 (npr. `app_ritam-data`; vidi `docker volume ls`).
@@ -104,18 +101,45 @@ Aplikacija je jedan Docker kontejner sa jednim volumenom (`/data`) i jednom obav
    (vidi je npr. na https://ifconfig.me). Ako piše neka druga (adresa Railway-a), postavi `TRUST_PROXY=2` i proveri
    ponovo. Inače bi svi klijenti delili isto ograničenje od 10 pogrešnih pokušaja na 15 minuta.
 
-### Opcija B: VPS + sopstveni domen
+### Opcija B: VPS + Nginx (npr. Hetzner)
 
-1. Iznajmi mali Linux VPS (dovoljni su 1 vCPU i 1 GB RAM) i kupi domen.
-2. Na DNS-u domena dodaj A zapis koji pokazuje na IP adresu servera.
-3. Na serveru instaliraj Docker, kopiraj projekat, napravi `.env` po uzoru na `.env.example` (`APP_PASSWORD`,
-   `DOMAIN`, po želji `SESSION_SECRET`; vrednosti u jednostrukim navodnicima), pa pokreni:
+Docker pokreće samo aplikaciju na `127.0.0.1:3001`, a Nginx na serveru prima HTTPS i prosleđuje joj zahteve.
+Primer je za domen `ritamorg.com`; ako koristiš drugi, zameni ga u komandama i u
+`deploy/nginx/ritamorg.com.conf`.
+
+1. **DNS:** A zapisi `ritamorg.com` i `www.ritamorg.com` pokazuju na javnu IP adresu servera.
+2. **Docker i aplikacija:**
 
    ```bash
-   docker compose -f docker-compose.prod.yml up -d --build
+   curl -fsSL https://get.docker.com | sh
+   git clone https://github.com/IlijaIvanovic78/Ritam.git && cd Ritam
+   cp .env.example .env && nano .env      # APP_PASSWORD i SESSION_SECRET, u jednostrukim navodnicima
+   docker compose up -d --build
+   curl http://127.0.0.1:3001/api/health  # {"ok":true,...}
    ```
 
-   Caddy sam izdaje i obnavlja HTTPS sertifikat za `DOMAIN`.
+   `SESSION_SECRET` generiši sa `openssl rand -hex 32`.
+3. **Nginx:**
+
+   ```bash
+   sudo apt install -y nginx
+   sudo cp deploy/nginx/ritamorg.com.conf /etc/nginx/sites-available/ritamorg.com
+   sudo ln -s /etc/nginx/sites-available/ritamorg.com /etc/nginx/sites-enabled/
+   sudo nginx -t && sudo systemctl reload nginx
+   ```
+
+4. **HTTPS (Let's Encrypt):**
+
+   ```bash
+   sudo apt install -y certbot python3-certbot-nginx
+   sudo certbot --nginx -d ritamorg.com -d www.ritamorg.com
+   ```
+
+   Certbot dopiše HTTPS deo u Nginx config, preusmeri HTTP na HTTPS i sam obnavlja sertifikat.
+5. **Firewall:** otvori samo 22, 80 i 443 (`sudo ufw allow OpenSSH && sudo ufw allow 'Nginx Full' && sudo ufw enable`,
+   ili isto u Hetzner Cloud Firewall-u). Port 3001 ne otvaraj, jer je vezan samo za 127.0.0.1.
+
+**Nadogradnja:** `git pull && docker compose up -d --build`.
 
 ### Instalacija na telefon
 
@@ -126,7 +150,7 @@ Aplikacija je jedan Docker kontejner sa jednim volumenom (`/data`) i jednom obav
 ### Izgubljen telefon
 
 Promena `APP_PASSWORD` (ili `SESSION_SECRET`) odjavljuje sve uređaje. `.env` se čita samo kad se kontejner pravi,
-pa posle izmene pokreni `docker compose up -d` (na VPS-u `docker compose -f docker-compose.prod.yml up -d`);
+pa posle izmene pokreni `docker compose up -d`;
 `restart` ne učitava novi `.env`. Na Railway-u posle izmene promenljive klikni **Deploy**. Zatim se ponovo prijavi
 na uređajima koje koristiš.
 
@@ -140,9 +164,9 @@ Na VPS-u možeš da sačuvaš i ceo volumen, ali samo dok aplikacija ne radi: do
 `ritam.db-wal`, pa bi sama kopija `ritam.db` bila nepotpuna ili prazna. Uredno zaustavljanje ih upiše u `ritam.db`:
 
 ```bash
-docker compose -f docker-compose.prod.yml stop ritam
-docker compose -f docker-compose.prod.yml cp ritam:/data ./ritam-kopija
-docker compose -f docker-compose.prod.yml start ritam
+docker compose stop ritam
+docker compose cp ritam:/data ./ritam-kopija
+docker compose start ritam
 ```
 
 Za vraćanje podataka koristi JSON kopiju.
