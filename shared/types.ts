@@ -207,17 +207,62 @@ export interface JournalEntry {
   tasksTotal: number;
 }
 
-export interface AuthState {
-  authRequired: boolean;
-  authenticated: boolean;
+// ---- Nalozi (email + lozinka; access token u memoriji klijenta, refresh token u kolačiću) ----
+
+/** Prijavljen korisnik (svaki nalog ima potpuno odvojene podatke). */
+export interface AuthUser {
+  id: number;
+  email: string;
+  /**
+   * Samo nalog koji je pri registraciji preuzeo podatke iz verzije bez naloga (prvi nalog na serveru koji je
+   * imao podatke): klijent mu daje i draftove beleški iz te verzije (`ritam.note.<datum>`). Ostali nalozi ga nemaju.
+   */
+  legacyOwner?: true;
 }
+
+/**
+ * Odgovor na registraciju, prijavu, `/api/auth/refresh` i promenu lozinke. Refresh token stiže samo kao
+ * HttpOnly kolačić `ritam_refresh` (Path=/api/auth); access token se čuva samo u memoriji i šalje kao
+ * `Authorization: Bearer <accessToken>`.
+ */
+export interface AuthResponse {
+  accessToken: string;
+  /** Koliko sekundi access token važi od izdavanja. */
+  expiresIn: number;
+  user: AuthUser;
+}
+
+/** GET /api/auth/config — da li je registracija otvorena, uz kod ili zatvorena. */
+export interface AuthConfig {
+  signup: 'open' | 'code' | 'closed';
+}
+
+/**
+ * `code` u telu greške (`{ error, code }`) za auth:
+ * - `unauthorized` / `token_expired`: access token nedostaje, neispravan je ili je istekao (svaka zaštićena ruta);
+ * - `no_session` / `refresh_race` / `invalid_refresh`: `/api/auth/refresh` (nema kolačića / drugi tab je upravo
+ *   obnovio sesiju / sesija ne važi);
+ * - `signup_closed` / `bad_code`: registracija; `bad_password`: promena lozinke; `rate_limited`: 429;
+ * - `client_outdated`: prijava bez emaila (tab iz verzije pre naloga — treba osvežiti stranicu).
+ */
+export type AuthErrorCode =
+  | 'unauthorized'
+  | 'token_expired'
+  | 'no_session'
+  | 'refresh_race'
+  | 'invalid_refresh'
+  | 'signup_closed'
+  | 'bad_code'
+  | 'bad_password'
+  | 'rate_limited'
+  | 'client_outdated';
 
 /** GET /api/health */
 export interface HealthPayload {
   ok: true;
   /**
    * Glavni JS fajl web build-a koji server servira ("/assets/index-….js"), pročitan iz index.html
-   * pri pokretanju. Klijent ga poredi sa svojim da bi se posle deploy-a učitao ponovo.
+   * pri pokretanju. Klijent ga poredi sa svojim da bi posle deploy-a ponudio novu verziju ("Osveži").
    * Nema ga kad server ne servira build (razvoj preko Vite-a).
    */
   build?: string;

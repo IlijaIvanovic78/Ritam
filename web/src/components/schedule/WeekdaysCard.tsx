@@ -5,6 +5,7 @@ import type { Weekday, WeekdayMap } from '../../../../shared/types.ts';
 import { WEEKDAY_NAMES, capitalize, isoWeekday } from '../../../../shared/time.ts';
 import { api, errorMessage } from '../../api.ts';
 import { useLogicalNow } from '../../lib/hooks.ts';
+import { enqueue } from '../../lib/queue.ts';
 import { scheduleStore, useScheduleData } from '../../lib/store.ts';
 import { Card, Select, cx, toast } from '../../ui/index.ts';
 import { WEEKDAYS } from './util.ts';
@@ -16,10 +17,7 @@ export function WeekdaysCard() {
   // Optimistička izmena: prikazuje se odmah, server je potvrdi ili se vraća na stanje iz store-a.
   const [optimistic, setOptimistic] = useState<WeekdayMap | null>(null);
   const seq = useRef(0);
-  /** Zahtevi idu jedan za drugim, pa odgovor poslednjeg sadrži i sve ranije izmene. */
-  const chain = useRef<Promise<unknown>>(Promise.resolve());
   const map = optimistic ?? weekdays;
-  const known = new Set(templates.map((t) => t.id));
   // Bez šablona nema šta da se dodeli: redovi su tu (da se vidi šta sledi), ali onemogućeni.
   const none = templates.length === 0;
 
@@ -29,10 +27,10 @@ export function WeekdaysCard() {
     setOptimistic({ ...map, [wd]: tid });
     try {
       // Šalje se samo promenjeni dan: ostali dani ostaju kako su na serveru (možda ih je u
-      // međuvremenu menjao drugi uređaj, a ovaj ekran to još ne zna).
-      const req = chain.current.then(() => api.putWeekdays({ [wd]: tid }));
-      chain.current = req.catch(() => {});
-      const payload = await req;
+      // međuvremenu menjao drugi uređaj, a ovaj ekran to još ne zna). Zajednički red zahteva:
+      // zahtevi idu jedan za drugim (odgovor poslednjeg sadrži i sve ranije izmene), a "Osveži" i
+      // odjava čekaju i njih (whenQueueIdle).
+      const payload = await enqueue(() => api.putWeekdays({ [wd]: tid }));
       // Važi samo odgovor na poslednji zahtev (on sadrži i ranije).
       if (mine !== seq.current) return;
       scheduleStore.set(payload);
@@ -52,6 +50,7 @@ export function WeekdaysCard() {
       <div className={cx('sched-wd-list', none && 'is-disabled')}>
         {WEEKDAYS.map((wd) => {
           const tid = map[wd];
+          const selected = tid != null ? templates.find((t) => t.id === tid) : undefined;
           return (
             <label key={wd} className="sched-wd-row">
               <span className="sched-wd-name">
@@ -59,7 +58,8 @@ export function WeekdaysCard() {
                 {wd === today && <span className="sched-wd-today">danas</span>}
               </span>
               <Select
-                value={tid != null && known.has(tid) ? String(tid) : ''}
+                value={selected ? String(selected.id) : ''}
+                title={selected?.name}
                 onChange={(e) => change(wd, e.target.value)}
                 disabled={none}
               >

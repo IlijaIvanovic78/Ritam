@@ -2,13 +2,13 @@ import type { Block, BlockStatus, Category } from '../../../../shared/types.ts';
 import { fmtClock, fmtDuration } from '../../../../shared/time.ts';
 import { blockDuration } from '../../../../shared/summary.ts';
 import { categoryColor, categoryName } from '../../lib/store.ts';
-import { Icon, cx } from '../../ui/index.ts';
+import { CategoryStroke, Icon, cx } from '../../ui/index.ts';
 import { StatusControl } from './StatusControl.tsx';
 import { isActiveStatus } from './useDay.ts';
 
 export const blockDomId = (id: number) => `day-block-${id}`;
 
-/** Jedan red vremenske linije: vreme, traka kategorije, naslov + meta, kontrola statusa. */
+/** Jedan red vremenske linije: vreme, crta kategorije, naslov + meta, kontrola statusa. */
 export function BlockRow({
   block,
   index,
@@ -44,14 +44,21 @@ export function BlockRow({
           <span>{fmtClock(block.start)}</span>
           <span className="day-time-end">{fmtClock(block.end)}</span>
         </span>
-        <span className="day-bar" style={{ background: color }} aria-hidden="true" />
+        <CategoryStroke color={color} />
         <span className="day-text">
           <span className="day-title">{block.title}</span>
           <span className="day-meta">
             {isNow && <span className="day-now-tag">sada</span>}
+            {/* Red se prelama samo pre "·": trajanje ("2h 30m") se nikad ne cepa, a tačka ne visi na kraju reda. */}
             <span>
-              {categoryName(catMap, block.categoryId)} · {fmtDuration(blockDuration(block))}
-              {actual != null && <> · stvarno {fmtDuration(actual)}</>}
+              {categoryName(catMap, block.categoryId)}{' '}
+              <span className="day-meta-seg">· {fmtDuration(blockDuration(block))}</span>
+              {actual != null && (
+                <>
+                  {' '}
+                  <span className="day-meta-seg">· stvarno {fmtDuration(actual)}</span>
+                </>
+              )}
             </span>
             {block.note.trim() !== '' && (
               <span className="day-meta-note" title="Ima belešku">

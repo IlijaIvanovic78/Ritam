@@ -6,10 +6,18 @@
  *                 da aplikacija zna da podaci možda nisu sveži) ili 503 JSON. Ako postoji kopija,
  *                 a mreža ne odgovori za API_TIMEOUT_MS (slab signal), odmah kopija; odgovor mreže
  *                 kad stigne samo osveži keš.
- *                 /api/auth/*, /api/export i /api/health se nikad ne keširaju.
+ *                 /api/auth/*, /api/export i /api/health se nikad ne keširaju (health je provera
+ *                 nove verzije: kopija iz keša bi pogrešno javila da je server i dalje na staroj).
+ *                 Nalozi: kopija pripada nalogu iz headera X-Ritam-User zahteva (aplikacija ga šalje
+ *                 uz svaki GET; zahtev bez njega ide samo na mrežu) i vraća se samo zahtevu istog
+ *                 naloga. Ključ u kešu je samo URL — Authorization (Bearer token) se nikad ne upisuje.
+ *                 Aplikacija briše ceo API keš pri odjavi i kad se na uređaju prijavi drugi nalog;
+ *                 odgovor GET zahteva koji je tada još bio u toku se više ne upisuje.
  *   navigacija    mreža prvo (svaka stranica je index.html), bez mreže keširani '/'. Ako mreža
  *                 ne odgovori za NAV_TIMEOUT_MS (slab signal), odmah keširani '/', a odgovor
  *                 mreže kad stigne samo osveži keš.
+ *                 'Osveži' (nova verzija) pre ponovnog učitavanja šalje poruku 'refresh-shell':
+ *                 keširani '/' se odmah osveži sa mreže, pa i spora navigacija dobija novi build.
  *   /assets/*     keš prvo (Vite fajlovi imaju heš u imenu i nikad se ne menjaju).
  *   ostalo        stale-while-revalidate (manifest, ikonice, favicon).
  *
@@ -20,7 +28,7 @@
  * isto ime koristi i aplikacija (web/src/lib/pwa.ts), koja u njega upisuje odgovore izmena.
  */
 
-const VERSION = 'v5';
+const VERSION = 'v10';
 const STATIC_CACHE = `ritam-static-${VERSION}`;
 const ASSET_CACHE = `ritam-assets-${VERSION}`;
 const API_CACHE = 'ritam-api';
@@ -57,6 +65,12 @@ let slowUntil = 0;
 const MAX_ASSETS = 80;
 const MAX_API = 300;
 
+/**
+ * Kad je aplikacija poslednji put obrisala API keš (odjava, drugi nalog). Odgovor zahteva započetog pre
+ * toga ne sme ponovo da napravi keš sa podacima odjavljenog naloga.
+ */
+let apiClearedAt = 0;
+
 // ---- Instalacija: '/', njegovi /assets/* fajlovi i ikonice ----
 //
 // '/' i njegovi JS/CSS fajlovi moraju da stignu sa mreže, inače instalacija ne uspeva: stara
@@ -90,18 +104,40 @@ self.addEventListener('install', (event) => {
  * Prvo učitavanje stranice ide pre nego što SW postoji, pa JS/CSS iz index.html
  * nisu u kešu. Pročitaj ih iz HTML-a i keširaj, da aplikacija radi i bez mreže.
  * Baca grešku ako neki fajl ne stigne sa mreže (vidi instalaciju).
+ *
+ * Fontovi naslova (.woff2) se ne pominju u HTML-u nego u CSS-u (url(/assets/…)); i oni idu u keš,
+ * da naslovi i bez mreže budu u svom pismu. Font je poželjan, ne obavezan: ako ne stigne,
+ * instalacija ipak uspeva (naslov tada koristi rezervni serif, a font se kešira pri prvoj upotrebi).
  */
 async function cacheAssetsFromHtml(html) {
   const urls = new Set();
   for (const m of html.matchAll(/(?:src|href)="(\/assets\/[^"?#]+)"/g)) urls.add(m[1]);
   if (urls.size === 0) return;
   const cache = await openCache(ASSET_CACHE);
+  const fonts = new Set();
   await Promise.all(
     [...urls].map(async (url) => {
-      if (cache && (await cache.match(url).catch(() => null))) return;
-      const res = await fetch(url);
-      if (!isCacheable(res)) throw new Error(`Instalacija: ${url} vratio ${res.status}`);
-      await safePut(cache, url, res);
+      let res = await safeMatch(cache, url);
+      if (!res) {
+        res = await fetch(url);
+        if (!isCacheable(res)) throw new Error(`Instalacija: ${url} vratio ${res.status}`);
+        await safePut(cache, url, res.clone());
+      }
+      if (url.endsWith('.css')) {
+        const css = await res.text().catch(() => '');
+        for (const m of css.matchAll(/url\(["']?(\/assets\/[^"')?#]+\.woff2)/g)) fonts.add(m[1]);
+      }
+    }),
+  );
+  await Promise.all(
+    [...fonts].map(async (url) => {
+      try {
+        if (await safeMatch(cache, url)) return;
+        const res = await fetch(url);
+        if (isCacheable(res)) await safePut(cache, url, res);
+      } catch {
+        // nema mreže — font se kešira pri prvoj upotrebi (cacheFirst)
+      }
     }),
   );
 }
@@ -129,7 +165,35 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('message', (event) => {
   const data = event.data;
   if (data && data.type === 'clear-api-cache') {
+    apiClearedAt = Date.now();
     event.waitUntil(caches.delete(API_CACHE).catch(() => {}));
+  }
+  // "Osveži" (nova verzija aplikacije): verzija koja čeka preuzima stranicu pre ponovnog učitavanja.
+  // Instalacija ionako zove skipWaiting(), pa je ovo samo rezerva.
+  if (data && data.type === 'skip-waiting') {
+    event.waitUntil(self.skipWaiting());
+  }
+  // "Osveži": pre ponovnog učitavanja keširani '/' postaje nova verzija sa mreže. Inače bi na sporoj
+  // mreži navigacija posle NAV_TIMEOUT_MS dobila keširani '/', a to je (kad se sw.js nije menjao)
+  // i dalje stari build. Odgovor { ok } ide na port poruke; stranica se učitava i kad ovo ne uspe.
+  if (data && data.type === 'refresh-shell') {
+    const port = event.ports && event.ports[0];
+    event.waitUntil(
+      (async () => {
+        let ok = false;
+        try {
+          const cache = await openCache(STATIC_CACHE);
+          const res = await fetch(new Request('/', { cache: 'no-store' }));
+          if (cache && res.ok && isHtml(res)) {
+            await safePut(cache, '/', res);
+            ok = true;
+          }
+        } catch {
+          // nema mreže — stranica se ipak učitava (mreža prvo)
+        }
+        if (port) port.postMessage({ ok });
+      })(),
+    );
   }
 });
 
@@ -174,10 +238,10 @@ async function openCache(name) {
   }
 }
 
-async function safeMatch(cache, req) {
+async function safeMatch(cache, req, opts) {
   if (!cache) return null;
   try {
-    return (await cache.match(req)) || null;
+    return (await cache.match(req, opts)) || null;
   } catch {
     return null;
   }
@@ -254,27 +318,53 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(() => resolve(null), ms));
 }
 
+/** Nalog kome pripada zahtev (header X-Ritam-User koji šalje aplikacija); '' = nepoznat. */
+function requestUser(req) {
+  const u = req.headers.get('X-Ritam-User') || '';
+  return /^\d{1,15}$/.test(u) ? u : '';
+}
+
+/** Kopija iz API keša, samo ako pripada istom nalogu (kopija bez oznake naloga se nikad ne vraća). */
+async function matchForUser(cache, key, user) {
+  if (!user) return null;
+  const hit = await safeMatch(cache, key, { ignoreVary: true });
+  return hit && hit.headers.get('X-Ritam-User') === user ? hit : null;
+}
+
+/** Odgovor mreže sa oznakom naloga, za upis u API keš. */
+function tagUser(res, user) {
+  const headers = new Headers(res.headers);
+  headers.set('X-Ritam-User', user);
+  return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
+}
+
 /**
  * Upiši odgovor mreže u API keš, osim ako je aplikacija u međuvremenu upisala noviji odgovor
  * izmene (header X-Ritam-Stored, vidi storeOfflineCopy u web/src/lib/pwa.ts) — kasan odgovor GET
- * zahteva poslatog pre te izmene je stariji od nje.
+ * zahteva poslatog pre te izmene je stariji od nje. Kopija drugog naloga pod istim URL-om se
+ * prepisuje (drugi nalog ionako ne sme da je vidi). Ništa, ako je keš obrisan posle početka zahteva.
  */
-async function putUnlessNewer(cache, req, res, startedAt) {
-  const cur = await safeMatch(cache, req);
+async function putUnlessNewer(cache, key, user, res, startedAt) {
+  if (startedAt <= apiClearedAt) return;
+  const cur = await matchForUser(cache, key, user);
   const stored = Number(cur?.headers.get('X-Ritam-Stored') || 0);
   if (stored > startedAt) return;
-  await safePut(cache, req, res);
+  await safePut(cache, key, tagUser(res, user));
   await trimCache(API_CACHE, MAX_API);
 }
 
 async function apiNetworkFirst(req, event) {
-  const cache = await openCache(API_CACHE);
   const startedAt = Date.now();
+  const user = requestUser(req);
+  // Bez oznake naloga nema ni kopije: samo mreža (Authorization prolazi nepromenjen).
+  const cache = user ? await openCache(API_CACHE) : null;
+  // Ključ je samo URL: token iz Authorization headera se ne upisuje na disk.
+  const key = req.url;
   const network = fetch(req).then(
     (res) => {
       if (res.ok && cache) {
         // Upis u keš ne usporava odgovor, ali SW ostaje živ dok se ne završi.
-        event.waitUntil(putUnlessNewer(cache, req, res.clone(), startedAt));
+        event.waitUntil(putUnlessNewer(cache, key, user, res.clone(), startedAt));
       }
       return res;
     },
@@ -282,7 +372,7 @@ async function apiNetworkFirst(req, event) {
   );
   event.waitUntil(network);
 
-  const hit = await safeMatch(cache, req);
+  const hit = await matchForUser(cache, key, user);
   // Bez kopije nema šta drugo da se pokaže — čeka se mreža (rok drži aplikacija).
   let res;
   if (hit) {

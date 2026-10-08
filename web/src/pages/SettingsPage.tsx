@@ -1,13 +1,29 @@
-// Podešavanja: tema, početak dana, prag za niz, instalacija, rezervna kopija, raspored ispočetka, odjava.
+// Podešavanja: tema, početak dana, prag za niz, instalacija, rezervna kopija, raspored ispočetka, nalog,
+// verzija aplikacije.
 
-import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type ChangeEvent, type FormEvent, type ReactNode } from 'react';
 import { fmtClock, fmtDateMedium, fmtDateShort, localISODate, parseClock } from '../../../shared/time.ts';
-import { api, errorMessage } from '../api.ts';
+import { ApiError, api, errorMessage } from '../api.ts';
+import { logout, settlePendingWrites } from '../lib/account.ts';
+import { useSession } from '../lib/hooks.ts';
 import { clearNoteDrafts, listNoteDraftDates } from '../lib/noteDrafts.ts';
-import { clearApiCache, isStandalone, useInstallPrompt } from '../lib/pwa.ts';
+import { buildLabel, checkForUpdate, clearApiCache, isStandalone, useInstallPrompt } from '../lib/pwa.ts';
 import { scheduleStore, useScheduleData, useSettings } from '../lib/store.ts';
 import { setTheme, useTheme, type ThemePref } from '../lib/theme.ts';
-import { Button, Card, PageHeader, Segmented, TimeInput, Toggle, confirmDialog, cx, toast } from '../ui/index.ts';
+import {
+  Button,
+  Card,
+  Field,
+  PageHeader,
+  Segmented,
+  Sheet,
+  TextInput,
+  TimeInput,
+  Toggle,
+  confirmDialog,
+  cx,
+  toast,
+} from '../ui/index.ts';
 import './settings.css';
 
 const APP_VERSION = '1.0.0';
@@ -22,7 +38,7 @@ const THEME_OPTIONS: Array<{ value: ThemePref; label: string }> = [
 
 const THRESHOLD_OPTIONS = [50, 60, 70, 80, 90].map((v) => ({ value: v, label: `${v}%` }));
 
-export default function SettingsPage({ authRequired }: { authRequired: boolean }) {
+export default function SettingsPage() {
   return (
     <div className="page">
       <PageHeader title="Podešavanja" />
@@ -32,8 +48,8 @@ export default function SettingsPage({ authRequired }: { authRequired: boolean }
         <InstallSection />
         <BackupSection />
         <ResetSection />
-        {authRequired && <AccountSection />}
-        <p className="set-version tabular">Ritam {APP_VERSION}</p>
+        <AccountSection />
+        <VersionSection />
       </div>
     </div>
   );
@@ -303,7 +319,7 @@ function BackupSection() {
       title: 'Vratiti podatke iz kopije?',
       body: (
         <>
-          <p>Svi trenutni podaci biće zamenjeni podacima iz kopije. Ovo ne može da se poništi.</p>
+          <p>Svi podaci ovog naloga biće zamenjeni podacima iz kopije. Ovo ne može da se poništi.</p>
           {when && <p className="set-confirm-meta">Kopija je napravljena {when}.</p>}
         </>
       ),
@@ -327,12 +343,12 @@ function BackupSection() {
 
   return (
     <Card title="Rezervna kopija">
-      <Row label="Preuzmi kopiju" hint="Raspored, dani, zadaci i beleške u jednom JSON fajlu.">
+      <Row label="Preuzmi kopiju" hint="Raspored, dani, zadaci i beleške ovog naloga u jednom JSON fajlu.">
         <Button icon="download" loading={exporting} onClick={() => void download()}>
           Preuzmi
         </Button>
       </Row>
-      <Row label="Vrati iz kopije" hint="Zamenjuje sve trenutne podatke podacima iz fajla.">
+      <Row label="Vrati iz kopije" hint="Zamenjuje sve podatke ovog naloga podacima iz fajla.">
         <Button icon="upload" loading={importing} onClick={() => fileRef.current?.click()}>
           Izaberi fajl…
         </Button>
@@ -422,10 +438,33 @@ function ResetSection() {
 
 // ---- Nalog ----
 
-function AccountSection() {
-  const [busy, setBusy] = useState(false);
+/** Email sa mestom za prelom posle "@" (dugačka adresa se ne cepa usred domena). */
+function EmailText({ email }: { email: string }) {
+  const at = email.lastIndexOf('@');
+  if (at <= 0) return <>{email}</>;
+  return (
+    <>
+      {email.slice(0, at + 1)}
+      <wbr />
+      {email.slice(at + 1)}
+    </>
+  );
+}
 
-  const logout = async () => {
+const PASSWORD_MIN = 8;
+const PASSWORD_MAX = 200;
+
+function AccountSection() {
+  const { user } = useSession();
+  const [busy, setBusy] = useState(false);
+  const [pwOpen, setPwOpen] = useState(false);
+
+  const signOut = async () => {
+    if (busy) return;
+    setBusy(true);
+    // Izmene koje još čekaju u redu (npr. beleška sačuvana pri izlasku sa dana) prvo stignu do servera.
+    await settlePendingWrites();
+    setBusy(false);
     // Nesačuvane beleške su samo na ovom uređaju; odjava ih briše (lični tekst ne ostaje posle odjave).
     const drafts = listNoteDraftDates();
     if (drafts.length > 0) {
@@ -442,16 +481,8 @@ function AccountSection() {
     }
     setBusy(true);
     try {
-      const state = await api.logout();
-      if (!state.authRequired) {
-        toast('Prijava lozinkom nije uključena na serveru.');
-        setBusy(false);
-        return;
-      }
-      await clearApiCache();
-      clearNoteDrafts();
-      // App sluša ovaj događaj i vraća na ekran za prijavu.
-      window.dispatchEvent(new Event('ritam:unauthorized'));
+      // App sluša 'ritam:unauthorized' i vraća na ekran za prijavu.
+      await logout();
     } catch (e) {
       toast.error(errorMessage(e));
       setBusy(false);
@@ -460,11 +491,177 @@ function AccountSection() {
 
   return (
     <Card title="Nalog">
-      <Row hint="Za ponovni ulaz na ovom uređaju treba lozinka.">
-        <Button icon="logout" loading={busy} onClick={() => void logout()}>
+      <Row
+        label={<span className="set-email">{user ? <EmailText email={user.email} /> : 'Nalog'}</span>}
+        hint="Prijavljen si ovim nalogom."
+      />
+      <Row label="Lozinka" hint="Posle promene, ostali uređaji moraju ponovo da se prijave.">
+        <Button icon="lock" onClick={() => setPwOpen(true)}>
+          Promeni lozinku
+        </Button>
+      </Row>
+      <Row label="Odjava" hint="Za ponovni ulaz na ovom uređaju trebaju email i lozinka.">
+        <Button icon="logout" loading={busy} onClick={() => void signOut()}>
           Odjavi se
         </Button>
       </Row>
+      {pwOpen && <PasswordSheet email={user?.email ?? ''} onClose={() => setPwOpen(false)} />}
     </Card>
+  );
+}
+
+// ---- Verzija ----
+
+/**
+ * Verzija aplikacije (oznaka build-a = heš glavnog JS fajla, ista koju server javlja u /api/health) i
+ * ručna provera nove verzije. Nova verzija se prikazuje trakom na dnu ekrana (App.tsx).
+ */
+function VersionSection() {
+  const [checking, setChecking] = useState(false);
+  const build = buildLabel();
+
+  const check = async () => {
+    if (checking) return;
+    setChecking(true);
+    const result = await checkForUpdate(true);
+    setChecking(false);
+    if (result === 'latest') toast('Imaš najnoviju verziju.');
+    else if (result === 'offline') toast('Nema konekcije.');
+    else if (result === 'unavailable') toast.error('Server nije dostupan. Pokušaj ponovo.');
+    else if (result === 'unknown') toast('Server ne javlja verziju, pa provera nije moguća.');
+    // 'update': pojavi se traka "Dostupna je nova verzija." sa dugmetom Osveži.
+  };
+
+  return (
+    <Card title="Verzija">
+      <Row
+        label={
+          <span className="tabular">
+            Ritam {APP_VERSION} · {build ?? 'razvoj'}
+          </span>
+        }
+        hint="Nova verzija se proverava sama i nudi se trakom na dnu ekrana."
+      >
+        <Button icon="refresh" loading={checking} onClick={() => void check()}>
+          Proveri ažuriranje
+        </Button>
+      </Row>
+    </Card>
+  );
+}
+
+/** Promena lozinke: trenutna + nova. Ostale sesije naloga se opozivaju, ovaj uređaj ostaje prijavljen. */
+function PasswordSheet({ email, onClose }: { email: string; onClose: () => void }) {
+  const formId = useId();
+  const [current, setCurrent] = useState('');
+  const [next, setNext] = useState('');
+  const [errors, setErrors] = useState<{ current?: string; next?: string; form?: string }>({});
+  const [busy, setBusy] = useState(false);
+  const currentRef = useRef<HTMLInputElement>(null);
+  const nextRef = useRef<HTMLInputElement>(null);
+
+  const focus = (el: HTMLInputElement | null) =>
+    window.requestAnimationFrame(() => {
+      el?.focus();
+      el?.select();
+    });
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (busy) return;
+    const invalid: typeof errors = {};
+    if (!current) invalid.current = 'Unesi trenutnu lozinku.';
+    if (next.length < PASSWORD_MIN) invalid.next = `Lozinka mora imati bar ${PASSWORD_MIN} znakova.`;
+    else if (next.length > PASSWORD_MAX) invalid.next = `Lozinka može imati najviše ${PASSWORD_MAX} znakova.`;
+    if (invalid.current || invalid.next) {
+      setErrors(invalid);
+      focus(invalid.current ? currentRef.current : nextRef.current);
+      return;
+    }
+    setBusy(true);
+    setErrors({});
+    try {
+      await api.changePassword(current, next);
+      toast.success('Lozinka je promenjena.');
+      onClose();
+    } catch (err) {
+      const msg = errorMessage(err);
+      if (err instanceof ApiError && err.code === 'bad_password') {
+        setErrors({ current: msg });
+        focus(currentRef.current);
+      } else if (err instanceof ApiError && err.status === 400 && /trenutn/i.test(msg)) {
+        setErrors({ current: msg });
+        focus(currentRef.current);
+      } else if (err instanceof ApiError && err.status === 400) {
+        setErrors({ next: msg });
+        focus(nextRef.current);
+      } else {
+        setErrors({ form: msg });
+      }
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Sheet
+      open
+      onClose={onClose}
+      title="Promeni lozinku"
+      size="sm"
+      footer={
+        <>
+          {errors.form && (
+            <p className="set-foot-error" role="alert">
+              {errors.form}
+            </p>
+          )}
+          <Button variant="ghost" onClick={onClose} disabled={busy}>
+            Otkaži
+          </Button>
+          <Button variant="primary" type="submit" form={formId} loading={busy}>
+            Sačuvaj
+          </Button>
+        </>
+      }
+    >
+      <form id={formId} className="stack" onSubmit={submit} noValidate>
+        {/* Menadžer lozinki tako zna za koji nalog čuva novu lozinku. */}
+        <input type="email" name="email" autoComplete="username" value={email} readOnly hidden />
+        <Field label="Trenutna lozinka" error={errors.current}>
+          <TextInput
+            ref={currentRef}
+            type="password"
+            name="current-password"
+            autoComplete="current-password"
+            data-autofocus
+            maxLength={PASSWORD_MAX}
+            value={current}
+            onChange={(e) => {
+              setCurrent(e.target.value);
+              if (errors.current || errors.form) setErrors((x) => ({ ...x, current: undefined, form: undefined }));
+            }}
+            aria-invalid={errors.current ? true : undefined}
+            enterKeyHint="next"
+          />
+        </Field>
+        <Field label="Nova lozinka" error={errors.next} hint={`Bar ${PASSWORD_MIN} znakova.`}>
+          <TextInput
+            ref={nextRef}
+            type="password"
+            name="new-password"
+            autoComplete="new-password"
+            minLength={PASSWORD_MIN}
+            maxLength={PASSWORD_MAX}
+            value={next}
+            onChange={(e) => {
+              setNext(e.target.value);
+              if (errors.next || errors.form) setErrors((x) => ({ ...x, next: undefined, form: undefined }));
+            }}
+            aria-invalid={errors.next ? true : undefined}
+            enterKeyHint="done"
+          />
+        </Field>
+      </form>
+    </Sheet>
   );
 }

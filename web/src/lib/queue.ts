@@ -1,5 +1,7 @@
-// Jedan zajednički red zahteva za dane (useDay, beleške, podsetnik za juče). Zahtevi idu jedan po
-// jedan, pa odgovor kasnije poslatog zahteva uvek sadrži i efekat ranijih.
+// Jedan zajednički red zahteva: dani (useDay, beleške, podsetnik za juče) i dani u nedelji
+// (WeekdaysCard). Zahtevi idu jedan po jedan, pa odgovor kasnije poslatog zahteva uvek sadrži i efekat
+// ranijih. "Osveži" (lib/pwa.ts) i odjava (lib/account.ts) čekaju prazan red (whenQueueIdle), da
+// izmena koja još čeka u redu ne propadne.
 
 const noop = () => {};
 

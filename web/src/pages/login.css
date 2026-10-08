@@ -5,7 +5,8 @@
   display: grid;
   justify-items: center;
   align-content: start;
-  padding: calc(16vh + env(safe-area-inset-top)) 16px calc(24px + env(safe-area-inset-bottom));
+  /* Dole i traka nove verzije dok je prikazana (--update-h, App.tsx). */
+  padding: calc(16vh + env(safe-area-inset-top)) 16px calc(24px + env(safe-area-inset-bottom) + var(--update-h, 0px));
 }
 
 .login-box {
@@ -20,8 +21,8 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
-  margin-bottom: 10px;
+  gap: 14px;
+  margin-bottom: 14px;
   text-align: center;
 }
 
@@ -33,7 +34,8 @@
 
 .login-sub {
   color: var(--text-2);
-  font-size: 14px;
+  font-size: 19px;
+  line-height: 1.3;
 }
 
 .login-box .btn {
@@ -46,5 +48,44 @@
     align-content: center;
     padding-top: 24px;
     padding-bottom: 12vh;
+  }
+}
+
+.login-box .field-hint {
+  color: var(--text-3);
+}
+
+/* Greška cele forme (previše pokušaja, nema konekcije): iznad dugmeta. */
+.login-error {
+  margin-top: -4px;
+  font-size: 13px;
+  color: var(--danger);
+}
+
+/* Prelaz prijava / novi nalog: tih tekst ispod dugmeta. */
+.login-switch {
+  margin-top: 2px;
+  text-align: center;
+  font-size: 14px;
+  color: var(--text-2);
+}
+
+.login-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 40px;
+  padding: 0 4px;
+  margin: 0 -4px;
+  color: var(--text);
+  font-weight: 500;
+  text-decoration: underline;
+  text-decoration-color: var(--text-3);
+  text-underline-offset: 3px;
+  border-radius: var(--radius-sm);
+}
+
+@media (hover: hover) {
+  .login-link:hover {
+    text-decoration-color: currentColor;
   }
 }

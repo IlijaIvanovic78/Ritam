@@ -20,6 +20,7 @@ export {
   RatingDots,
   RATING_LABELS,
 } from './misc.tsx';
+export { CategoryStroke } from './CategoryStroke.tsx';
 export { toast, Toaster } from './toast.tsx';
 export { confirmDialog, confirmDiscard, ConfirmHost } from './confirm.tsx';
 export { cx } from './cx.ts';

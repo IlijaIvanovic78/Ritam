@@ -1,7 +1,7 @@
 import type { Block, Category } from '../../../../shared/types.ts';
 import { fmtClock, fmtDuration } from '../../../../shared/time.ts';
 import { categoryColor, categoryName } from '../../lib/store.ts';
-import { Icon, ProgressBar } from '../../ui/index.ts';
+import { CategoryStroke, Icon, ProgressBar } from '../../ui/index.ts';
 import { currentBlock, dueBlocks, nextBlock } from './dayUtils.ts';
 import { plural } from './plural.ts';
 
@@ -65,7 +65,7 @@ export function NowCard({
       {cur ? (
         <>
           <div className="day-now-main">
-            <span className="day-now-bar" style={{ background: categoryColor(catMap, cur.categoryId) }} aria-hidden="true" />
+            <CategoryStroke color={categoryColor(catMap, cur.categoryId)} />
             <div className="day-now-text">
               <p className="day-now-title">{cur.title}</p>
               <p className="day-now-sub">

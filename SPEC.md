@@ -1,7 +1,8 @@
 # Ritam — specifikacija
 
-Lična aplikacija za planiranje dana u vremenskim blokovima. Jedan korisnik, dva uređaja
-(telefon kao PWA + laptop u browseru), podaci na serveru (SQLite) da bi se sinhronizovali.
+Aplikacija za planiranje dana u vremenskim blokovima. Nalozi (email + lozinka), svaki sa potpuno odvojenim
+podacima; više uređaja po nalogu (telefon kao PWA + laptop u browseru), podaci na serveru (SQLite) da bi se
+sinhronizovali.
 
 Primer dana koji je korisnik jednom opisao je samo ilustracija: ništa se ne pravi niti ponaša prema njemu
 (sekcija 4). Raspored (kategorije, šabloni, dani u nedelji, početak dana) korisnik pravi sam.
@@ -25,13 +26,17 @@ UI je **na srpskom (latinica)**, obraćanje na "ti", kratko i jasno. Bez emodži
 - HTTP: **Hono 4** + `@hono/node-server` 2 (`serve`, i `serveStatic` iz `@hono/node-server/serve-static`).
 - Validacija: **zod 4** (`import { z } from 'zod'`).
 - Web: React 19 + Vite 8, bez rutera/state biblioteka, ručno pisan CSS (bez Tailwind-a, bez UI biblioteka).
+  Naslovni font EB Garamond 500 iz `@fontsource/eb-garamond` (devDependency, SIL OFL): `styles/fonts.css` ručno
+  deklariše samo latin i latin-ext `.woff2` (nikad `index.css` paketa), Vite ih pakuje u `/assets/` — bez CDN-a.
 - Typecheck: `npm run typecheck` (`tsconfig.web.json` za `web/src` + `shared`, `tsconfig.server.json` za `server` + `shared`).
 - Build: `npm run build` → `vite build` → `dist/web`. Server servira `dist/web`.
 - Dev: `npm run dev` (server na :3000 sa `--watch`, Vite na :5173 sa proxy `/api` → :3000).
 
 ```
 shared/          types.ts, time.ts, summary.ts — VEĆ NAPISANO, deli se između servera i weba
-server/          index.ts (ulaz), db.ts, defaults.ts, auth.ts, repo.ts, api.ts ... (agent: server)
+server/          index.ts (ulaz), db.ts, defaults.ts, auth.ts (lozinke, JWT, refresh token, ograničenja),
+                 accounts.ts (nalozi i refresh tokeni u bazi), authRoutes.ts (/api/auth/*, Bearer),
+                 repo.ts (podaci korisnika), backup.ts, validate.ts, api.ts ... (agent: server)
 web/index.html
 web/public/      manifest.webmanifest, sw.js, icons/ (agent: shell)
 web/src/
@@ -41,9 +46,9 @@ web/src/
   ui/                             VEĆ NAPISANO — Button, IconButton, Icon, Sheet, Field, TextInput,
                                   TimeInput, Select, TextArea, PageHeader, Card, Empty, Spinner,
                                   PageLoader, ProgressBar, Ring, Segmented, CategoryDot,
-                                  CategoryPicker, Toggle, RatingInput, RatingDots, toast, Toaster,
-                                  confirmDialog, ConfirmHost, cx
-  styles/tokens.css, base.css, ui.css  VEĆ NAPISANO
+                                  CategoryStroke, CategoryPicker, Toggle, RatingInput, RatingDots,
+                                  toast, Toaster, confirmDialog, ConfirmHost, cx
+  styles/fonts.css, tokens.css, base.css, ui.css  VEĆ NAPISANO
   pages/DayPage.tsx (+ components/day/*, pages/day.css)          (agent: day)
   pages/ProgressPage.tsx (+ pages/progress.css)                  (agent: progress)
   pages/SchedulePage.tsx (+ components/schedule/*, pages/schedule.css) (agent: schedule)
@@ -74,58 +79,109 @@ Fajlovi označeni "VEĆ NAPISANO" su zajednički temelj. Agenti ih **ne menjaju*
 
 ## 3. Model podataka (SQLite)
 
+Svaki red podataka pripada nalogu (`user_id` = `users.id`); blokovi šablona pripadaju nalogu preko svog šablona.
+`user_id` nema strani ključ ka `users` (0 = "bez vlasnika", vidi preuzimanje ispod) — vlasništvo proverava server
+(`server/repo.ts`: svaki upit je ograničen na nalog iz access tokena).
+
 ```sql
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-  -- 'schema_version' → '3'; 'settings' → JSON {"dayStart":0,"streakThreshold":0.7} (nova baza)
+  -- 'schema_version' → '4'; 'settings' → podešavanja iz verzije bez naloga (prvi nalog ih preuzima);
+  -- 'legacy_owner' → id naloga koji je preuzeo podatke iz verzije bez naloga (nema ga dok to niko nije uradio)
+
+CREATE TABLE users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,      -- id se nikad ne dodeljuje ponovo (access token nosi id)
+  email TEXT NOT NULL UNIQUE,                -- trim + mala slova
+  password_hash TEXT NOT NULL,               -- 'scrypt$32768$8$1$<so base64url>$<heš base64url>'
+  settings TEXT NOT NULL DEFAULT '{"dayStart":0,"streakThreshold":0.7}',  -- Settings (JSON)
+  created_at TEXT NOT NULL);
+
+CREATE TABLE refresh_tokens (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  family TEXT NOT NULL,                      -- jedna prijava na jednom uređaju; rotacija ostaje u familiji
+  token_hash TEXT NOT NULL UNIQUE,           -- SHA-256 (base64url); sam token je samo u kolačiću
+  created_at TEXT NOT NULL, expires_at TEXT NOT NULL,
+  revoked_at TEXT,                           -- zamenjen (rotacija), odjava, promena lozinke ili krađa
+  user_agent TEXT);
+CREATE INDEX refresh_tokens_user ON refresh_tokens(user_id);
+CREATE INDEX refresh_tokens_family ON refresh_tokens(family);
 
 CREATE TABLE categories (
   id INTEGER PRIMARY KEY, name TEXT NOT NULL, color TEXT NOT NULL,
   counts INTEGER NOT NULL DEFAULT 1, sort INTEGER NOT NULL DEFAULT 0,
-  archived INTEGER NOT NULL DEFAULT 0);      -- 1 = obrisana (vidi "Raspored" u sekciji 5)
+  archived INTEGER NOT NULL DEFAULT 0,       -- 1 = obrisana (vidi "Raspored" u sekciji 5)
+  user_id INTEGER NOT NULL DEFAULT 0);
+CREATE INDEX categories_user ON categories(user_id);
 
-CREATE TABLE templates (id INTEGER PRIMARY KEY, name TEXT NOT NULL, sort INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE templates (id INTEGER PRIMARY KEY, name TEXT NOT NULL, sort INTEGER NOT NULL DEFAULT 0,
+  user_id INTEGER NOT NULL DEFAULT 0);
+CREATE INDEX templates_user ON templates(user_id);
 
-CREATE TABLE template_blocks (
+CREATE TABLE template_blocks (               -- vlasnik = vlasnik šablona
   id INTEGER PRIMARY KEY,
   template_id INTEGER NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
   start_min INTEGER NOT NULL, end_min INTEGER NOT NULL, title TEXT NOT NULL,
   category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL);
 
 CREATE TABLE weekday_templates (
-  weekday INTEGER PRIMARY KEY CHECK (weekday BETWEEN 1 AND 7),
-  template_id INTEGER REFERENCES templates(id) ON DELETE SET NULL);
+  user_id INTEGER NOT NULL DEFAULT 0,
+  weekday INTEGER NOT NULL CHECK (weekday BETWEEN 1 AND 7),
+  template_id INTEGER REFERENCES templates(id) ON DELETE SET NULL,
+  PRIMARY KEY (user_id, weekday));
 
 CREATE TABLE days (
-  date TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL DEFAULT 0,
+  date TEXT NOT NULL,
   initialized INTEGER NOT NULL DEFAULT 0,   -- 1 = blokovi su kopirani iz šablona
   template_id INTEGER REFERENCES templates(id) ON DELETE SET NULL,
   note TEXT NOT NULL DEFAULT '',
   rating INTEGER CHECK (rating BETWEEN 1 AND 5),
-  updated_at TEXT NOT NULL);
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (user_id, date));
 
 CREATE TABLE blocks (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  date TEXT NOT NULL REFERENCES days(date) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL DEFAULT 0,
+  date TEXT NOT NULL,
   start_min INTEGER NOT NULL, end_min INTEGER NOT NULL, title TEXT NOT NULL,
   category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
   status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','done','partial','skipped')),
   actual_min INTEGER,
-  note TEXT NOT NULL DEFAULT '');
-CREATE INDEX blocks_date ON blocks(date);
+  note TEXT NOT NULL DEFAULT '',
+  FOREIGN KEY (user_id, date) REFERENCES days(user_id, date) ON DELETE CASCADE ON UPDATE CASCADE);
+CREATE INDEX blocks_user_date ON blocks(user_id, date);
 
 CREATE TABLE tasks (
   id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT NOT NULL, title TEXT NOT NULL,
   done INTEGER NOT NULL DEFAULT 0, done_at TEXT,
   category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
-  sort INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
-CREATE INDEX tasks_date ON tasks(date);
-CREATE INDEX tasks_open ON tasks(done, date);
+  sort INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL,
+  user_id INTEGER NOT NULL DEFAULT 0);
+CREATE INDEX tasks_user_date ON tasks(user_id, date);
+CREATE INDEX tasks_user_open ON tasks(user_id, done, date);
 ```
 
 Migracije: niz migracija, `meta.schema_version`; nova baza je prazna (sekcija 4).
 Migracija 2 pravi `blocks` i `tasks` ponovo sa `AUTOINCREMENT`: id obrisanog bloka/zadatka se nikad ne dodeljuje
 ponovo, pa zastareo zahtev sa drugog uređaja dobija 404 umesto da izmeni drugi red.
 Migracija 3 dodaje `categories.archived` (brisanje kategorije je arhiviranje, pa se ni njen id ne dodeljuje ponovo).
+Migracija 4 (nalozi): `user_id` (podrazumevano 0) u `categories`, `templates`, `tasks`; `weekday_templates`, `days` i
+`blocks` se prave ponovo sa ključevima iznad, `users` i `refresh_tokens` su nove. Strani ključevi kao u migraciji 2:
+briše se samo tabela koju u tom trenutku niko ne referencira (nova `blocks` referencira novu `days` pre brisanja stare,
+a RENAME prepravlja referencu), brojač `AUTOINCREMENT` blokova se prenosi. Postojeći redovi dobijaju `user_id = 0` i
+ostaju potpuno isti.
+Pre migracija postojeće baze (šema 1..N−1, ne nove) server napravi kopiju `<baza>.pre-v<stara šema>-<YYYYMMDD-HHmmss>.bak`
+(`VACUUM INTO`, van transakcije migracija; log `Ritam: kopija baze pre nadogradnje šeme (vX → vY): …`). Neuspeh kopije
+(npr. pun disk) je samo upozorenje — migracije su ionako u jednoj transakciji. Prethodna verzija aplikacije odbija bazu
+novije šeme ("Baza ima noviju verziju šeme…"), pa se vraćanje na nju radi iz te kopije (ili iz JSON izvoza).
+
+**Preuzimanje podataka iz verzije bez naloga**: kad se napravi PRVI nalog (tabela `users` je bila prazna), u istoj
+transakciji svi redovi sa `user_id = 0` dobijaju njegov id (blokovi prate svoj dan preko `ON UPDATE CASCADE`), a
+`meta.settings` postaje `users.settings`; id-jevi i sadržaj se ne menjaju (izvoz posle preuzimanja je isti kao izvoz
+ranije verzije). Ako je baza imala podatke (kategorije, šabloni, zadaci ili dani bez vlasnika), upisuje se i
+`meta.legacy_owner` = id tog naloga: odgovori naloga (registracija, prijava, osvežavanje, promena lozinke, `me`) mu uz
+korisnika šalju `legacyOwner: true`, pa samo on na uređaju preuzima i draftove beleški iz te verzije (sekcija 6).
+Svaki sledeći nalog počinje prazan: 7 redova `weekday_templates` bez šablona i podrazumevana podešavanja. Prvi nalog i na `SIGNUP=code` mora da zna kod (nov javni server ne sme da preuzme bilo ko).
 
 ### Inicijalizacija dana (lenja)
 - Dan se **ne pravi unapred**. `GET /api/days/:date`:
@@ -166,11 +222,13 @@ Aplikacija ne donosi nikakav unapred napravljen raspored: korisnik sam pravi **s
 i boja, i da li se računaju u ispunjenost), šablone dana (bilo koji blokovi), koji šablon važi za koji dan u nedelji i
 kada mu počinje dan. Nijedno ponašanje (server, klijent, statistika) ne zavisi od naziva kategorije ili šablona.
 
-Nova baza (`server/defaults.ts`, upisuje se samo kad baza nema šemu, u istoj transakciji kao migracije):
-- `categories`, `templates`, `template_blocks`, `days`, `blocks`, `tasks`: prazne;
+Nova baza (`server/defaults.ts`, upisuje se samo kad baza nema šemu, u istoj transakciji kao migracije) — redovi su
+"bez vlasnika" (`user_id = 0`), pa ih prvi nalog preuzima isto kao podatke iz verzije bez naloga (sekcija 3):
+- `categories`, `templates`, `template_blocks`, `days`, `blocks`, `tasks`, `users`, `refresh_tokens`: prazne;
 - `weekday_templates`: redovi 1..7 sa `template_id = NULL` (nijedan dan nema šablon);
 - `meta.settings`: `{ dayStart: 0, streakThreshold: 0.7 }` — dan podrazumevano počinje u **00:00**, prag niza 70%.
-  Iste vrednosti se koriste i kad sačuvana podešavanja nedostaju ili nisu ispravna.
+  Iste vrednosti dobija svaki sledeći nalog (`users.settings`) i koriste se kad sačuvana podešavanja nedostaju ili
+  nisu ispravna.
 
 Postojeća baza se nikad ne prazni niti menja zbog ovoga: migracije samo menjaju šemu, a podaci (i oni iz ranije
 verzije koja je novu bazu punila primerom rasporeda) ostaju kakvi jesu. Takav raspored korisnik uklanja sam, jednom
@@ -186,38 +244,102 @@ ispunjenost), statistika, dnevnik, izvoz i uvoz rade i bez ijedne kategorije i �
 
 ## 5. API
 
-Svi odgovori su JSON. Greške: `{ "error": "Poruka na srpskom" }` sa odgovarajućim statusom (400 validacija,
-401 nije prijavljen, 403 CSRF, 404 ne postoji, 409 konflikt, 413 prevelik zahtev, 429 previše pokušaja).
-Tipovi su u `shared/types.ts`; klijent je `web/src/api.ts` (izvor istine za putanje i oblike).
+Svi odgovori su JSON. Greške: `{ "error": "Poruka na srpskom", "code"?: "…" }` sa odgovarajućim statusom (400 validacija,
+401 nije prijavljen, 403 CSRF / registracija, 404 ne postoji, 409 konflikt, 413 prevelik zahtev, 429 previše pokušaja).
+`code` (`AuthErrorCode` u `shared/types.ts`) imaju greške naloga. Tipovi su u `shared/types.ts`; klijent je
+`web/src/api.ts` (izvor istine za putanje i oblike).
 
-### Auth
-- Env `APP_PASSWORD`. Ako je prazan → auth isključen (`authRequired: false`), loguj upozorenje. Bez lozinke server se
-  **ne pokreće** (poruka + izlaz 1) kad bi slušao na adresi koja nije lokalna (`HOST` ≠ 127.x/::1/localhost, npr. Docker
-  `HOST=0.0.0.0` bez `APP_PASSWORD` na Railway-u), osim uz `ALLOW_NO_AUTH=1`.
-- `GET /api/auth/me` → `AuthState`. (bez auth)
-- `POST /api/auth/login { password }` → `AuthState` + kolačić. Poređenje `crypto.timingSafeEqual` nad SHA-256 heševima.
-  Ograničenje: 10 neuspelih pokušaja po IP (IPv6: po mreži /64) u 15 min → 429 "Previše pokušaja. Pokušaj ponovo za N minuta."
-  (N = stvarno preostalo vreme, "1 minut" / "N minuta") i header `Retry-After` (sekunde); važi i za tačnu lozinku
-  (plus 300 ukupno za sve klijente). Adresa je adresa konekcije; `X-Forwarded-For` se koristi samo uz env
-  `TRUST_PROXY=n` (broj proxy-ja ispred aplikacije: klijent je n-ti unos od kraja; Caddy = 1; kraći lanac → adresa
-  konekcije) ili kad konekcija dolazi sa iste mašine (127.0.0.0/8, ::1; poslednji unos).
-  Pogrešna lozinka → 401 "Pogrešna lozinka." i log `Ritam: pogrešna lozinka (adresa …)` (provera TRUST_PROXY, README).
-- `POST /api/auth/logout` → briše kolačić, vraća `AuthState`.
-- Kolačić `ritam_session`: `v1.<issuedAtMs>.<base64url HMAC-SHA256(secret, 'v1.'+issuedAtMs)>`;
-  `secret = HMAC-SHA256(key, 'ritam:' + APP_PASSWORD)`, `key` = `SESSION_SECRET` ili, ako nije postavljen, 32 nasumična
-  bajta iz `DATA_DIR/session.key` (pravi se pri prvom pokretanju, mode 600) — ukraden kolačić tako ne omogućava
-  pogađanje lozinke van servera. Promena lozinke, SESSION_SECRET ili brisanje `session.key` poništava sve sesije.
-  HttpOnly, SameSite=Lax, Path=/, Max-Age 400 dana, `Secure` kad je zahtev HTTPS
-  (`x-forwarded-proto === 'https'` ili URL https). Važi 400 dana od izdavanja; važeća sesija starija od 30 dana se
-  obnavlja (novi kolačić) pri bilo kom zahtevu koji je proverava (i `/api/auth/me`), pa uređaj koji se koristi ostaje prijavljen.
-- Sve ostale `/api/*` rute (osim `/api/health` i `/api/auth/*`) traže važeći kolačić kad je auth uključen → 401 `{error:'Nisi prijavljen.'}`.
-- CSRF: svaki ne-GET/HEAD zahtev na `/api/*` mora imati header `X-Ritam: 1` → inače 403. (Klijent ga uvek šalje.)
+Sve rute podataka (dan, blokovi, zadaci, statistika, dnevnik, raspored, podešavanja, izvoz/uvoz) rade nad podacima
+naloga iz access tokena, sa istim putanjama i oblicima kao pre naloga: svaki upit je ograničen na `user_id`, pa se
+id (blok, zadatak, kategorija, šablon) ili datum drugog naloga ponaša tačno kao nepostojeći (404, 400 "… ne postoji."
+za vezu u telu zahteva, prazan pregled dana). Jedinstvenost naziva, obrisane kategorije, dani u nedelji, podešavanja
+(`users.settings`), statistika i niz, pretraga dnevnika, završeni zadaci, zamena/deljenje/prebacivanje, premeštanje
+blokova šablona pri promeni dayStart i provera pri pokretanju — sve je po nalogu.
+Id-jevi (`AUTOINCREMENT`/rowid blokova, zadataka, kategorija, šablona) su jedan brojač po tabeli za ceo server, zajednički
+za sve naloge: po razmacima između svojih id-jeva nalog može da zaključi koliko i kada su drugi nalozi pravili redove (ne
+i šta). Namerno prihvaćeno za mali (porodični) server; neprozirni id-jevi po nalogu bi menjali svaku rutu i izvoz/uvoz.
+
+### Nalozi i prijava (`server/auth.ts`, `accounts.ts`, `authRoutes.ts`)
+- **Lozinka**: 8..200 znakova. Heš: `node:crypto` scrypt (N=32768, r=8, p=1, so 16 nasumičnih bajtova, ključ 64 bajta,
+  lozinka NFC), zapis `scrypt$32768$8$1$<so>$<heš>` (base64url); provera `timingSafeEqual`. Prijava sa nepostojećim
+  email-om ipak radi jednu scrypt proveru (heš nasumične lozinke napravljen pri pokretanju) — vreme odgovora ne otkriva nalog.
+- **Email**: trim + mala slova, `nešto@nešto.tld` (bez razmaka), najviše 254 znaka; bilo koji provajder.
+- **Access token**: JWT HS256 `{ sub: "<id>", typ: "access", iat, exp }`, važi 15 min (env `ACCESS_TOKEN_TTL_SEC`,
+  1..86400, za testove). Ključ potpisa = HMAC-SHA256(`sessionKey`, `'ritam:access-v1'`), `sessionKey` = `SESSION_SECRET`
+  ili 32 nasumična bajta iz `DATA_DIR/session.key` (pravi se pri prvom pokretanju, mode 600). Prihvata se samo naš
+  header (alg HS256; `none` i drugi algoritmi ne). Klijent ga drži samo u memoriji i šalje kao `Authorization: Bearer <token>`.
+  `SESSION_SECRET` kraći od 32 znaka → upozorenje u logu (`Ritam: SESSION_SECRET je prekratak …`), server se ipak
+  pokreće: svaki nalog dobija potpisan token, pa bi kratak ključ mogao offline da pogađa i lažira tokene za druge naloge.
+- **Refresh token**: 32 nasumična bajta (base64url) u kolačiću `ritam_refresh` — HttpOnly, SameSite=Strict,
+  Path=/api/auth, Max-Age = trajanje, `Secure` kad je zahtev HTTPS (`X-Forwarded-Proto: https` ili URL https). U bazi
+  samo SHA-256 (`refresh_tokens`), važi 90 dana od izdavanja (env `REFRESH_TOKEN_TTL_SEC`, 60 s..400 dana).
+  - Prijava i registracija prave novu familiju (jedan uređaj). Svako uspešno osvežavanje opoziva pokazan token i izdaje
+    nov u istoj familiji (rok ponovo 90 dana), pa uređaj koji se koristi ostaje prijavljen.
+  - Pokazan **opozvan** token: ako familija više nema aktivan token (odjava, promena lozinke, ranije otkrivena krađa) →
+    401 `invalid_refresh`; ako je zamenjen pre manje od 30 s (env `REFRESH_RACE_GRACE_SEC`, 0..300; dva taba su
+    istovremeno osvežavala) → 401 `refresh_race` bez ikakve izmene i bez brisanja kolačića (u browseru je već nov);
+    inače (stari token upotrebljen ponovo = krađa) se opoziva cela familija, log `Ritam: ponovo upotrebljen zamenjen
+    refresh token …` → 401 `invalid_refresh`. Istekao ili nepoznat → 401 `invalid_refresh`. Uz `invalid_refresh` se
+    kolačić briše.
+  - Istekli tokeni se brišu usput (najviše jednom u 10 min); opozvani ostaju do isteka (krađa se otkriva i kasnije).
+- **Registracija** (env `SIGNUP` = `open` | `code` | `closed`; neispravna vrednost → izlaz 1). Kod = `SIGNUP_CODE`, a ako
+  nije postavljen `APP_PASSWORD` (docker-compose.yml ga uvek prosleđuje: to više NIJE lozinka za prijavu, nego kod za
+  registraciju). Bez `SIGNUP`: `code` kad kod postoji, inače `open`. `SIGNUP=code` bez koda → izlaz 1. Kod se poredi u
+  konstantnom vremenu (SHA-256 + `timingSafeEqual`) i traži se i za prvi nalog.
+  Podrazumevano otvorena registracija (nema koda, nema `SIGNUP`) znači da server bez `HOST` sluša samo na `127.0.0.1`
+  (log `Ritam: nema koda za registraciju — … sluša samo na 127.0.0.1 …`), a sa `HOST` koji nije loopback (`localhost`,
+  `::1`, `127.x.x.x`; npr. Docker `HOST=0.0.0.0`) se ne pokreće (izlaz 1, poruka: postavi `SIGNUP_CODE`/`APP_PASSWORD`
+  ili `SIGNUP=open` ako je namerno) — inače bi svako na mreži mogao da napravi prvi nalog i preuzme postojeće podatke.
+  Izričit `SIGNUP=open` na adresi koja nije loopback → upozorenje u logu (bez obzira na `NODE_ENV`), a ako nema naloga
+  a postoje podaci bez vlasnika, upozorenje dodaje da prvi nalog preuzima sve.
+- **Ograničenja** (u memoriji procesa, prozor 15 min): neuspele prijave po adresi klijenta (IPv6: mreža /64) i po
+  email-u, po 10, plus 300 ukupno. Pokušaj se broji pre provere (paralelni zahtevi ne zaobilaze ograničenje), a uspela
+  prijava se posle provere poništava (samo taj pokušaj: adresa i ukupno) i briše neuspehe tog email-a — uspele prijave
+  se ne računaju (više uređaja ili cela kuća iza jedne adrese ne dolazi do blokade), a raniji neuspesi sa adrese ostaju.
+  Provera trenutne lozinke pri promeni lozinke: ograničenje po nalogu (`pw:<id>`, 10), ne po javnom email ključu (tuđe
+  neuspele prijave ne blokiraju promenu lozinke prijavljenom vlasniku); neuspeh se upisuje i kao neuspela prijava tim
+  email-om, uspeh briše oba i poništava pokušaj u ukupnom broju. Registracija: 10 pokušaja (i uspelih) po adresi
+  (posebno brojanje). Prekoračenje → 429 `rate_limited`
+  "Previše pokušaja. Pokušaj ponovo za N minuta." (N = stvarno preostalo vreme, "1 minut" / "N minuta") i
+  `Retry-After` (sekunde). Adresa je adresa konekcije; `X-Forwarded-For` se koristi samo uz env `TRUST_PROXY=n`
+  (broj proxy-ja ispred aplikacije: klijent je n-ti unos od kraja; Nginx/Caddy = 1; kraći lanac → adresa konekcije)
+  ili kad konekcija dolazi sa iste mašine (127.0.0.0/8, ::1; poslednji unos). Neuspela prijava → log
+  `Ritam: neuspela prijava (adresa …)` (provera TRUST_PROXY, README).
+
+Rute (javne: `/api/health`, `config`, `register`, `login`, `refresh`, `logout`; ostale traže Bearer):
+- `GET /api/auth/config` → `AuthConfig` `{ signup: 'open' | 'code' | 'closed' }`.
+- `POST /api/auth/register { email, password, code? }` → 201 `AuthResponse` `{ accessToken, expiresIn, user: { id, email,
+  legacyOwner? } }` (`legacyOwner: true` samo za nalog iz `meta.legacy_owner`, sekcija 3; u svim odgovorima naloga)
+  + kolačić. Redom: `closed` → 403 `signup_closed` "Registracija nije otvorena."; 400 "Unesi ispravnu email adresu." /
+  "Lozinka mora imati bar 8 znakova." / "Lozinka može imati najviše 200 znakova."; 429; pogrešan ili nedostajući kod
+  (`code`) → 403 `bad_code` "Pogrešan kod za registraciju."; email već postoji → 409 "Nalog sa tom email adresom već
+  postoji." (i kad dve registracije stignu istovremeno). Prvi nalog preuzima podatke bez vlasnika (sekcija 3).
+- `POST /api/auth/login { email, password }` → 200 `AuthResponse` + kolačić (nova familija); pogrešan email ili lozinka
+  (i neispravan email) → 401 "Pogrešan email ili lozinka."; 429. Telo bez `email` (tab ili PWA iz verzije pre naloga
+  šalje samo `{ password }`) → 400 `client_outdated` "Ritam je ažuriran. Osveži stranicu (ili zatvori i ponovo otvori
+  aplikaciju), pa se prijavi email-om." (pre ograničenja i provere lozinke; stari klijent prikazuje `error`).
+- `POST /api/auth/refresh` (kolačić) → 200 `AuthResponse` + rotiran kolačić; 401 `no_session` (nema kolačića) /
+  `refresh_race` / `invalid_refresh`.
+- `POST /api/auth/logout` → 200 `{ ok: true }`: opoziva familiju pokazanog tokena (ako postoji) i briše kolačić; radi i bez
+  važećeg kolačića.
+- `GET /api/auth/me` (Bearer) → `{ user: AuthUser }`.
+- `POST /api/auth/password { currentPassword, newPassword }` (Bearer) → 200 `AuthResponse` + nov kolačić: nova lozinka,
+  opozvane SVE familije naloga (ostali uređaji su odjavljeni; njihov access token važi još najviše 15 min), nova
+  familija za ovaj uređaj. Pogrešna trenutna → 401 `bad_password` "Trenutna lozinka nije tačna."; nova lozinka kao
+  pri registraciji (400); 429.
+- Sve ostale `/api/*` rute traže važeći access token → 401 `{ error: 'Nisi prijavljen.', code: 'unauthorized' }`
+  (nema, neispravan, nalog ne postoji) ili `code: 'token_expired'` (potpis važi, rok je istekao). I nepoznata `/api`
+  putanja bez tokena je 401 (sa tokenom 404).
+- Kolačić `ritam_session` (prijava iz verzije bez naloga) se ne prihvata; odgovori prijave, registracije, osvežavanja i
+  odjave ga brišu (Path=/) ako ga browser još šalje.
+- CSRF: svaki ne-GET/HEAD zahtev na `/api/*` (i auth rute) mora imati header `X-Ritam: 1` → inače 403. (Klijent ga uvek šalje.)
 
 ### Zdravlje
 - `GET /api/health` → `HealthPayload` `{ ok: true, build? }` (bez auth). `build` = `src` glavnog JS fajla iz
   `STATIC_DIR/index.html` (prvi `<script type="module" … src="/assets/…">`, npr. `"/assets/index-abc123.js"`), pročitan
   **jednom pri pokretanju** (novi deploy = novi proces); nema ga kad server ne servira build (razvoj preko Vite-a).
-  Klijent (`lib/pwa.ts`) ga poredi sa `src` svog `<script type="module">` i posle deploy-a učita stranicu ponovo.
+  Klijent (`lib/pwa.ts`) ga poredi sa `src` svog `<script type="module">` i posle deploy-a ponudi novu verziju
+  (traka "Dostupna je nova verzija.", sekcija 6) — stranicu nikad ne učitava sam.
 
 ### Dan
 - `GET /api/days/:date?ensure=1` → `DayPayload`
@@ -290,14 +412,19 @@ Tipovi su u `shared/types.ts`; klijent je `web/src/api.ts` (izvor istine za puta
   zadaci, beleške i ocene se ne diraju. Ponovljen poziv ništa ne menja (osim `dayStart`).
 
 ### Rezervna kopija
-- `GET /api/export` → `{ app: 'ritam', version: 1, exportedAt, settings, categories, templates, template_blocks,
-  weekday_templates, days, blocks, tasks }` (sirovi redovi, snake_case kolone) uz
-  `Content-Disposition: attachment; filename="ritam-backup-YYYY-MM-DD.json"`.
-- `POST /api/import` (isti oblik) → u jednoj transakciji obriše sve i upiše redove; validiraj oblik (i `isValidRange` za
-  `blocks`/`template_blocks`); max 20 MB → `{ ok: true }`. Ista ograničenja kao API (uvezen red mora moći da se izmeni):
-  naslov bloka/bloka šablona 1..120 (trim), zadatak 1..300, kategorija 1..40, šablon 1..60, beleška dana ≤ 20000,
-  beleška bloka ≤ 5000, `actual_min` 0..1440 ili null. `categories.archived` (0/1) je u kopiji; kopija bez te kolone
-  (starija verzija) se uvozi sa 0. Blokovi šablona sa obrisanom kategorijom dobijaju `category_id = NULL`.
+- `GET /api/export` → podaci SAMO prijavljenog naloga, bez `user_id`: `{ app: 'ritam', version: 1, exportedAt, settings,
+  categories, templates, template_blocks, weekday_templates, days, blocks, tasks }` (sirovi redovi, snake_case kolone,
+  isti oblik kao pre naloga) uz `Content-Disposition: attachment; filename="ritam-backup-YYYY-MM-DD.json"`.
+- `POST /api/import` (isti oblik; i kopija iz verzije bez naloga ili sa drugog naloga) → u jednoj transakciji obriše
+  SVE podatke prijavljenog naloga i upiše redove iz kopije; drugi nalozi se ne diraju. Svi redovi (kategorije, šabloni,
+  blokovi šablona, dani u nedelji, dani, blokovi, zadaci) dobijaju NOVE id-jeve (po rastućem id-ju iz kopije, pa
+  redosled ostaje), a sve veze se prevode — kopija ne može da se sudari sa tuđim redovima ni da ih dotakne, kakve god
+  id-jeve sadržala. Veza ka redu kog nema u kopiji, dupli id, dupli datum ili dan u nedelji → 400 "Kopija nije ispravna:
+  podaci se međusobno ne slažu." i ništa se ne menja. Podešavanja iz kopije postaju `users.settings`. Validiraj oblik (i
+  `isValidRange` za `blocks`/`template_blocks`); max 20 MB → `{ ok: true }`. Ista ograničenja kao API (uvezen red mora
+  moći da se izmeni): naslov bloka/bloka šablona 1..120 (trim), zadatak 1..300, kategorija 1..40, šablon 1..60, beleška
+  dana ≤ 20000, beleška bloka ≤ 5000, `actual_min` 0..1440 ili null. `categories.archived` (0/1) je u kopiji; kopija bez
+  te kolone (starija verzija) se uvozi sa 0. Blokovi šablona sa obrisanom kategorijom dobijaju `category_id = NULL`.
 
 ### Statika
 - `dist/web` (ili `STATIC_DIR`): `/assets/*` sa `Cache-Control: public, max-age=31536000, immutable`;
@@ -307,11 +434,19 @@ Tipovi su u `shared/types.ts`; klijent je `web/src/api.ts` (izvor istine za puta
   `X-Frame-Options: DENY`, CSP: `default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline';
   script-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'`.
   Preko HTTPS-a (isto pravilo kao `Secure` kolačić) i `Strict-Transport-Security: max-age=31536000`.
-- Env: `PORT` (3000), `HOST` (0.0.0.0; 127.0.0.1 kad je `APP_PASSWORD` prazan, da server bez prijave nije otvoren
-  celoj mreži — Docker postavlja `HOST=0.0.0.0`, pa se bez `APP_PASSWORD` ne pokreće), `DATA_DIR` (`./data`, baza je
-  `DATA_DIR/ritam.db`, ključ sesije `DATA_DIR/session.key`), `APP_PASSWORD`, `SESSION_SECRET` (opciono), `STATIC_DIR`
-  (`dist/web`), `TRUST_PROXY` (broj reverse proxy-ja ispred aplikacije, `1` iza Caddy-ja; neispravna vrednost → izlaz 1),
-  `ALLOW_NO_AUTH` (`1` = dozvoli rad bez lozinke i na mrežnoj adresi).
+- Env: `PORT` (3000), `HOST` (`0.0.0.0` kad registracija traži kod ili je `SIGNUP` zadat; `127.0.0.1` kad je
+  registracija podrazumevano otvorena — nema koda ni `SIGNUP` — i tada adresa koja nije loopback → izlaz 1, vidi
+  "Registracija"; Docker slika postavlja `HOST=0.0.0.0`), `DATA_DIR` (`./data`,
+  baza je `DATA_DIR/ritam.db`, ključ `DATA_DIR/session.key`), `STATIC_DIR` (`dist/web`), `TRUST_PROXY` (broj reverse
+  proxy-ja ispred aplikacije, `1` iza Nginx-a/Caddy-ja; neispravna vrednost → izlaz 1), `SIGNUP` (`open` | `code` |
+  `closed`), `SIGNUP_CODE` i `APP_PASSWORD` (kod za registraciju, `SIGNUP_CODE` ima prednost), `SESSION_SECRET`
+  (opciono; ključ potpisa access tokena, bar 32 znaka — kraći uz upozorenje), `ACCESS_TOKEN_TTL_SEC` (900),
+  `REFRESH_TOKEN_TTL_SEC` (7776000),
+  `REFRESH_RACE_GRACE_SEC` (30). Neispravan broj → izlaz 1. `ALLOW_NO_AUTH` se više ne koristi (samo upozorenje u logu).
+- Log pri pokretanju: `Ritam: http://… (baza: …, registracija: otvorena|uz kod|zatvorena, nalozi: N)`; ako nema naloga
+  a postoje podaci bez vlasnika: `Ritam: baza ima podatke iz verzije bez naloga — prvi nalog koji se registruje ih
+  preuzima.`; nov nalog: `Ritam: nov nalog (id N)[ — preuzeo je postojeće podatke].`; uz to, po potrebi, kopija baze
+  pre migracije (sekcija 3), otvorena registracija (sekcija 5, "Registracija") i prekratak `SESSION_SECRET`.
 - Docker slika nema `VOLUME` instrukciju (Railway je ne dozvoljava); volumen se kači na `/data` spolja.
 - Uredno gašenje na SIGTERM/SIGINT (zatvori server i bazu).
 
@@ -329,21 +464,98 @@ Klik na tab/logo Danas dok je `/` već otvoren vraća na vrh i prikazuje logičk
 **Rad bez servera (service worker, `public/sw.js`)**: GET `/api/*` mreža prvo; bez mreže, kad proksi javi 502–504 ili kad
 mreža ne odgovori za ~4 s a kopija postoji (0,8 s ako je mreža upravo kasnila — dok zakasneli odgovor ipak ne stigne:
 spora mreža koja radi ponovo dobija ceo rok), vraća se keširana kopija označena headerom
-`X-Ritam-Cached: 1` (`/api/auth/*`, `/api/export` i `/api/health` se ne keširaju). Klijent (`api.ts` `isCachedPayload`) takvu kopiju
+`X-Ritam-Cached: 1` (`/api/auth/*`, `/api/export` i `/api/health` se ne keširaju). Kopija pripada nalogu: klijent uz
+svaki zahtev sa tokenom šalje `X-Ritam-User: <id naloga>` (SW ga koristi samo za GET), SW upisuje odgovor pod samim
+URL-om (bez `Authorization` — token se nikad ne upisuje na disk) sa istim headerom i vraća ga samo zahtevu istog naloga
+(zahtev bez `X-Ritam-User` ide samo na mrežu, kopija bez oznake se nikad ne vraća). Keš se uz to briše pri odjavi,
+odbijenoj sesiji i prijavi drugog naloga na uređaju, i ostaje prazan: odgovor koji stigne posle toga (izmena ili GET
+poslat pre odjave, spora mreža) se ne upisuje — klijent upisuje kopiju samo dok je nalog tog odgovora prijavljen u tabu
+(i keš nije obrisan u međuvremenu), a SW ne upisuje odgovor zahteva započetog pre brisanja. Klijent (`api.ts` `isCachedPayload`) takvu kopiju
 nikad ne primenjuje preko podataka koje već ima (dan, raspored); koristi je samo kad nema ničeg drugog. Odgovori izmena
 (dan, raspored) se upisuju u isti keš (`ritam-api`, stalno ime, header `X-Ritam-Stored` = vreme upisa), da kopija za rad bez
 mreže ne bude starija od izmena; kasan odgovor GET zahteva poslatog pre te izmene je ne prepisuje.
 Traka "Server nije dostupan" se pali na keširan odgovor i gasi tek kad server stvarno odgovori (dok je upaljena, server se
 proverava preko `/api/health` na 15 s, pri povratku u aplikaciju i fokusu prozora). Keš je samo pomoć: greška
 keša (pun disk) nikad ne obara odgovor mreže; nova verzija SW-a se instalira tek kad '/' i njegovi JS/CSS stignu sa mreže.
-Pri pokretanju se raspored učitava uporedo sa proverom prijave (`/api/auth/me` sa rokom od 4 s) i aplikacija se
-prikazuje čim raspored stigne (401 u međuvremenu ostavlja prijavu na ekranu; raspored koji nije učitan nikad ne ostavlja
-samo spinner, nego "Podaci nisu učitani." + "Pokušaj ponovo"). Dok je na ekranu dana kopija iz keša (ili poslednje
+Fontovi naslova (`/assets/*.woff2` koje pominje CSS) se pri instalaciji keširaju ako stignu; nisu uslov instalacije
+(bez njih je naslov u rezervnom serifu, a font se kešira pri prvoj upotrebi). Izmena `sw.js` = novi `VERSION`.
+Nova verzija SW-a se aktivira sama čim se instalira (`skipWaiting` + `clients.claim`); poruka `{ type: 'skip-waiting' }`
+je rezerva za verziju koja ipak čeka ("Osveži", ispod). Poruka `{ type: 'refresh-shell' }` (uz `MessageChannel` port,
+odgovor `{ ok }`) odmah osveži keširani '/' sa mreže (`cache: 'no-store'`; samo uspešan HTML) — "Osveži", ispod.
+Pri pokretanju se sesija obnavlja (`/api/auth/refresh`, kolačić), pa se učita raspored i prikaže aplikacija; 401 →
+Prijava. Bez mreže, kad server ne odgovara (502–504, 5xx) ili obnova ne stigne za 4 s: aplikacija poslednjeg naloga ovog
+uređaja (`localStorage 'ritam.lastUser'` = `{ id, email, signedOut? }`) iz keša SW-a, a obnova se završava u pozadini
+(odbijena → Prijava, drugi nalog → stranica se učitava ponovo); uređaj bez poslednjeg naloga — i nalog koji se odjavio ili
+mu je sesija odbijena (`signedOut: true`; id i email ostaju radi prepoznavanja promene naloga) — čeka odgovor, pa Prijava.
+Raspored koji nije učitan nikad ne ostavlja samo spinner, nego "Podaci nisu učitani." + "Pokušaj ponovo" (i sam pokuša
+ponovo kad se mreža vrati, događaj `online`). Dok je na ekranu dana kopija iz keša (ili poslednje
 učitavanje dana nije dobilo odgovor servera), dan se tiho pokušava osvežiti na 15 s; čim server ponovo odgovori na bilo
 koji zahtev (traka se gasi), dan se odmah osveži.
 Raspored (izmene sa drugog uređaja) se tiho osvežava pri povratku u aplikaciju i fokusu prozora ako je stariji od 30 s, i na
-minut dok je tab vidljiv a nijedan sheet nije otvoren; stanje se menja samo ako je server vratio nešto drugo. Provera nove
-verzije aplikacije (`lib/pwa.ts`, najviše jednom u 10 min) ide pri povratku, fokusu i povremeno dok je tab vidljiv.
+minut dok je tab vidljiv a nijedan sheet nije otvoren; stanje se menja samo ako je server vratio nešto drugo.
+
+**Nova verzija aplikacije (`lib/pwa.ts`, traka u `App.tsx`)**: stranica se nikad ne učitava sama.
+- Provera = `build` iz `/api/health` različit od `src` glavnog `<script type="module">` ove stranice (u razvoju preko Vite-a
+  nema build-a, pa ni provere). Ide pri pokretanju, pri povratku u aplikaciju i fokusu prozora (najviše jednom u 5 min), na
+  30 min dok je tab vidljiv, na `online` (najviše jednom u 15 s), posle `updatefound`/`controllerchange` service worker-a i
+  na zahtev (Podešavanja). Automatske provere idu samo dok je tab vidljiv, a istovremene dele jedan zahtev. Uz svaku i
+  `reg.update()` (nov `sw.js`). Bez konekcije, sa odgovorom 5xx/502–504 ili sa kopijom iz keša (`/api/health` je u
+  `NO_STORE` u `sw.js`, `isCachedPayload` je ionako odbacuje) provera ne zaključuje ništa — nikad "nova verzija".
+- Nova verzija → store (`useUpdateState`, `useSyncExternalStore`) `available: true` → tiha traka "Dostupna je nova
+  verzija." + dugme "Osveži" + × (`.shell-update`, `role="status"`, dugmad iz tastature: posle sadržaja stranice, pre donje
+  trake). Telefon: odmah iznad donje trake (bez preklapanja; puna širina, visina 40px, `env(safe-area-inset-*)`); desktop:
+  na dnu sadržaja (desno od bočne trake, 32px); Prijava i ekran greške: na dnu ekrana. Visina trake ide u `--update-h`
+  na `<html>`: stranica (`.page`, `.login`) dobija toliko prostora na dnu, a toast-ovi stoje iznad trake. Dok je otvoren
+  sheet ili dijalog, traka se ne prikazuje (čeka da se zatvori — "Osveži" bi prekinuo formu, a van modalnog dijaloga ionako
+  ne prima dodir), pa nikad ne pokriva dugmad sheet-a. Traka ostaje dok se ne osveži ili sakrije.
+- × sakrije traku za taj build do sledećeg drugačijeg build-a na serveru ili do sledećeg pokretanja aplikacije (pamti se
+  samo u memoriji); ručna provera u Podešavanjima je ponovo prikazuje.
+- "Osveži" (`applyUpdate`): dugme odmah pokazuje "Osvežava se…" sa malim spinerom (`aria-disabled`, × onemogućen);
+  otvorena kartica beleške šalje nesačuvan tekst odmah (`NOTES_FLUSH_EVENT` iz `lib/noteDrafts.ts` → isto što i
+  `pagehide`, bez čekanja debounce-a; draft je ionako u `localStorage` od svakog otkucanog znaka dok server ne potvrdi
+  tekst), pa se čeka prazan red zahteva (`whenQueueIdle`, najviše 8 s; kroz zajednički red `lib/queue.ts` idu izmene
+  dana, beleške i dani u nedelji). Zatim još jedna provera: bez konekcije (`navigator.onLine` je false) → toast
+  "Nema konekcije.", server ne odgovara (uređaj je na mreži: odbijena konekcija, istek roka od 12 s, 5xx/502–504) →
+  "Server nije dostupan. Pokušaj ponovo.", server je ponovo na ovoj verziji → traka nestaje; u tim slučajevima se
+  stranica ne učitava (service worker bi vratio istu, keširanu verziju). Ako postoji SW koji čeka, dobija `skip-waiting`
+  (najviše 3 s čekanja na `controllerchange`). Zatim SW koji kontroliše stranicu dobija `refresh-shell` i keširani '/'
+  postaje nova verzija sa mreže (čeka se odgovor najviše 12 s, ili dok stranicu ne preuzme nova verzija SW-a; stranica se
+  učitava i kad to ne uspe) — inače bi na sporoj mreži navigacija posle 3,5 s dobila keširani '/', a to je (kad se `sw.js`
+  nije menjao) i dalje stari build. Ako se za vreme čekanja otvori sheet ili dijalog (traka se tada ne vidi), stranica
+  se ne učitava: forma se nikad ne prekida, dugme se vraća na "Osveži", a traka se ponovo pojavi kad se sheet zatvori
+  (sledeći dodir učitava). Inače `location.reload()`, a dok se stranica ne zameni, `body` je `inert` (ništa novo se ne
+  otvara; ako browser ipak ostane na stranici, posle 10 s sve ponovo radi). Ništa od ovoga se ne pokreće samo, pa nema
+  petlje učitavanja (posle učitavanja nova provera vidi isti build i traka se ne pojavljuje).
+
+**Sesija na klijentu (`web/src/api.ts`, `lib/account.ts`)**:
+- Access token (JWT) je samo u memoriji taba (nikad u storage-u) i ide uz svaki zahtev kao `Authorization: Bearer …`
+  (osim `/api/health` i javnih ruta naloga). Refresh token je HttpOnly kolačić koji klijent ne vidi.
+- 401 sa `code` `token_expired`/`unauthorized` (ili bez koda) → JEDNO zajedničko osvežavanje (`/api/auth/refresh`): u
+  tabu svi zahtevi čekaju isto, a između tabova idu jedno po jedno (`navigator.locks.request('ritam-refresh')`, kad
+  postoji — kolačić je zajednički, pa tab koji dođe na red šalje već rotiran token); zatim se zahtev ponovi jednom.
+  `refresh_race` (sesija važi, drugi tab je upravo zamenio token) nikad nije odjava: novi pokušaji posle nasumične pauze
+  0,3–1,2 s (tabovi ne pokušavaju u isti mah) dok ne prođe ~8 s; ako trka ne prestane, ne uspeva samo taj zahtev (kao
+  greška mreže). Odbijeno osvežavanje (401 `no_session`/`invalid_refresh`) → token se briše i šalje se
+  `ritam:unauthorized` (App → Prijava). Greška mreže ili 5xx pri osvežavanju = rad bez servera (greška tog zahteva), ne odjava.
+- Token se osvežava unapred pri sledećem zahtevu kad mu je ostalo manje od 60 s (najviše četvrtina trajanja); token
+  kome je ostalo bar 10 s se koristi odmah dok osvežavanje traje. Stranica koja se gasi (`pagehide` — u Chrome-u stiže
+  pre nego što je stranica sakrivena; keepalive čuvanje beleške) ili sakrivena stranica šalje odmah, bez osvežavanja, sa
+  tokenom kome je ostalo bar 1 s; ako ne uspe, draft ostaje u `localStorage` kao i do sada.
+- Stranica pripada jednom nalogu (`pageOwner`: prvi nalog sesije u tabu; isti nalog = isti id i isti email) i nijedan
+  njen zahtev ne ide sa tokenom drugog naloga. Osvežavanje (kolačić je zajednički) koje vrati drugi nalog (prijava u
+  drugom tabu): njegov token se ne uzima, sesija u tabu se završava (zahtevi koji čekaju dobijaju 401 `user_changed`, bez
+  slanja; draftovi ostaju pod ključem prethodnog naloga) → `ritam:user-changed` → stranica se učitava ponovo i obnovi
+  sesiju novog naloga. Prijava drugog naloga dok su u memoriji stranice podaci prethodnog (sesija istekla, pa se
+  prijavio neko drugi) učitava stranicu ponovo, a do tada se ništa ne šalje.
+- Prijava, registracija i obnova sesije pri pokretanju upisuju `ritam.lastUser`; ako je pre toga na uređaju bio drugi
+  nalog (drugi id, ili isti id sa drugim email-om — email se ne menja, pa je to druga baza na istoj adresi), brišu se API
+  keš SW-a i draftovi beleški tog naloga (`ritam.note.<id>.*`). Draftove iz verzije bez naloga (`ritam.note.<datum>`)
+  preuzima samo nalog koji je na serveru preuzeo podatke te verzije — korisnik u odgovoru prijave/osvežavanja označen
+  sa `legacyOwner: true` (pri svakoj prijavi tog naloga, ne samo prvoj na uređaju); bez te oznake ostaju netaknuti.
+  Odjava i odbijena sesija upisuju `signedOut: true` u `ritam.lastUser`.
+- Tabovi istog browser-a se obaveštavaju preko `localStorage 'ritam.authEvent'` (događaj `storage`): odjava u jednom
+  tabu odjavljuje i ostale; prijava drugog naloga učitava ostale tabove ponovo; tab na ekranu Prijava posle prijave u
+  drugom tabu sam obnovi sesiju.
 
 ### 6.1 Dan (`DayPage`, glavni ekran)
 - Zaglavlje: desktop "Utorak, 7. oktobar" (dan i mesec bez prelamanja), ispod oznaka "Danas" ili relativni dan + šablon.
@@ -380,8 +592,9 @@ verzije aplikacije (`lib/pwa.ts`, najviše jednom u 10 min) ide pri povratku, fo
   jučerašnji blok koji traje i posle početka ovog dana (npr. 23:30–07:00 kad dan počinje u 00:00) je trenutni dok traje
   ("23:30–07:00 · <kategorija> · od juče"; današnji blok koji je počeo kasnije ima prednost). Tada kartica postoji i
   kad današnji dan nema blokova.
-- **Vremenska linija**: red po bloku: vreme početka/kraja (tabular), traka u boji kategorije, naslov,
-  "Kategorija · trajanje" (+ ikonica ako ima belešku), desno **kontrola statusa**: 3 dugmeta
+- **Vremenska linija**: red po bloku: vreme početka/kraja (tabular), crta u boji kategorije (sekcija 7), naslov,
+  "Kategorija · trajanje" (uz done/partial sa stvarnim vremenom i "· stvarno 1h 35m"; red se prelama samo pre "·", pa se
+  trajanje ne cepa i tačka ne visi na kraju reda) (+ ikonica ako ima belešku), desno **kontrola statusa**: 3 dugmeta
   (✓ Urađeno = `done`, ◐ Delimično = `partial`, ✕ Nije = `skipped`); klik na aktivno vraća na `pending`.
   - Trenutni blok: istaknut (pozadina `--now-bg`, oznaka "sada" — na telefonu samo za čitače ekrana, tanka linija
     napretka kroz blok).
@@ -454,7 +667,7 @@ verzije aplikacije (`lib/pwa.ts`, najviše jednom u 10 min) ide pri povratku, fo
   "Imaš N nezavršenih zadataka od ranije" + dugme "Prebaci u danas".
 - **Beleške i misli**: TextArea, autosave (debounce ~700ms) uz indikator "Čuva se…/Sačuvano"; flush pri promeni dana i
   napuštanju (`visibilitychange`/`pagehide`). Lokalni draft se NE prepisuje odgovorom servera dok korisnik kuca.
-  Nesačuvan draft se čuva i u `localStorage` (`ritam.note.<datum>`, `{ base, text }`; posle uspelog čuvanja dok se kucalo
+  Nesačuvan draft se čuva i u `localStorage` (`ritam.note.<id naloga>.<datum>`, `{ base, text }`; posle uspelog čuvanja dok se kucalo
   dalje, `base` postaje upravo sačuvan tekst) dok server ne potvrdi isti tekst;
   neuspelo čuvanje se ponavlja pri napuštanju, povratku u aplikaciju, `online` i kad server ponovo odgovori (svež odgovor
   za dan) ("Pokušaj ponovo" ne šalje isti tekst dvaput; ako se čeka svež odgovor servera, odmah ga traži). Čuvanje koje
@@ -521,8 +734,9 @@ verzije aplikacije (`lib/pwa.ts`, najviše jednom u 10 min) ide pri povratku, fo
   koraci na stranici Danas; desktop: kategorije i šabloni levo, dani desno); posle toga Dani u nedelji i Planirano
   nedeljno levo, Šabloni i Kategorije desno. Šablon otvoren u editoru drži stranica (kartica menja mesto baš kad
   nastane prvi šablon, a editor se tada otvara).
-- **Dani u nedelji**: 7 redova (Ponedeljak…Nedelja) sa Select-om šablona (ili "Bez šablona") → `api.putWeekdays` sa samo
-  promenjenim danom (ostali dani ostaju kako su na serveru; zahtevi idu jedan za drugim). Bez ijednog šablona redovi su
+- **Dani u nedelji**: 7 redova (Ponedeljak…Nedelja) sa Select-om šablona (ili "Bez šablona"; `title` sa nazivom izabranog
+  šablona) → `api.putWeekdays` sa samo promenjenim danom (ostali dani ostaju kako su na serveru; zahtevi idu jedan za
+  drugim kroz zajednički red zahteva `lib/queue.ts`, pa ih "Osveži" i odjava čekaju). Bez ijednog šablona redovi su
   onemogućeni, a iznad piše "Prvo napravi šablon.".
 - **Planirano nedeljno** (samo kad je nešto planirano — bar jedan dan ima šablon sa blokovima): ukupno za kategorije
   koje se računaju u ispunjenost ("računa se u ispunjenost"; blok bez kategorije se računa) i za one koje se ne računaju
@@ -573,7 +787,8 @@ verzije aplikacije (`lib/pwa.ts`, najviše jednom u 10 min) ide pri povratku, fo
 - "Prag za niz dana" (Segmented 50/60/70/80/90%).
 - Instalacija: dugme "Instaliraj aplikaciju" ako je dostupan `beforeinstallprompt`; inače uputstvo za iPhone
   (Safari → Podeli → Dodaj na početni ekran) i Android (Chrome meni → Instaliraj aplikaciju).
-- Rezervna kopija: "Preuzmi kopiju (JSON)" i "Vrati iz kopije…" (input file, potvrda, `api.importData`, pa reload).
+- Rezervna kopija (samo podaci prijavljenog naloga): "Preuzmi kopiju (JSON)" i "Vrati iz kopije…" (input file, potvrda
+  "Svi podaci ovog naloga biće zamenjeni…", `api.importData`, pa reload).
 - "Raspored ispočetka" (kartica posle Rezervne kopije): objašnjenje da se brišu sve kategorije, šabloni i dodela
   šablona danima u nedelji (da raspored napraviš od nule — npr. primer koji je ranija verzija upisala u novu bazu),
   a sačuvani dani, zadaci i beleške ostaju i napredak ranijih dana se ne menja. Kad "Dan počinje u" nije 00:00,
@@ -581,30 +796,98 @@ verzije aplikacije (`lib/pwa.ts`, najviše jednom u 10 min) ide pri povratku, fo
   objašnjenjem → `api.resetSchedule({ dayStart })` (`POST /api/schedule/reset`) → `scheduleStore.set(payload)` +
   toast. Ništa se ne briše bez ove potvrde. Kad nema ničeg za brisanje (nijedna kategorija, šablon ni dodela — npr.
   nova instalacija), kartica se ne prikazuje (sam "Dan počinje u" se menja u kartici Dan).
-- "Odjavi se" (ako je auth uključen): briše keš API odgovora i lokalne nesačuvane beleške (`ritam.note.*`); ako ih
-  ima, prvo potvrda "Imaš nesačuvanu belešku" sa datumima. Istekla sesija (401) ih ne briše — šalju se posle ponovne prijave.
-- Kartica sa jednim redom (Izgled, Instalacija, Nalog) nema naziv reda, samo objašnjenje i kontrolu (naslov kartice je naziv).
-- Verzija aplikacije.
+- Kartica "Nalog": email naloga ("Prijavljen si ovim nalogom."; dugačka adresa se prelama posle "@"), "Lozinka" → dugme "Promeni lozinku" (mali
+  sheet: "Trenutna lozinka" `current-password` + "Nova lozinka" `new-password`, bar 8 znakova; skriveno polje
+  `username` sa email-om za menadžer lozinki; `api.changePassword` → nova sesija ovog uređaja, toast "Lozinka je
+  promenjena."; pogrešna trenutna → greška ispod tog polja; ostali uređaji moraju ponovo da se prijave), "Odjava" →
+  "Odjavi se": sačeka izmene iz reda (najviše 5 s), pa ako ima lokalnih nesačuvanih beleški ovog naloga prvo potvrda
+  "Imaš nesačuvanu belešku" sa datumima; zatim `POST /api/auth/logout` (bez servera odjava ne uspeva — kolačić je
+  HttpOnly — i toast kaže zašto), odmah završava sesiju u tabu (izmena koja stigne kasnije ne upisuje ništa na uređaj),
+  briše draftove ovog naloga i keš API odgovora, označava `ritam.lastUser` kao odjavljen (pokretanje bez mreže zatim
+  prikazuje Prijavu), javlja ostalim tabovima i vraća na Prijavu (sledeća prijava otvara Danas). Istekla sesija (401) draftove ne briše — šalju se posle ponovne prijave istog naloga.
+- Kartica "Verzija" (poslednja, i u instaliranoj aplikaciji): jedan red sa verzijom "Ritam 1.0.0 · <oznaka build-a>"
+  (oznaka = heš iz imena glavnog JS fajla, npr. `/assets/index-TP9-XS6p.js` → "TP9-XS6p", isti fajl koji server javlja u
+  `/api/health`; u razvoju "razvoj"), objašnjenje "Nova verzija se proverava sama i nudi se trakom na dnu ekrana." i dugme
+  "Proveri ažuriranje" (učitavanje dok traje) → ručna provera (sekcija 6): ista verzija → toast "Imaš najnoviju verziju.";
+  nova → pojavi se traka (i ako je bila sakrivena); bez konekcije → toast "Nema konekcije."; server ne odgovara (uređaj
+  je na mreži) → "Server nije dostupan. Pokušaj ponovo.".
+- Kartica sa jednim redom (Izgled, Instalacija, Verzija) nema naziv reda, samo objašnjenje i kontrolu (naslov kartice je
+  naziv); red kartice Verzija pokazuje samu verziju (kao email u kartici Nalog).
 
 ### 6.6 Prijava (`LoginPage`)
-- Centrirano: logo "Ritam" (Wordmark u `<h1>`), polje za lozinku (autoFocus, `autocomplete="current-password"`), dugme "Uđi",
-  poruka greške.
+- Crno i mirno kao ostatak: centrirano, logo "Ritam" (Wordmark u `<h1>`), jedna rečenica ispod (`.login-sub`,
+  naslovni serif 19px u `--text-2` — jedini serif na ekranu; bez akcenta osim fokusa, bez linija i ukrasa). Dva režima na istom
+  ekranu: "Prijava" ("Prijavi se da nastaviš.", dugme "Prijavi se") i "Napravi nalog" ("Napravi nalog da počneš.",
+  dugme "Napravi nalog"); prelaz je tih tekst-link ispod dugmeta ("Nemaš nalog? Napravi nalog" / "Već imaš nalog?
+  Prijavi se"). Ponuda registracije se prikazuje tek kad `GET /api/auth/config` kaže `open` ili `code` (`closed` ili
+  bez odgovora → samo prijava; bez mreže se proverava ponovo na `online`).
+- Polja: "Email" (`type="email"`, `autocomplete="username"`, autoFocus), "Lozinka" (`current-password` /
+  `new-password`, u registraciji hint "Bar 8 znakova."), i samo u registraciji kad je `signup: 'code'` "Kod za
+  registraciju" (hint "Kod postavlja onaj ko vodi server."). Enter šalje formu, dugme pokazuje učitavanje.
+- Greške stoje ispod polja na koje se odnose (provera na klijentu: "Unesi ispravnu email adresu.", "Unesi lozinku.",
+  "Lozinka mora imati bar 8 znakova.", "Unesi kod za registraciju."; sa servera: 409 → email, 401 "Pogrešan email ili
+  lozinka." → lozinka, `bad_code` → kod (polje se pojavi i ako ga ekran nije tražio), `signup_closed` → nazad na
+  prijavu); 429 i greška mreže iznad dugmeta. Fokus ide na polje sa greškom.
+- Nema drugih ekrana: bez resetovanja lozinke i dvostepene provere. Uspešna registracija vodi pravo u aplikaciju (novi
+  nalog je prazan, pa Danas pokazuje "Napravi svoj raspored").
 
 ---
 
 ## 7. Dizajn (obavezno)
 
-Cilj: čisto, mirno, kao dobro napravljen alat — **ne "AI generisan" izgled**.
+Cilj: čisto, mirno, kao dobro napravljen alat — **ne "AI generisan" izgled**. Uz logo (script Wordmark): knjiški
+serif samo za naslove, sve ostalo sistemski sans, jedan prigušen akcenat po temi, fine linije.
 - Koristi tokene iz `styles/tokens.css` (nikad hardkodovane boje osim boja kategorija iz podataka).
-- Zabranjeno: gradijenti, glassmorphism/blur, emodžiji, ikone-u-krugu dekoracije, šareni hero naslovi,
-  marketinški tekst, senke na karticama (senka samo na sheet/toast), preterano zaobljeni uglovi (max 12px), UPPERCASE svuda.
-- Hijerarhija tipografijom i razmakom, ne bojom. Brojevi i vremena `font-variant-numeric: tabular-nums`.
-- Boja kategorije: tanka vertikalna traka (3px) ili tačka 8px; svetla pozadina kategorije samo kroz
+- Zabranjeno: gradijenti (jedini izuzetak je isprekidan uzorak oznake "prag za niz" u legendi Napretka),
+  glassmorphism/blur, sjaj, emodžiji, ikone-u-krugu dekoracije, ornamenti, script pismo van Wordmark-a, šareni hero
+  naslovi, marketinški tekst, senke na karticama (senka samo na sheet/toast), preterano zaobljeni uglovi (max 12px;
+  gornji uglovi sheet-a na telefonu 14px), verzal van "oznake sekcije" (ispod).
+- **Pisma** (uloge važe za svaki postojeći i budući ekran):
+  - **Naslovni serif** `--font-display`: EB Garamond 500 (`styles/fonts.css`; dok ne stigne, `'EB Garamond Fallback'` =
+    Georgia podešena na njegovu meru, pa se naslov ne pomera), bez razmaka slova, lining + proporcionalni brojevi,
+    `font-synthesis: none` (učitana je samo težina 500). Samo naslovi, jednim grupnim pravilom u `base.css`: `.page-title`
+    (30px, desktop 34px; i datum na Danas — na telefonu užem od 360px 26px, da "28. septembar ⌄" stane u jedan red pored
+    ‹ › ⋯), `.sheet-title` (24px, i u dijalozima), `.empty-title` (22px),
+    `.day-welcome-title` (26px), `.prog-period-title` (22px), `.jr-date` (datumi u Dnevniku, 21px) i `.login-sub` (19px).
+    Novi naslov dobija serif dodavanjem klase u to pravilo, nikad sopstvenim `font-family`.
+  - **Nikad serif** za: nazive blokova (ni u kartici "Sada"), vremena, odbrojavanje, KPI vrednosti, oznake grafika,
+    nedeljne zbirove, zadatke, beleške, polja, dugmad, linkove, tabove i bočnu traku, toast, oznake polja, email naloga.
+  - **Sadržaj**: sistemski sans (`--font`), 15px za tekst i redove, težine 400/550/600. Brojevi i vremena
+    `font-variant-numeric: tabular-nums`.
+  - **Oznaka sekcije**: 12px / 600 / visina reda 1.3 / razmak slova 0.08em / verzal / `--text-2` — samo `.card-title`,
+    "Sada" (`.day-now-label`, u `--now`) i mesec u Dnevniku (`.jr-month-title`). KPI oznake, oznake ("Danas"), čipovi,
+    oznake polja i podnaslovi u sheet-u ostaju obična rečenica; ništa u verzalu ispod 12px.
+- **Jedan akcenat po temi** (`--now`, `--focus` je ista boja): tamna tema prigušena "šampanj" `#cbbd9f`, svetla tamno
+  "mastilo" plavo `#3a5f8f` (`--now-bg` = blaga podloga trenutnog reda). Samo za: trenutno vreme (red "sada", njegova
+  linija napretka, kartica "Sada"), danas (oznaka "Danas", dan u nedelji u Rasporedu, danas u grafiku, kalendaru i
+  heatmapi Napretka), aktivnu navigaciju i fokus. Aktivan tab donje trake: crta 24×2px na njenoj gornjoj liniji + tekst
+  600; aktivna stavka bočne trake: crta 2×16px uz levu ivicu + tekst `--text` 600, bez sive podloge (hover ostaje
+  `--surface-2`). Nikad za status, kategorije, primarna dugmad, velike površine ni gradijente; Prijava nema akcenat
+  (osim fokusa). Oznaka "trenutni" u izboru šablona je neutralna (`.day-tpl-current`: `--surface-3`, `--text-2`) —
+  `.day-tag` u akcentu je samo "Danas". Traka nove verzije (`.shell-update`) je neutralna kao traka "nema interneta" (`--surface-2`, tanka linija,
+  13px `--text-2`, bez tačke i akcenta; "Osveži" je podvučeno dugme-tekst u `--text` 600, × u `--text-3`).
+- **Uglovi**: `--radius-sm` 5px, `--radius` 7px, `--radius-lg` 10px. Kontrola statusa (vidljiv krug 32px u dodirnoj
+  površini 40px, na desktopu 30/34px), ocena dana i krug zadatka su krugovi.
+- **Linije**: okvir kartice i polja je `1px solid var(--border)` / `var(--border-strong)`. Razdelnici UNUTAR kartica i
+  traka (redovi lista, podnožje sheet-a, donja traka, ivica bočne trake, trake "nema interneta" i nove verzije, redovi Podešavanja,
+  unosi Dnevnika, zbirovi) su `var(--hairline) solid var(--divider)`: na ekranima gustine 2x+ jedan fizički piksel
+  (0.5px) u malo tamnijoj boji. Razdelnici redova u karticama (Danas, šabloni, kategorije) su `::before` uvučen 16px od
+  ivica kartice, u ravni sa naslovom kartice (prvi red ga nema); redovi počinju na istih 16px.
+- Hijerarhija tipografijom i razmakom, ne bojom. Prigušen sadržaj (npr. kategorije koje se ne računaju u Napretku) je
+  prigušen bojom teksta (`--text-2`/`--text-3`), nikad providnošću teksta (kontrast ≥ 4.5:1).
+- Boja kategorije: tačka 8px ili, uz red bloka (vremenska linija Danas, kartica "Sada", redovi editora šablona), crta u
+  obliku blagog integrala ∫ (`ui/CategoryStroke.tsx`: uspravna crta 2px cele visine reda čiji se vrh savija desno, a dno
+  levo; kuke 10×14px se nikad ne razvlače, pa su iste u svakom redu); svetla pozadina kategorije samo kroz
   `color-mix(in srgb, <boja> 10–14%, var(--surface))`.
 - Status: done = `--done`, partial = `--partial`, skipped = `--skipped`; ikona uvek uz boju (ne samo boja).
-- Dodirne površine ≥ 40px na telefonu. Inputi `font-size: 16px` (iOS zoom). Poštuj `env(safe-area-inset-*)`.
+- Dodirne površine ≥ 40px na telefonu (sitan link ili dugme dobija veću površinu preko `::after`, bez pomeranja
+  rasporeda — npr. datumi u "Završeni zadaci"; × toast-a se ne skuplja ni kad se poruka prelomi). Izuzetak su samo
+  ćelije gustih grafika Napretka: heatmapa poslednjih 12 nedelja (~20px) i kalendar meseca na telefonu užem od 360px
+  (od 360px ćelija ima bar 40px, razmak 2px) — isti dani se otvaraju i iz grafika nedelje, kalendara i liste.
+  Inputi `font-size: 16px` (iOS zoom). Onemogućeno polje/izbor: tekst `--text-3` na `--surface-2` (ne samo providnost
+  browser-a). Izbor (`.select`) skraćuje dugačak naziv sa "…". Poštuj `env(safe-area-inset-*)`.
 - Animacije kratke (120–220ms), poštuj `prefers-reduced-motion`.
-- CSS klase po stranici sa prefiksom: `day-`, `prog-`, `sched-`, `jr-`, `set-`, `shell-`/`login-`. CSS fajl po stranici,
+- CSS klase po stranici sa prefiksom: `day-`, `prog-`, `sched-`, `jr-`, `set-`, `shell-`/`login-` (Prijava i Napravi nalog). CSS fajl po stranici,
   importovan iz te stranice. Zajedničke klase već postoje: `.page`, `.card`, `.btn`, `.input`, `.chip`, `.seg`, `.stack`, `.row`…
 - Svaka stranica je `<div className="page">…</div>` i počinje sa `<PageHeader …/>` (osim ako spec kaže drugačije).
 - Pristupačnost: ikonice-dugmad imaju `label`; kontrola statusa (i ocena dana) je grupa prekidača (`role="group"` sa
@@ -616,8 +899,10 @@ Cilj: čisto, mirno, kao dobro napravljen alat — **ne "AI generisan" izgled**.
   (X, Esc, "nazad" na Androidu, klik na pozadinu, "nazad" u browseru — miš, Alt+← — i zatvaranje/osvežavanje taba;
   `lib/useUnsavedGuard.ts`). Klik na pozadinu zatvara samo ako je i počeo na pozadini; dodir pored otvorene
   tastature je samo skloni. Zatvaranje sheet-a vraća fokus na element koji ga je otvorio.
-- Toast dok je otvoren sheet ide unutar njegovog dijaloga (vidljiv i dodirljiv), na vrh ekrana. Dodir na samu poruku
-  prolazi do sadržaja ispod (samo × je dugme). Na desktopu je toast po sredini sadržaja (desno od bočne trake).
+- Toast dok je otvoren sheet ide unutar njegovog dijaloga (vidljiv i dodirljiv), na vrh ekrana, sa kraćom senkom
+  (`--shadow-toast-top`, da ne zatamni naslov sheet-a ispod). Dodir na samu poruku
+  prolazi do sadržaja ispod (samo × je dugme). Na desktopu je toast po sredini sadržaja (desno od bočne trake). Bez
+  sheet-a toast stoji na dnu, iznad donje trake i iznad trake nove verzije (`--update-h`).
 - Zaglavlje stranice (`.page-head`) je visoko bar 40px, a akcije su poravnate po sredini sa naslovom (zaglavlje dana na
   desktopu: uz vrh, jer ima i podnaslov).
 - Tamna tema: izabrana stavka Segmented i dugme prekidača su svetliji od staze (`--raised`, `--toggle-knob`,

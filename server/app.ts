@@ -109,7 +109,9 @@ export function createApp(opts: AppOptions): Hono {
   );
 
   app.onError((err, c) => {
-    if (err instanceof HttpError) return c.json({ error: err.message }, err.status);
+    if (err instanceof HttpError) {
+      return c.json(err.code ? { error: err.message, code: err.code } : { error: err.message }, err.status, err.headers);
+    }
     if (err instanceof HTTPException) {
       if (err.status === 413) return c.json({ error: 'Zahtev je prevelik.' }, 413);
       return c.json({ error: err.message || 'Zahtev nije uspeo.' }, err.status);

@@ -1,6 +1,8 @@
-// Pristup podacima: dani, blokovi, zadaci, raspored, statistika i dnevnik.
-// Svaka mutacija sa više upita ide kroz `tx`. Payload-i (DayPayload,
-// SchedulePayload, StatsPayload) se grade ovde da bi rute ostale tanke.
+// Pristup podacima jednog korisnika: dani, blokovi, zadaci, raspored, statistika i dnevnik.
+// `Repo` je vezan za korisnika (`uid`): SVAKI upit je ograničen na njegove redove (user_id), pa id ili
+// datum tuđeg reda izgleda kao da ne postoji (404 / prazan pregled). Blokovi šablona pripadaju korisniku
+// preko svog šablona. Svaka mutacija sa više upita ide kroz `tx`. Payload-i (DayPayload, SchedulePayload,
+// StatsPayload) se grade ovde da bi rute ostale tanke.
 
 import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import type {
@@ -121,6 +123,16 @@ export function sanitizeSettings(raw: unknown): Settings {
   return { dayStart, streakThreshold };
 }
 
+/** Podešavanja iz JSON teksta (users.settings, meta 'settings'); neispravna → podrazumevana. */
+export function parseSettings(text: string | null | undefined): Settings {
+  if (!text) return { ...DEFAULT_SETTINGS };
+  try {
+    return sanitizeSettings(JSON.parse(text));
+  } catch {
+    return { ...DEFAULT_SETTINGS };
+  }
+}
+
 /**
  * Blok šablona mora da se preklapa sa logičkim danom `[dayStart, dayStart + 24h)` — inače ga traka
  * šablona i dan ne prikazuju. Blok koji je ceo van dana prelazi na drugi kraj dana (zidno vreme ostaje
@@ -140,32 +152,37 @@ const mean = (xs: number[]): number | null => (xs.length ? xs.reduce((a, b) => a
  */
 const isRated = (blocks: Block[]): boolean => blocks.some((b) => b.status !== 'pending');
 
+/** Blokovi šablona korisnika: `template_blocks` nema user_id, vlasnik je vlasnik šablona. */
+const OWN_TEMPLATE_BLOCKS = 'template_blocks tb JOIN templates t ON t.id = tb.template_id AND t.user_id = ?';
+
+/** Pravi `Repo` za korisnika sa zajedničkim kešom pripremljenih upita (jedan po procesu). */
+export function repoFactory(db: DatabaseSync): (uid: number) => Repo {
+  const q = statementCache(db);
+  return (uid) => new Repo(db, uid, q);
+}
+
 export class Repo {
   db: DatabaseSync;
   q: (sql: string) => StatementSync;
+  /** Vlasnik podataka (users.id). */
+  uid: number;
 
-  constructor(db: DatabaseSync) {
+  constructor(db: DatabaseSync, uid: number, q: (sql: string) => StatementSync = statementCache(db)) {
+    if (!Number.isInteger(uid) || uid <= 0) throw new Error(`Repo: neispravan korisnik ${uid}`);
     this.db = db;
-    this.q = statementCache(db);
+    this.uid = uid;
+    this.q = q;
   }
 
   // ======================= Podešavanja =======================
 
   getSettings(): Settings {
-    const row = this.q(`SELECT value FROM meta WHERE key = 'settings'`).get();
-    if (!row) return { ...DEFAULT_SETTINGS };
-    try {
-      return sanitizeSettings(JSON.parse(str(row.value)));
-    } catch {
-      return { ...DEFAULT_SETTINGS };
-    }
+    const row = this.q('SELECT settings FROM users WHERE id = ?').get(this.uid);
+    return parseSettings(row ? str(row.settings) : null);
   }
 
   saveSettings(s: Settings): void {
-    this.q(
-      `INSERT INTO meta (key, value) VALUES ('settings', ?)
-       ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-    ).run(JSON.stringify(s));
+    this.q('UPDATE users SET settings = ? WHERE id = ?').run(JSON.stringify(sanitizeSettings(s)), this.uid);
   }
 
   /** Menja podešavanja; promena dayStart premešta blokove šablona koji ispadnu iz novog dana. */
@@ -193,7 +210,7 @@ export class Repo {
     return tx(this.db, () => {
       let moved = 0;
       const upd = this.q('UPDATE template_blocks SET start_min = ?, end_min = ? WHERE id = ?');
-      for (const r of this.q('SELECT id, start_min, end_min FROM template_blocks').all()) {
+      for (const r of this.q(`SELECT tb.id, tb.start_min, tb.end_min FROM ${OWN_TEMPLATE_BLOCKS}`).all(this.uid)) {
         const start = num(r.start_min);
         const end = num(r.end_min);
         const next = intoLogicalDay(start, end, dayStart);
@@ -210,40 +227,44 @@ export class Repo {
 
   /** Kategorije koje se nude za izbor (bez obrisanih). */
   listCategories(): Category[] {
-    return this.q('SELECT * FROM categories WHERE archived = 0 ORDER BY sort, id').all().map(mapCategory);
+    return this.q('SELECT * FROM categories WHERE user_id = ? AND archived = 0 ORDER BY sort, id')
+      .all(this.uid)
+      .map(mapCategory);
   }
 
   /** Obrisane kategorije koje sačuvani blokovi i zadaci još koriste za prikaz i računanje. */
   archivedCategories(): Category[] {
-    return this.q('SELECT * FROM categories WHERE archived = 1 ORDER BY sort, id').all().map(mapCategory);
+    return this.q('SELECT * FROM categories WHERE user_id = ? AND archived = 1 ORDER BY sort, id')
+      .all(this.uid)
+      .map(mapCategory);
   }
 
   /** Sve kategorije, i obrisane — za računanje ispunjenosti ranijih dana. */
   allCategories(): Category[] {
-    return this.q('SELECT * FROM categories ORDER BY sort, id').all().map(mapCategory);
+    return this.q('SELECT * FROM categories WHERE user_id = ? ORDER BY sort, id').all(this.uid).map(mapCategory);
   }
 
   /** Kategorija koja nije obrisana. */
   categoryOr404(id: number): Category {
-    const r = this.q('SELECT * FROM categories WHERE id = ? AND archived = 0').get(id);
+    const r = this.q('SELECT * FROM categories WHERE id = ? AND user_id = ? AND archived = 0').get(id, this.uid);
     if (!r) throw notFound('Kategorija ne postoji.');
     return mapCategory(r);
   }
 
-  /** Kategorija iz tela zahteva (null = bez kategorije); obrisana se ne može izabrati. */
+  /** Kategorija iz tela zahteva (null = bez kategorije); obrisana (ili tuđa) se ne može izabrati. */
   assertCategoryRef(id: number | null | undefined): void {
     if (id == null) return;
-    if (!this.q('SELECT 1 FROM categories WHERE id = ? AND archived = 0').get(id)) {
+    if (!this.q('SELECT 1 FROM categories WHERE id = ? AND user_id = ? AND archived = 0').get(id, this.uid)) {
       throw badRequest('Kategorija ne postoji.');
     }
   }
 
   /** Dve kategorije (ili dva šablona) sa istim nazivom bi u izborima izgledale isto. */
   private assertUniqueName(table: 'categories' | 'templates', name: string, exceptId: number | null): void {
-    const where = table === 'categories' ? 'archived = 0 AND id <> ?' : 'id <> ?';
+    const where = table === 'categories' ? 'user_id = ? AND archived = 0 AND id <> ?' : 'user_id = ? AND id <> ?';
     const key = nameKey(name);
     const taken = this.q(`SELECT name FROM ${table} WHERE ${where}`)
-      .all(exceptId ?? 0)
+      .all(this.uid, exceptId ?? 0)
       .some((r) => nameKey(str(r.name)) === key);
     if (taken) {
       throw new HttpError(
@@ -256,8 +277,9 @@ export class Repo {
   addCategory(input: CategoryInput): void {
     tx(this.db, () => {
       this.assertUniqueName('categories', input.name, null);
-      const sort = num(this.q('SELECT COALESCE(MAX(sort), -1) + 1 AS s FROM categories').get()?.s);
-      this.q('INSERT INTO categories (name, color, counts, sort) VALUES (?, ?, ?, ?)').run(
+      const sort = num(this.q('SELECT COALESCE(MAX(sort), -1) + 1 AS s FROM categories WHERE user_id = ?').get(this.uid)?.s);
+      this.q('INSERT INTO categories (user_id, name, color, counts, sort) VALUES (?, ?, ?, ?, ?)').run(
+        this.uid,
         input.name,
         input.color,
         flag(input.counts),
@@ -271,12 +293,13 @@ export class Repo {
       const cur = this.categoryOr404(id);
       // Samo kad se naziv stvarno menja (klijent uvek šalje naziv; i stari duplikati ostaju izmenjivi).
       if (p.name !== undefined && nameKey(p.name) !== nameKey(cur.name)) this.assertUniqueName('categories', p.name, id);
-      this.q('UPDATE categories SET name = ?, color = ?, counts = ?, sort = ? WHERE id = ?').run(
+      this.q('UPDATE categories SET name = ?, color = ?, counts = ?, sort = ? WHERE id = ? AND user_id = ?').run(
         p.name ?? cur.name,
         p.color ?? cur.color,
         flag(p.counts ?? cur.counts),
         p.sort ?? cur.sort,
         id,
+        this.uid,
       );
     });
   }
@@ -289,29 +312,34 @@ export class Repo {
   deleteCategory(id: number): void {
     tx(this.db, () => {
       this.categoryOr404(id);
-      this.q('UPDATE template_blocks SET category_id = NULL WHERE category_id = ?').run(id);
-      this.q('UPDATE categories SET archived = 1 WHERE id = ?').run(id);
+      this.q(
+        `UPDATE template_blocks SET category_id = NULL
+         WHERE category_id = ? AND template_id IN (SELECT id FROM templates WHERE user_id = ?)`,
+      ).run(id, this.uid);
+      this.q('UPDATE categories SET archived = 1 WHERE id = ? AND user_id = ?').run(id, this.uid);
     });
   }
 
   // ======================= Šabloni =======================
 
   templateBlocks(templateId: number): TemplateBlock[] {
-    return this.q('SELECT * FROM template_blocks WHERE template_id = ? ORDER BY start_min, end_min, id')
-      .all(templateId)
+    return this.q(`SELECT tb.* FROM ${OWN_TEMPLATE_BLOCKS} WHERE tb.template_id = ? ORDER BY tb.start_min, tb.end_min, tb.id`)
+      .all(this.uid, templateId)
       .map(mapTemplateBlock);
   }
 
   listTemplates(): Template[] {
     const byTemplate = new Map<number, TemplateBlock[]>();
-    for (const r of this.q('SELECT * FROM template_blocks ORDER BY template_id, start_min, end_min, id').all()) {
+    for (const r of this.q(`SELECT tb.* FROM ${OWN_TEMPLATE_BLOCKS} ORDER BY tb.template_id, tb.start_min, tb.end_min, tb.id`).all(
+      this.uid,
+    )) {
       const tb = mapTemplateBlock(r);
       const list = byTemplate.get(tb.templateId);
       if (list) list.push(tb);
       else byTemplate.set(tb.templateId, [tb]);
     }
-    return this.q('SELECT * FROM templates ORDER BY sort, id')
-      .all()
+    return this.q('SELECT * FROM templates WHERE user_id = ? ORDER BY sort, id')
+      .all(this.uid)
       .map((r) => {
         const id = num(r.id);
         return { id, name: str(r.name), sort: num(r.sort), blocks: byTemplate.get(id) ?? [] };
@@ -320,33 +348,37 @@ export class Repo {
 
   templateName(id: number | null): string | null {
     if (id == null) return null;
-    const r = this.q('SELECT name FROM templates WHERE id = ?').get(id);
+    const r = this.q('SELECT name FROM templates WHERE id = ? AND user_id = ?').get(id, this.uid);
     return r ? str(r.name) : null;
   }
 
   templateOr404(id: number): { id: number; name: string; sort: number } {
-    const r = this.q('SELECT * FROM templates WHERE id = ?').get(id);
+    const r = this.q('SELECT * FROM templates WHERE id = ? AND user_id = ?').get(id, this.uid);
     if (!r) throw notFound('Šablon ne postoji.');
     return { id: num(r.id), name: str(r.name), sort: num(r.sort) };
   }
 
-  /** Šablon iz tela zahteva. */
+  /** Šablon iz tela zahteva (tuđi šablon ne postoji). */
   assertTemplateRef(id: number): void {
-    if (!this.q('SELECT 1 FROM templates WHERE id = ?').get(id)) throw badRequest('Šablon ne postoji.');
+    if (!this.q('SELECT 1 FROM templates WHERE id = ? AND user_id = ?').get(id, this.uid)) {
+      throw badRequest('Šablon ne postoji.');
+    }
   }
 
   addTemplate(name: string, copyFrom: number | null | undefined): number {
     return tx(this.db, () => {
       if (copyFrom != null) this.assertTemplateRef(copyFrom);
       this.assertUniqueName('templates', name, null);
-      const sort = num(this.q('SELECT COALESCE(MAX(sort), -1) + 1 AS s FROM templates').get()?.s);
-      const id = Number(this.q('INSERT INTO templates (name, sort) VALUES (?, ?)').run(name, sort).lastInsertRowid);
+      const sort = num(this.q('SELECT COALESCE(MAX(sort), -1) + 1 AS s FROM templates WHERE user_id = ?').get(this.uid)?.s);
+      const id = Number(
+        this.q('INSERT INTO templates (user_id, name, sort) VALUES (?, ?, ?)').run(this.uid, name, sort).lastInsertRowid,
+      );
       if (copyFrom != null) {
         this.q(
           `INSERT INTO template_blocks (template_id, start_min, end_min, title, category_id)
-           SELECT ?, start_min, end_min, title, category_id FROM template_blocks
-           WHERE template_id = ? ORDER BY start_min, end_min, id`,
-        ).run(id, copyFrom);
+           SELECT ?, tb.start_min, tb.end_min, tb.title, tb.category_id FROM ${OWN_TEMPLATE_BLOCKS}
+           WHERE tb.template_id = ? ORDER BY tb.start_min, tb.end_min, tb.id`,
+        ).run(id, this.uid, copyFrom);
       }
       return id;
     });
@@ -356,7 +388,12 @@ export class Repo {
     tx(this.db, () => {
       const cur = this.templateOr404(id);
       if (p.name !== undefined && nameKey(p.name) !== nameKey(cur.name)) this.assertUniqueName('templates', p.name, id);
-      this.q('UPDATE templates SET name = ?, sort = ? WHERE id = ?').run(p.name ?? cur.name, p.sort ?? cur.sort, id);
+      this.q('UPDATE templates SET name = ?, sort = ? WHERE id = ? AND user_id = ?').run(
+        p.name ?? cur.name,
+        p.sort ?? cur.sort,
+        id,
+        this.uid,
+      );
     });
   }
 
@@ -364,7 +401,7 @@ export class Repo {
   deleteTemplate(id: number): void {
     tx(this.db, () => {
       this.templateOr404(id);
-      this.q('DELETE FROM templates WHERE id = ?').run(id);
+      this.q('DELETE FROM templates WHERE id = ? AND user_id = ?').run(id, this.uid);
     });
   }
 
@@ -389,7 +426,7 @@ export class Repo {
 
   weekdays(): WeekdayMap {
     const map: WeekdayMap = { 1: null, 2: null, 3: null, 4: null, 5: null, 6: null, 7: null };
-    for (const r of this.q('SELECT weekday, template_id FROM weekday_templates').all()) {
+    for (const r of this.q('SELECT weekday, template_id FROM weekday_templates WHERE user_id = ?').all(this.uid)) {
       const wd = num(r.weekday);
       if (wd >= 1 && wd <= 7) map[wd as Weekday] = numOrNull(r.template_id);
     }
@@ -400,13 +437,13 @@ export class Repo {
   putWeekdays(map: Partial<Record<Weekday, number | null>>): void {
     tx(this.db, () => {
       const up = this.q(
-        `INSERT INTO weekday_templates (weekday, template_id) VALUES (?, ?)
-         ON CONFLICT(weekday) DO UPDATE SET template_id = excluded.template_id`,
+        `INSERT INTO weekday_templates (user_id, weekday, template_id) VALUES (?, ?, ?)
+         ON CONFLICT(user_id, weekday) DO UPDATE SET template_id = excluded.template_id`,
       );
       for (const [key, tplId] of Object.entries(map)) {
         if (tplId === undefined) continue;
         if (tplId !== null) this.assertTemplateRef(tplId);
-        up.run(Number(key), tplId);
+        up.run(this.uid, Number(key), tplId);
       }
     });
   }
@@ -420,8 +457,8 @@ export class Repo {
    */
   resetSchedule(opts: ScheduleResetInput): void {
     tx(this.db, () => {
-      this.q('DELETE FROM templates').run();
-      this.q('UPDATE categories SET archived = 1 WHERE archived = 0').run();
+      this.q('DELETE FROM templates WHERE user_id = ?').run(this.uid);
+      this.q('UPDATE categories SET archived = 1 WHERE user_id = ? AND archived = 0').run(this.uid);
       if (opts.dayStart) this.saveSettings({ ...this.getSettings(), dayStart: DEFAULT_SETTINGS.dayStart });
     });
   }
@@ -439,13 +476,16 @@ export class Repo {
   // ======================= Dani =======================
 
   dayRow(date: string): DayRow | undefined {
-    const r = this.q('SELECT * FROM days WHERE date = ?').get(date);
+    const r = this.q('SELECT * FROM days WHERE user_id = ? AND date = ?').get(this.uid, date);
     return r ? mapDayRow(r) : undefined;
   }
 
   /** Šablon dodeljen danu u nedelji za dati datum (ili null). */
   weekdayTemplateId(date: string): number | null {
-    const r = this.q('SELECT template_id FROM weekday_templates WHERE weekday = ?').get(isoWeekday(date));
+    const r = this.q('SELECT template_id FROM weekday_templates WHERE user_id = ? AND weekday = ?').get(
+      this.uid,
+      isoWeekday(date),
+    );
     return r ? numOrNull(r.template_id) : null;
   }
 
@@ -453,17 +493,17 @@ export class Repo {
   initDay(date: string, templateId: number | null): void {
     tx(this.db, () => {
       this.q(
-        `INSERT INTO days (date, initialized, template_id, updated_at) VALUES (?, 1, ?, ?)
-         ON CONFLICT(date) DO UPDATE SET initialized = 1, template_id = excluded.template_id,
+        `INSERT INTO days (user_id, date, initialized, template_id, updated_at) VALUES (?, ?, 1, ?, ?)
+         ON CONFLICT(user_id, date) DO UPDATE SET initialized = 1, template_id = excluded.template_id,
            updated_at = excluded.updated_at`,
-      ).run(date, templateId, nowISO());
-      this.q('DELETE FROM blocks WHERE date = ?').run(date);
+      ).run(this.uid, date, templateId, nowISO());
+      this.q('DELETE FROM blocks WHERE user_id = ? AND date = ?').run(this.uid, date);
       if (templateId != null) {
         this.q(
-          `INSERT INTO blocks (date, start_min, end_min, title, category_id)
-           SELECT ?, start_min, end_min, title, category_id FROM template_blocks
-           WHERE template_id = ? ORDER BY start_min, end_min, id`,
-        ).run(date, templateId);
+          `INSERT INTO blocks (user_id, date, start_min, end_min, title, category_id)
+           SELECT ?, ?, tb.start_min, tb.end_min, tb.title, tb.category_id FROM ${OWN_TEMPLATE_BLOCKS}
+           WHERE tb.template_id = ? ORDER BY tb.start_min, tb.end_min, tb.id`,
+        ).run(this.uid, date, this.uid, templateId);
       }
     });
   }
@@ -487,7 +527,7 @@ export class Repo {
   }
 
   touchDay(date: string): void {
-    this.q('UPDATE days SET updated_at = ? WHERE date = ?').run(nowISO(), date);
+    this.q('UPDATE days SET updated_at = ? WHERE user_id = ? AND date = ?').run(nowISO(), this.uid, date);
   }
 
   /**
@@ -504,25 +544,29 @@ export class Repo {
         }
       }
       this.q(
-        `INSERT INTO days (date, updated_at) VALUES (?, ?)
-         ON CONFLICT(date) DO UPDATE SET updated_at = excluded.updated_at`,
-      ).run(date, nowISO());
-      if (p.note !== undefined) this.q('UPDATE days SET note = ? WHERE date = ?').run(p.note, date);
-      if (p.rating !== undefined) this.q('UPDATE days SET rating = ? WHERE date = ?').run(p.rating, date);
+        `INSERT INTO days (user_id, date, updated_at) VALUES (?, ?, ?)
+         ON CONFLICT(user_id, date) DO UPDATE SET updated_at = excluded.updated_at`,
+      ).run(this.uid, date, nowISO());
+      if (p.note !== undefined) this.q('UPDATE days SET note = ? WHERE user_id = ? AND date = ?').run(p.note, this.uid, date);
+      if (p.rating !== undefined) {
+        this.q('UPDATE days SET rating = ? WHERE user_id = ? AND date = ?').run(p.rating, this.uid, date);
+      }
     });
   }
 
   blocksForDate(date: string): Block[] {
-    return this.q('SELECT * FROM blocks WHERE date = ? ORDER BY start_min, end_min, id').all(date).map(mapBlock);
+    return this.q('SELECT * FROM blocks WHERE user_id = ? AND date = ? ORDER BY start_min, end_min, id')
+      .all(this.uid, date)
+      .map(mapBlock);
   }
 
   tasksForDate(date: string): Task[] {
     // Nezavršeni po sort, id; zatim završeni po done_at, id.
     return this.q(
-      `SELECT * FROM tasks WHERE date = ?
+      `SELECT * FROM tasks WHERE user_id = ? AND date = ?
        ORDER BY done, CASE WHEN done = 0 THEN sort END, done_at, id`,
     )
-      .all(date)
+      .all(this.uid, date)
       .map(mapTask);
   }
 
@@ -548,7 +592,9 @@ export class Repo {
     const initialized = row?.initialized ?? false;
     const templateId = initialized ? (row?.templateId ?? null) : this.weekdayTemplateId(date);
     const blocks = initialized ? this.blocksForDate(date) : this.previewBlocks(date, templateId);
-    const openBefore = num(this.q('SELECT COUNT(*) AS n FROM tasks WHERE done = 0 AND date < ?').get(date)?.n);
+    const openBefore = num(
+      this.q('SELECT COUNT(*) AS n FROM tasks WHERE user_id = ? AND done = 0 AND date < ?').get(this.uid, date)?.n,
+    );
     return {
       date,
       initialized,
@@ -565,7 +611,7 @@ export class Repo {
   // ======================= Blokovi =======================
 
   blockOr404(id: number): Block {
-    const r = this.q('SELECT * FROM blocks WHERE id = ?').get(id);
+    const r = this.q('SELECT * FROM blocks WHERE id = ? AND user_id = ?').get(id, this.uid);
     if (!r) throw notFound('Blok ne postoji.');
     return mapBlock(r);
   }
@@ -574,7 +620,8 @@ export class Repo {
     tx(this.db, () => {
       this.assertCategoryRef(input.categoryId);
       this.ensureDay(date);
-      this.q('INSERT INTO blocks (date, start_min, end_min, title, category_id) VALUES (?, ?, ?, ?, ?)').run(
+      this.q('INSERT INTO blocks (user_id, date, start_min, end_min, title, category_id) VALUES (?, ?, ?, ?, ?, ?)').run(
+        this.uid,
         date,
         input.start,
         input.end,
@@ -606,7 +653,7 @@ export class Repo {
       }
       this.q(
         `UPDATE blocks SET start_min = ?, end_min = ?, title = ?, category_id = ?, status = ?,
-           actual_min = ?, note = ? WHERE id = ?`,
+           actual_min = ?, note = ? WHERE id = ? AND user_id = ?`,
       ).run(
         start,
         end,
@@ -616,6 +663,7 @@ export class Repo {
         actualMin,
         p.note ?? cur.note,
         id,
+        this.uid,
       );
       this.touchDay(cur.date);
       return cur.date;
@@ -626,7 +674,7 @@ export class Repo {
   deleteBlock(id: number): string {
     return tx(this.db, () => {
       const cur = this.blockOr404(id);
-      this.q('DELETE FROM blocks WHERE id = ?').run(id);
+      this.q('DELETE FROM blocks WHERE id = ? AND user_id = ?').run(id, this.uid);
       this.touchDay(cur.date);
       return cur.date;
     });
@@ -645,8 +693,9 @@ export class Repo {
       }
       const firstDur = at - cur.start;
       const actual = cur.actualMin != null && cur.actualMin > firstDur ? null : cur.actualMin;
-      this.q('UPDATE blocks SET end_min = ?, actual_min = ? WHERE id = ?').run(at, actual, id);
-      this.q('INSERT INTO blocks (date, start_min, end_min, title, category_id) VALUES (?, ?, ?, ?, ?)').run(
+      this.q('UPDATE blocks SET end_min = ?, actual_min = ? WHERE id = ? AND user_id = ?').run(at, actual, id, this.uid);
+      this.q('INSERT INTO blocks (user_id, date, start_min, end_min, title, category_id) VALUES (?, ?, ?, ?, ?, ?)').run(
+        this.uid,
         cur.date,
         at,
         cur.end,
@@ -668,9 +717,9 @@ export class Repo {
       const a = this.blockOr404(id);
       const b = this.blockOr404(withId);
       if (a.date !== b.date) throw badRequest('Možeš da zameniš samo blokove istog dana.');
-      const set = this.q('UPDATE blocks SET title = ?, category_id = ? WHERE id = ?');
-      set.run(b.title, b.categoryId, a.id);
-      set.run(a.title, a.categoryId, b.id);
+      const set = this.q('UPDATE blocks SET title = ?, category_id = ? WHERE id = ? AND user_id = ?');
+      set.run(b.title, b.categoryId, a.id, this.uid);
+      set.run(a.title, a.categoryId, b.id, this.uid);
       this.touchDay(a.date);
       return a.date;
     });
@@ -679,22 +728,24 @@ export class Repo {
   // ======================= Zadaci =======================
 
   taskOr404(id: number): Task {
-    const r = this.q('SELECT * FROM tasks WHERE id = ?').get(id);
+    const r = this.q('SELECT * FROM tasks WHERE id = ? AND user_id = ?').get(id, this.uid);
     if (!r) throw notFound('Zadatak ne postoji.');
     return mapTask(r);
   }
 
   nextTaskSort(date: string): number {
-    return num(this.q('SELECT COALESCE(MAX(sort), 0) + 1 AS s FROM tasks WHERE date = ?').get(date)?.s);
+    return num(
+      this.q('SELECT COALESCE(MAX(sort), 0) + 1 AS s FROM tasks WHERE user_id = ? AND date = ?').get(this.uid, date)?.s,
+    );
   }
 
   addTask(date: string, title: string, categoryId: number | null): void {
     tx(this.db, () => {
       this.assertCategoryRef(categoryId);
       this.q(
-        `INSERT INTO tasks (date, title, done, done_at, category_id, sort, created_at)
-         VALUES (?, ?, 0, NULL, ?, ?, ?)`,
-      ).run(date, title, categoryId, this.nextTaskSort(date), nowISO());
+        `INSERT INTO tasks (user_id, date, title, done, done_at, category_id, sort, created_at)
+         VALUES (?, ?, ?, 0, NULL, ?, ?, ?)`,
+      ).run(this.uid, date, title, categoryId, this.nextTaskSort(date), nowISO());
     });
   }
 
@@ -714,7 +765,8 @@ export class Repo {
       // Premeštanje na drugi dan stavlja zadatak na kraj liste ciljnog dana.
       const sort = p.sort !== undefined ? p.sort : date !== cur.date ? this.nextTaskSort(date) : cur.sort;
       this.q(
-        'UPDATE tasks SET title = ?, done = ?, done_at = ?, category_id = ?, date = ?, sort = ? WHERE id = ?',
+        `UPDATE tasks SET title = ?, done = ?, done_at = ?, category_id = ?, date = ?, sort = ?
+         WHERE id = ? AND user_id = ?`,
       ).run(
         p.title ?? cur.title,
         flag(done),
@@ -723,6 +775,7 @@ export class Repo {
         date,
         sort,
         id,
+        this.uid,
       );
       return cur.date;
     });
@@ -732,7 +785,7 @@ export class Repo {
   deleteTask(id: number): string {
     return tx(this.db, () => {
       const cur = this.taskOr404(id);
-      this.q('DELETE FROM tasks WHERE id = ?').run(id);
+      this.q('DELETE FROM tasks WHERE id = ? AND user_id = ?').run(id, this.uid);
       return cur.date;
     });
   }
@@ -740,22 +793,22 @@ export class Repo {
   /** Svi nezavršeni zadaci pre `to` prelaze na `to`, na kraj liste, zadržavajući redosled. */
   carryTasks(to: string): number {
     return tx(this.db, () => {
-      const ids = this.q('SELECT id FROM tasks WHERE done = 0 AND date < ? ORDER BY date, sort, id')
-        .all(to)
+      const ids = this.q('SELECT id FROM tasks WHERE user_id = ? AND done = 0 AND date < ? ORDER BY date, sort, id')
+        .all(this.uid, to)
         .map((r) => num(r.id));
       let sort = this.nextTaskSort(to);
-      const upd = this.q('UPDATE tasks SET date = ?, sort = ? WHERE id = ?');
-      for (const id of ids) upd.run(to, sort++, id);
+      const upd = this.q('UPDATE tasks SET date = ?, sort = ? WHERE id = ? AND user_id = ?');
+      for (const id of ids) upd.run(to, sort++, id, this.uid);
       return ids.length;
     });
   }
 
   doneTasks(from: string, to: string): Task[] {
     return this.q(
-      `SELECT * FROM tasks WHERE done = 1 AND date >= ? AND date <= ?
+      `SELECT * FROM tasks WHERE user_id = ? AND done = 1 AND date >= ? AND date <= ?
        ORDER BY date DESC, done_at DESC, id DESC`,
     )
-      .all(from, to)
+      .all(this.uid, from, to)
       .map(mapTask);
   }
 
@@ -765,10 +818,10 @@ export class Repo {
   private summariesUpTo(to: string, categories: Category[]): Map<string, BlockSummary> {
     const blocksByDate = new Map<string, Block[]>();
     const rows = this.q(
-      `SELECT b.* FROM blocks b JOIN days d ON d.date = b.date
-       WHERE d.initialized = 1 AND b.date <= ?
+      `SELECT b.* FROM blocks b JOIN days d ON d.user_id = b.user_id AND d.date = b.date
+       WHERE b.user_id = ? AND d.initialized = 1 AND b.date <= ?
        ORDER BY b.date, b.start_min, b.end_min, b.id`,
-    ).all(to);
+    ).all(this.uid, to);
     for (const r of rows) {
       const b = mapBlock(r);
       const list = blocksByDate.get(b.date);
@@ -786,8 +839,8 @@ export class Repo {
     const out = new Map<string, { total: number; done: number }>();
     const rows = this.q(
       `SELECT date, COUNT(*) AS total, COALESCE(SUM(done), 0) AS done FROM tasks
-       WHERE date >= ? AND date <= ? GROUP BY date`,
-    ).all(from, to);
+       WHERE user_id = ? AND date >= ? AND date <= ? GROUP BY date`,
+    ).all(this.uid, from, to);
     for (const r of rows) out.set(str(r.date), { total: num(r.total), done: num(r.done) });
     return out;
   }
@@ -802,7 +855,7 @@ export class Repo {
     const summaries = this.summariesUpTo(to, categories);
     const tasks = this.taskCounts(from, to);
     const dayRows = new Map<string, DayRow>();
-    for (const r of this.q('SELECT * FROM days WHERE date >= ? AND date <= ?').all(from, to)) {
+    for (const r of this.q('SELECT * FROM days WHERE user_id = ? AND date >= ? AND date <= ?').all(this.uid, from, to)) {
       const d = mapDayRow(r);
       dayRows.set(d.date, d);
     }
@@ -846,8 +899,8 @@ export class Repo {
   // ======================= Dnevnik =======================
 
   journal(opts: { before?: string; q?: string; limit: number }): JournalEntry[] {
-    const where = [`trim(note, ' ' || char(9) || char(10) || char(13)) <> ''`];
-    const params: (string | number)[] = [];
+    const where = ['user_id = ?', `trim(note, ' ' || char(9) || char(10) || char(13)) <> ''`];
+    const params: (string | number)[] = [this.uid];
     if (opts.before) {
       where.push('date < ?');
       params.push(opts.before);
@@ -869,7 +922,9 @@ export class Repo {
 
     const categories = rows.some((d) => d.initialized) ? this.allCategories() : [];
     return rows.map((d) => {
-      const t = this.q('SELECT COUNT(*) AS total, COALESCE(SUM(done), 0) AS done FROM tasks WHERE date = ?').get(d.date);
+      const t = this.q(
+        'SELECT COUNT(*) AS total, COALESCE(SUM(done), 0) AS done FROM tasks WHERE user_id = ? AND date = ?',
+      ).get(this.uid, d.date);
       const blocks = d.initialized ? this.blocksForDate(d.date) : [];
       return {
         date: d.date,

@@ -2,10 +2,6 @@
 
 /* ---- Zaglavlje ---- */
 
-.day-head .page-title {
-  font-size: 20px;
-}
-
 .day-date {
   position: relative;
   display: inline-flex;
@@ -67,8 +63,8 @@
   align-items: center;
   height: 20px;
   padding: 0 7px;
-  border-radius: 4px;
-  background: var(--now-bg);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--now) 13%, transparent);
   color: var(--now);
   font-size: 12px;
   font-weight: 600;
@@ -114,7 +110,10 @@
     margin: -8px -6px;
   }
 
+  /* position: dugmad (‹ ›) se crtaju iznad naslova po redosledu u DOM-u, pa i predugačak datum
+     (ekran uži od 320px) ne uzima dodir sa ‹. */
   .day-head .page-actions {
+    position: relative;
     grid-row: 1;
     grid-column: 2;
     gap: 0;
@@ -144,14 +143,17 @@
   }
 }
 
+/* Telefon uži od 360px: datum (jedan red bez prelamanja, "28. septembar ⌄") staje pored ‹ › ⋯. */
+@media (max-width: 359px) {
+  .day-head .page-title {
+    font-size: 26px;
+  }
+}
+
 @media (min-width: 860px) {
   /* Naslov i podnaslov levo, strelice i meni u visini naslova (ne sredine celog bloka). */
   .day-head {
     align-items: flex-start;
-  }
-
-  .day-head .page-title {
-    font-size: 24px;
   }
 
   .day-head .page-actions .btn-sm {
@@ -275,9 +277,13 @@
   padding: 14px 16px;
 }
 
+/* Ista mala verzalna oznaka kao naslovi kartica, u boji "sada". */
 .day-now-label {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
   color: var(--now);
 }
 
@@ -285,12 +291,6 @@
   display: flex;
   align-items: stretch;
   gap: 12px;
-}
-
-.day-now-bar {
-  flex-shrink: 0;
-  width: 3px;
-  border-radius: 2px;
 }
 
 .day-now-text {
@@ -302,9 +302,10 @@
   gap: 2px;
 }
 
+/* Isti sans kao naziv bloka u listi ispod (serif je samo za naslove stranica). */
 .day-now-title {
   font-size: 18px;
-  font-weight: 650;
+  font-weight: 600;
   line-height: 1.3;
   letter-spacing: -0.01em;
   overflow-wrap: anywhere;
@@ -327,7 +328,7 @@
 .day-now-left strong {
   display: block;
   font-size: 18px;
-  font-weight: 650;
+  font-weight: 600;
   color: var(--text);
 }
 
@@ -353,7 +354,7 @@
   flex-wrap: wrap;
   gap: 6px 12px;
   padding-top: 10px;
-  border-top: 1px solid var(--border);
+  border-top: var(--hairline) solid var(--divider);
 }
 
 .day-now-next {
@@ -407,10 +408,8 @@
 }
 
 .day-welcome-title {
-  font-size: 18px;
-  font-weight: 650;
-  line-height: 1.3;
-  letter-spacing: -0.01em;
+  font-size: 26px;
+  line-height: 1.15;
 }
 
 .day-welcome-lead {
@@ -495,7 +494,7 @@
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  margin: 4px 12px 8px;
+  margin: 4px 16px 8px;
   padding: 10px 12px;
   border-radius: var(--radius);
   background: var(--surface-2);
@@ -539,12 +538,24 @@
   align-items: center;
   gap: 6px;
   padding-right: 6px;
-  border-top: 1px solid var(--border);
   transition: background-color 120ms var(--ease);
 }
 
-.day-list > :first-child {
-  border-top: 0;
+/* Razdelnik redova: tanka linija uvučena 16px od ivica kartice (u ravni sa naslovom kartice). */
+.day-row::before,
+.day-gap::before,
+.day-add-row::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 16px;
+  right: 16px;
+  border-top: var(--hairline) solid var(--divider);
+  pointer-events: none;
+}
+
+.day-list > :first-child::before {
+  display: none;
 }
 
 .day-row-main {
@@ -553,7 +564,8 @@
   display: flex;
   align-items: stretch;
   gap: 10px;
-  padding: 11px 0 11px 12px;
+  /* Vreme počinje u ravni sa naslovom kartice (16px), kao i ostale liste. */
+  padding: 11px 0 11px 16px;
   text-align: left;
 }
 
@@ -575,12 +587,6 @@
 
 .day-time-end {
   color: var(--text-3);
-}
-
-.day-bar {
-  flex-shrink: 0;
-  width: 3px;
-  border-radius: 2px;
 }
 
 .day-text {
@@ -611,6 +617,10 @@
   font-size: 13px;
   color: var(--text-2);
   font-variant-numeric: tabular-nums;
+}
+
+.day-meta-seg {
+  white-space: nowrap;
 }
 
 .day-meta-note {
@@ -656,10 +666,11 @@
   }
 }
 
-/* Praznina između blokova */
+/* Praznina između blokova; tekst u ravni sa naslovima blokova: 16 + 42 (vreme) + 10 + 10 (crta
+   kategorije) + 10. */
 .day-gap {
-  padding: 5px 12px 5px 77px;
-  border-top: 1px solid var(--border);
+  position: relative;
+  padding: 5px 12px 5px 88px;
   font-size: 12px;
   color: var(--text-3);
   font-variant-numeric: tabular-nums;
@@ -675,13 +686,13 @@
 }
 
 .day-add-row {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
   width: 100%;
   min-height: 48px;
-  padding: 0 12px;
-  border-top: 1px solid var(--border);
+  padding: 0 16px;
   border-radius: 0 0 calc(var(--radius-lg) - 1px) calc(var(--radius-lg) - 1px);
   color: var(--text-2);
   font-size: 14px;
@@ -713,7 +724,7 @@
 .day-add-icon {
   display: flex;
   width: 42px;
-  margin-right: 13px;
+  margin-right: 20px;
 }
 
 /* ---- Kontrola statusa ---- */
@@ -724,12 +735,17 @@
   flex-shrink: 0;
 }
 
+/* Dodirna površina ostaje 40px (34px na desktopu); vidljiv je manji krug (pozadina samo u
+   content-box). Zato hover/izbor menjaju samo background-color — background skraćenica bi
+   vratila background-clip. */
 .day-status-btn {
   display: grid;
   place-items: center;
   width: 40px;
   height: 40px;
-  border-radius: var(--radius);
+  padding: 4px;
+  border-radius: 50%;
+  background-clip: content-box;
   color: var(--text-3);
   transition: background-color 120ms var(--ease), color 120ms, opacity 120ms;
 }
@@ -737,7 +753,7 @@
 /* Hover samo na uređajima sa mišem (na telefonu bi ostao "zalepljen" posle dodira). */
 @media (hover: hover) {
   .day-status-btn:not(:disabled):hover {
-    background: var(--surface-3);
+    background-color: var(--surface-3);
     color: var(--text);
   }
 
@@ -751,17 +767,17 @@
 }
 
 .day-status-btn.is-active.is-done {
-  background: var(--done-bg);
+  background-color: var(--done-bg);
   color: var(--done);
 }
 
 .day-status-btn.is-active.is-partial {
-  background: var(--partial-bg);
+  background-color: var(--partial-bg);
   color: var(--partial);
 }
 
 .day-status-btn.is-active.is-skipped {
-  background: var(--skipped-bg);
+  background-color: var(--skipped-bg);
   color: var(--skipped);
 }
 
@@ -787,6 +803,7 @@
   .day-status-btn {
     width: 34px;
     height: 34px;
+    padding: 2px;
   }
 }
 
@@ -795,7 +812,12 @@
 @media (max-width: 859px) {
   .day-row-main {
     gap: 8px;
-    padding-left: 10px;
+    padding-left: 16px;
+  }
+
+  /* Uža kolona vremena ("07:00" staje) vraća naslovu deo širine. */
+  .day-time {
+    width: 40px;
   }
 
   .day-status {
@@ -818,17 +840,14 @@
     flex-basis: 100%;
   }
 
-  /* Poravnato sa naslovima blokova: 10 + 42 (vreme) + 8 + 3 (traka) + 8. */
+  /* Poravnato sa naslovima blokova: 16 + 40 (vreme) + 8 + 10 (crta kategorije) + 8. */
   .day-gap {
-    padding-left: 71px;
-  }
-
-  .day-add-row {
-    padding: 0 10px;
+    padding-left: 82px;
   }
 
   .day-add-icon {
-    margin-right: 9px;
+    width: 40px;
+    margin-right: 16px;
   }
 }
 
@@ -903,7 +922,7 @@
   gap: 12px;
   margin-top: 16px;
   padding-top: 14px;
-  border-top: 1px solid var(--border);
+  border-top: var(--hairline) solid var(--divider);
 }
 
 .day-sum-cat {
@@ -1323,6 +1342,21 @@
 
 .day-tpl-name {
   font-weight: 600;
+}
+
+/* "trenutni": neutralna oznaka (akcenat je samo za danas i trenutno vreme, SPEC 7); --surface-3 da se
+   vidi i na hover pozadini kartice (--surface-2). */
+.day-tpl-current {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-3);
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 .day-tpl-bar {

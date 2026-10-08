@@ -1,12 +1,38 @@
-// Okvir aplikacije: provera prijave, učitavanje rasporeda, navigacija
-// (bočna traka na desktopu, donja traka na telefonu) i prikaz stranice po ruti.
+// Okvir aplikacije: obnova sesije (nalog), učitavanje rasporeda, navigacija
+// (bočna traka na desktopu, donja traka na telefonu), traka nove verzije i prikaz stranice po ruti.
 
-import { Component, useCallback, useEffect, useRef, useState, type ErrorInfo, type ReactNode } from 'react';
+import {
+  Component,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ErrorInfo,
+  type ReactNode,
+} from 'react';
 import { capitalize, fmtDateMedium } from '../../shared/time.ts';
-import type { AuthState } from '../../shared/types.ts';
-import { api } from './api.ts';
+import type { AuthUser } from '../../shared/types.ts';
+import {
+  ApiError,
+  UNAUTHORIZED_EVENT,
+  USER_CHANGED_EVENT,
+  api,
+  pageOwnerUser,
+  sameUser,
+  sessionStore,
+  setOfflineUser,
+} from './api.ts';
+import {
+  adoptUser,
+  announceLogin,
+  endSessionFromOtherTab,
+  markSignedOut,
+  onOtherTabAuth,
+  readLastUser,
+} from './lib/account.ts';
 import { useOnline, useServerStale } from './lib/hooks.ts';
-import { clearApiCache } from './lib/pwa.ts';
+import { applyUpdate, clearApiCache, dismissUpdate, useUpdateState } from './lib/pwa.ts';
 import { Link, TODAY_EVENT, paths, useLocation, useRoute, type Route } from './lib/router.tsx';
 import { scheduleStore, useScheduleState } from './lib/store.ts';
 import DayPage from './pages/DayPage.tsx';
@@ -25,8 +51,10 @@ import {
   Toaster,
   Wordmark,
   cx,
+  toast,
   type IconName,
 } from './ui/index.ts';
+import { DIALOGS_EVENT } from './ui/Sheet.tsx';
 
 type Phase = 'checking' | 'login' | 'ready';
 
@@ -40,61 +68,117 @@ const POLL_MS = 60_000;
 const POLL_CHECK_MS = 15_000;
 /** Dok je upaljena traka "Server nije dostupan": koliko često se proverava da li je server ponovo tu. */
 const PROBE_MS = 15_000;
+/**
+ * Pokretanje: koliko se čeka obnova sesije pre nego što se pokažu sačuvani podaci poslednjeg naloga
+ * (slaba veza). Obnova se i posle toga završava u pozadini.
+ */
+const START_WAIT_MS = 4_000;
+
+type StartOutcome = { kind: 'ok'; user: AuthUser } | { kind: 'login' } | { kind: 'offline' } | { kind: 'slow' };
+
+const wait = (ms: number) => new Promise<void>((r) => window.setTimeout(r, ms));
 
 export default function App() {
   const [phase, setPhase] = useState<Phase>('checking');
-  const [auth, setAuth] = useState<AuthState | null>(null);
+  const phaseRef = useRef(phase);
+  phaseRef.current = phase;
   const schedule = useScheduleState();
   /** Raste pri svakom pokretanju i povratku na prijavu: zakasneli nastavak ranijeg start() se odbacuje. */
   const startGen = useRef(0);
+  // Nalog čiji su podaci učitani u memoriju ove stranice (keš dana, dnevnik, napredak…) je
+  // pageOwnerUser() iz api.ts. Prijava drugog naloga posle toga učitava stranicu ponovo, da ništa od
+  // prethodnog naloga ne ostane (a do tada api.ts ne šalje nijedan zahtev).
+
+  const enter = useCallback(() => {
+    // Učitavanje kreće pre promene faze, da 'ready' nikad ne zatekne raspored bez podataka i bez učitavanja.
+    void scheduleStore.load();
+    setPhase('ready');
+  }, []);
 
   const start = useCallback(async () => {
     const gen = ++startGen.current;
     setPhase('checking');
-    // Raspored se učitava odmah, uporedo sa proverom prijave: na slaboj vezi ne čeka se jedno pa
-    // drugo (raspored može da stigne i iz keša service worker-a). Čim stigne, aplikacija se
-    // prikazuje i bez odgovora na proveru prijave — bez važeće sesije server za raspored vraća 401,
-    // a 'ritam:unauthorized' vraća na prijavu.
-    let checked = false;
-    void scheduleStore.load().then(() => {
-      if (gen !== startGen.current) return;
-      if (!checked && scheduleStore.get().data) setPhase((p) => (p === 'checking' ? 'ready' : p));
-    });
-    let a: AuthState | null = null;
-    try {
-      a = await api.me();
-    } catch {
-      // Bez konekcije (ili server ne odgovara na vreme): nastavi sa onim što stigne iz keša.
-      a = null;
-    }
-    // U međuvremenu je neki zahtev vratio 401 (prijava je već na ekranu) ili je start() ponovljen.
+    // Sesija se obnavlja preko refresh kolačića; access token ostaje samo u memoriji.
+    const outcome: Promise<StartOutcome> = api.refresh().then(
+      (r): StartOutcome => ({ kind: 'ok', user: r.user }),
+      (e: unknown): StartOutcome => (e instanceof ApiError && e.status === 401 ? { kind: 'login' } : { kind: 'offline' }),
+    );
+    let res = await Promise.race([outcome, wait(START_WAIT_MS).then((): StartOutcome => ({ kind: 'slow' }))]);
     if (gen !== startGen.current) return;
-    checked = true;
-    setAuth(a);
-    if (a && a.authRequired && !a.authenticated) {
-      scheduleStore.clear();
+    // Poslednji nalog ovog uređaja, ako mu sesija nije završena (odjavljen nalog nema rad bez servera).
+    const last = readLastUser();
+    const known = last && !last.signedOut ? last : null;
+    // Nema naloga čiji bi se sačuvani podaci pokazali: čeka se odgovor servera.
+    if (res.kind === 'slow' && !known) {
+      res = await outcome;
+      if (gen !== startGen.current) return;
+    }
+    if (res.kind === 'ok') {
+      await adoptUser(res.user);
+      if (gen !== startGen.current) return;
+      enter();
+      return;
+    }
+    if (res.kind === 'login' || !known) {
       setPhase('login');
       return;
     }
-    setPhase('ready');
-  }, []);
+    // Stranica već ima podatke drugog naloga (prijava u drugom tabu): ispočetka.
+    const owner = pageOwnerUser();
+    if (owner && !sameUser(owner, known)) {
+      window.location.reload();
+      return;
+    }
+    // Bez servera (ili spora veza): sačuvani podaci poslednjeg naloga iz keša service worker-a.
+    // Prvi zahtev koji stigne do servera obnovi sesiju; odbijena obnova vraća na prijavu.
+    setOfflineUser(known);
+    enter();
+  }, [enter]);
 
   useEffect(() => {
     void start();
   }, [start]);
 
-  // Bilo koji API poziv sa 401 → nazad na prijavu.
+  // Sesija je završena (odjava, istekla ili opozvana) → prijava. Nesačuvane beleške ostaju na
+  // uređaju (šalju se posle ponovne prijave istog naloga); odjava ih briše sama (lib/account.ts).
+  // Pokretanje bez servera posle toga prikazuje Prijavu, ne podatke tog naloga.
   useEffect(() => {
     const onUnauthorized = () => {
       startGen.current += 1;
       scheduleStore.clear();
+      markSignedOut();
       void clearApiCache();
-      setAuth((a) => ({ authRequired: a?.authRequired ?? true, authenticated: false }));
       setPhase('login');
     };
-    window.addEventListener('ritam:unauthorized', onUnauthorized);
-    return () => window.removeEventListener('ritam:unauthorized', onUnauthorized);
+    // Osvežena sesija pripada drugom nalogu (prijava u drugom tabu): stranica se učitava ispočetka.
+    const onUserChanged = () => {
+      startGen.current += 1;
+      window.location.reload();
+    };
+    window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+    window.addEventListener(USER_CHANGED_EVENT, onUserChanged);
+    return () => {
+      window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+      window.removeEventListener(USER_CHANGED_EVENT, onUserChanged);
+    };
   }, []);
+
+  // Prijava/odjava u drugom tabu ovog browsera (kolačić sesije je zajednički).
+  useEffect(
+    () =>
+      onOtherTabAuth((ev) => {
+        const me = sessionStore.get().user;
+        if (ev.type === 'logout') {
+          if (me) endSessionFromOtherTab();
+          return;
+        }
+        if (me && me.id === ev.userId) return;
+        // Na uređaju je sada drugi nalog: ništa od prethodnog ne ostaje na ekranu ni u memoriji.
+        if (me || pageOwnerUser() != null) window.location.reload();
+        else if (phaseRef.current === 'login') void start();
+      }),
+    [start],
+  );
 
   // Tiho osvežavanje rasporeda (izmene sa drugog uređaja).
   useEffect(() => {
@@ -120,19 +204,36 @@ export default function App() {
     };
   }, [phase]);
 
-  const onLoggedIn = useCallback(() => {
-    setAuth({ authRequired: true, authenticated: true });
-    // Učitavanje kreće pre promene faze, da 'ready' nikad ne zatekne raspored bez podataka i bez učitavanja.
-    void scheduleStore.load();
-    setPhase('ready');
-  }, []);
+  // Raspored nije učitan (bez mreže): kad se mreža vrati, pokušaj ponovo sam.
+  const loadFailed = phase === 'ready' && !schedule.data && !schedule.loading;
+  useEffect(() => {
+    if (!loadFailed) return;
+    const onOnline = () => void start();
+    window.addEventListener('online', onOnline);
+    return () => window.removeEventListener('online', onOnline);
+  }, [loadFailed, start]);
+
+  const onLoggedIn = useCallback(
+    async (user: AuthUser) => {
+      startGen.current += 1;
+      await adoptUser(user);
+      announceLogin(user);
+      // U memoriji su podaci drugog naloga (sesija je istekla pa se prijavio neko drugi): ispočetka.
+      const owner = pageOwnerUser();
+      if (owner && !sameUser(owner, user)) {
+        window.location.reload();
+        return;
+      }
+      enter();
+    },
+    [enter],
+  );
 
   let content: ReactNode;
   if (phase === 'login') {
     content = <LoginPage onLoggedIn={onLoggedIn} />;
   } else if (phase === 'ready' && schedule.data) {
-    // Kad nije poznato (offline pri pokretanju), odjava se ipak nudi.
-    content = <Shell authRequired={auth?.authRequired ?? true} />;
+    content = <Shell />;
   } else if (phase === 'ready' && !schedule.loading) {
     // Greška učitavanja (ili raspored obrisan bez novog učitavanja): nikad samo beskrajni spinner.
     content = (
@@ -159,6 +260,8 @@ export default function App() {
   return (
     <>
       {content}
+      {/* U okviru aplikacije traka stoji iznad donje trake (Shell); ovde za Prijavu i ekran greške. */}
+      {!(phase === 'ready' && schedule.data) && <UpdateBar />}
       <Toaster />
       <ConfirmHost />
     </>
@@ -203,7 +306,7 @@ function scrollTopIfActive(active: boolean) {
   window.scrollTo({ top: 0, behavior: reduce ? 'auto' : 'smooth' });
 }
 
-function Shell({ authRequired }: { authRequired: boolean }) {
+function Shell() {
   const route = useRoute();
   const pathname = useLocation().split('?')[0];
   const online = useOnline();
@@ -303,9 +406,11 @@ function Shell({ authRequired }: { authRequired: boolean }) {
           </div>
         )}
         <PageErrorBoundary key={pathname}>
-          <PageView key={pathname} route={route} authRequired={authRequired} />
+          <PageView key={pathname} route={route} />
         </PageErrorBoundary>
       </main>
+
+      <UpdateBar />
 
       <nav className="shell-tabbar" aria-label="Glavna navigacija">
         {NAV.map((item) => {
@@ -328,7 +433,91 @@ function Shell({ authRequired }: { authRequired: boolean }) {
   );
 }
 
-function PageView({ route, authRequired }: { route: Route; authRequired: boolean }) {
+// ---- Nova verzija aplikacije ----
+
+/** Otvoren je sheet ili dijalog (modalni <dialog>; Sheet javlja promenu kroz DIALOGS_EVENT). */
+function useDialogOpen(): boolean {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    const update = () => setOpen(document.querySelector('dialog[open]') != null);
+    update();
+    window.addEventListener(DIALOGS_EVENT, update);
+    return () => window.removeEventListener(DIALOGS_EVENT, update);
+  }, []);
+  return open;
+}
+
+/**
+ * "Dostupna je nova verzija." + Osveži + ×: tiha traka na dnu (telefon: odmah iznad donje trake;
+ * desktop: na dnu sadržaja). Stranica se nikad ne učitava sama (lib/pwa.ts). Dok je otvoren sheet ili
+ * dijalog, traka čeka da se zatvori — Osveži bi prekinuo formu, a van dijaloga ionako ne prima dodir.
+ * Visina trake ide u --update-h: stranica dobija toliko prostora na dnu, a toast-ovi stoje iznad nje.
+ */
+function UpdateBar() {
+  const { available, applying } = useUpdateState();
+  const dialogOpen = useDialogOpen();
+  const ref = useRef<HTMLDivElement>(null);
+  const show = available && !dialogOpen;
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!show || !el) return;
+    const root = document.documentElement.style;
+    const measure = () => root.setProperty('--update-h', `${Math.ceil(el.getBoundingClientRect().height)}px`);
+    measure();
+    const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(measure) : null;
+    ro?.observe(el);
+    return () => {
+      ro?.disconnect();
+      root.removeProperty('--update-h');
+    };
+  }, [show]);
+
+  if (!show) return null;
+
+  const refresh = async () => {
+    if (applying) return;
+    const result = await applyUpdate();
+    if (result === 'offline') toast.error('Nema konekcije.');
+    else if (result === 'unavailable') toast.error('Server nije dostupan. Pokušaj ponovo.');
+  };
+
+  const dismiss = () => {
+    // Fokus je bio u traci (tastatura): ne ostavljaj ga na <body> kad traka nestane.
+    const hadFocus = ref.current?.contains(document.activeElement) ?? false;
+    dismissUpdate();
+    if (hadFocus) document.getElementById('main')?.focus({ preventScroll: true });
+  };
+
+  return (
+    <div ref={ref} className="shell-update" role="status">
+      <div className="shell-update-text">
+        <span>Dostupna je nova verzija.</span>
+        <button
+          type="button"
+          className={cx('shell-update-btn', applying && 'is-busy')}
+          aria-disabled={applying || undefined}
+          onClick={() => void refresh()}
+        >
+          {applying && <span className="spinner shell-update-spinner" aria-hidden="true" />}
+          {applying ? 'Osvežava se…' : 'Osveži'}
+        </button>
+      </div>
+      <button
+        type="button"
+        className="shell-update-close"
+        aria-label="Sakrij obaveštenje o novoj verziji"
+        title="Sakrij"
+        disabled={applying}
+        onClick={dismiss}
+      >
+        <Icon name="x" size={16} />
+      </button>
+    </div>
+  );
+}
+
+function PageView({ route }: { route: Route }) {
   switch (route.name) {
     case 'day':
       return <DayPage date={route.date} />;
@@ -339,7 +528,7 @@ function PageView({ route, authRequired }: { route: Route; authRequired: boolean
     case 'schedule':
       return <SchedulePage />;
     case 'settings':
-      return <SettingsPage authRequired={authRequired} />;
+      return <SettingsPage />;
     case 'notfound':
       return <NotFound />;
   }

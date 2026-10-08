@@ -67,16 +67,19 @@
 }
 
 .jr-month-title {
-  padding-bottom: 8px;
-  font-size: 13px;
+  padding-bottom: 10px;
+  font-size: 12px;
   font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
   color: var(--text-2);
   font-variant-numeric: tabular-nums;
 }
 
 .jr-entry {
   padding: 14px 0 16px;
-  border-top: 1px solid var(--border);
+  border-top: var(--hairline) solid var(--divider);
 }
 
 /* Telefon: datum pa meta ispod (uvek isto poravnanje); šire: meta desno od datuma. */
@@ -100,8 +103,8 @@
 
 .jr-date {
   min-width: 0;
-  font-size: 15px;
-  font-weight: 600;
+  font-size: 21px;
+  line-height: 1.2;
 }
 
 /* Veća dodirna površina bez promene visine reda (padding + negativna margina). */

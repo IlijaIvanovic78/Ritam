@@ -20,6 +20,7 @@ import { useUnsavedGuard } from '../../lib/useUnsavedGuard.ts';
 import {
   Button,
   CategoryDot,
+  CategoryStroke,
   Field,
   Icon,
   IconButton,
@@ -532,7 +533,7 @@ function EditorRow({
 
   return (
     <li className={cx('sched-ed-row', errorText && 'is-invalid')}>
-      <span className="sched-ed-bar" style={{ background: color }} aria-hidden="true" />
+      <CategoryStroke className="sched-ed-bar" color={color} />
       <div className="sched-ed-time">
         <TimeInput
           aria-label={`Početak, blok ${n}`}

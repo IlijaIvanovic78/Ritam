@@ -1,15 +1,25 @@
 // Smoke test celog API-ja na posebnoj (privremenoj) instanci servera, nikad na pravoj:
-//   DATA_DIR=<privremen folder> PORT=3999 APP_PASSWORD=x npm start
-//   BASE_URL=http://localhost:3999 PASSWORD=x node scripts/smoke.mjs
+//   DATA_DIR=<privremen folder> PORT=3999 SIGNUP_CODE=x ACCESS_TOKEN_TTL_SEC=3 REFRESH_RACE_GRACE_SEC=2 npm start
+//   DATA_DIR=<drugi privremen folder> PORT=3998 SIGNUP=closed npm start
+//   BASE_URL=http://localhost:3999 SMOKE_CLOSED_URL=http://localhost:3998 SIGNUP_CODE=x REFRESH_RACE_GRACE_SEC=2 node scripts/smoke.mjs
+// Bez SMOKE_CLOSED_URL provera zatvorene registracije je SKIP (zbir: "… PASS, 0 FAIL, 1 SKIP"), što nije greška.
 //
-// Nova baza je prazna (nema kategorija, šablona ni dana u nedelji sa šablonom; dan počinje u 00:00).
-// Test to prvo proveri, proveri API nad praznom bazom, pa kroz API sam napravi svoje neutralne
-// kategorije, šablone i raspored ("Kat A", "Šablon 1"…) — ne oslanja se ni na kakve unapred upisane
-// podatke. "Raspored ispočetka" proverava na uvezenoj bazi kakvu je ostavljala ranija verzija (primer
-// rasporeda + praćeni dani). Svoje dane pravi na datumima u 2093–2099, a na kraju vraća bazu na stanje sa početka
-// (izvoz → uvoz). Na bazi koja nije nova odbija da radi (izmene sa drugih uređaja tokom testa bi
-// nestale) osim uz SMOKE_ALLOW_REAL=1. Provera ograničenja prijave (10 pogrešnih lozinki) radi se samo
-// na novoj bazi ili uz SMOKE_RATE_LIMIT=1. Izlazni kod 1 ako bilo koja provera ne prođe.
+// Test pravi svoje naloge (smoke-<oznaka>-…@example.test): A je glavni korisnik — kroz njega idu sve
+// funkcionalne provere (prazan start, raspored, dani, blokovi, zadaci, statistika, dnevnik, izvoz/uvoz,
+// "Raspored ispočetka" na uvezenoj bazi iz ranije verzije) — a B, C… proveravaju registraciju, prijavu,
+// tokene, odjavu, promenu lozinke, ograničenja pokušaja i potpunu odvojenost podataka (B ne vidi i ne menja
+// ništa od A). Svoje dane pravi na datumima u 2093–2099.
+//
+// Kratak ACCESS_TOKEN_TTL_SEC (npr. 3) proverava istek access tokena (401 token_expired → refresh → radi), a
+// test usput stalno osvežava tokene kao klijent. REFRESH_RACE_GRACE_SEC (isti broj za server i test,
+// podrazumevano 30) skraćuje čekanje za proveru ponovo upotrebljenog refresh tokena. SIGNUP_CODE (ili
+// APP_PASSWORD) = kod za registraciju kad server traži kod. SMOKE_CLOSED_URL (opciono) = druga instanca sa
+// SIGNUP=closed. Ograničenja pokušaja (lažne adrese preko X-Forwarded-For) se proveravaju samo na lokalnom
+// serveru (SMOKE_RATE_LIMIT=0 ih preskače).
+//
+// Prvi nalog na serveru preuzima podatke iz verzije bez naloga: zato A pravi PRVI i odmah proverava da je
+// prazan; ako nije (server je imao podatke bez vlasnika), test staje pre ikakve izmene i kaže kako da se
+// podaci prebace u pravi nalog. Izlazni kod 1 ako bilo koja provera ne prođe.
 
 // Isti kod kojim stranica dana računa ispunjenost i klijent pretvara zidno vreme u minute dana
 // (Node 24 učitava .ts direktno).
@@ -21,9 +31,12 @@ if (!process.env.BASE_URL) {
   process.exit(2);
 }
 const BASE = process.env.BASE_URL.replace(/\/+$/, '');
-const PASSWORD = process.env.PASSWORD ?? process.env.APP_PASSWORD ?? '';
+const CODE = process.env.SIGNUP_CODE ?? process.env.APP_PASSWORD ?? process.env.CODE ?? '';
+const RACE_GRACE_SEC = Number(process.env.REFRESH_RACE_GRACE_SEC || 30);
+const REFRESH_TTL_SEC = Number(process.env.REFRESH_TOKEN_TTL_SEC || 90 * 24 * 60 * 60);
+const RUN = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-let cookie = '';
 let passed = 0;
 let failed = 0;
 let skipped = 0;
@@ -56,11 +69,46 @@ async function section(name, fn) {
   }
 }
 
-async function req(method, path, opts = {}) {
-  const { body, headers = {}, csrf = true, withCookie = true, rawBody } = opts;
+// ---- Nalozi i sesije testa ----
+
+/** Nasumična adresa klijenta (X-Forwarded-For sa lokalne mašine): svaka grupa ima svoje ograničenje pokušaja. */
+const fakeIp = () => `10.${(Math.random() * 250) | 0}.${(Math.random() * 250) | 0}.${((Math.random() * 250) | 0) + 1}`;
+
+/** Korisnik (i jedna sesija = jedan uređaj): access token u memoriji, refresh token kao kolačić. */
+function newUser(label) {
+  return {
+    label,
+    email: `smoke-${label}-${RUN}@example.test`,
+    password: `Lozinka-${label}-${RUN}`,
+    id: null,
+    token: null,
+    exp: 0,
+    cookie: '',
+    ip: fakeIp(),
+  };
+}
+
+/** Druga sesija istog korisnika (drugi uređaj): isti nalog, svoj kolačić i token. */
+const device = (u) => ({ ...u, token: null, exp: 0, cookie: '', ip: fakeIp() });
+
+let current = null; // korisnik za req() bez `as`
+
+/** ritam_refresh iz Set-Cookie: nova vrednost ('' = obrisan) ili undefined (nije menjan). */
+function refreshCookieFrom(headers) {
+  for (const sc of headers.getSetCookie?.() ?? []) {
+    const m = /^ritam_refresh=([^;]*)/.exec(sc);
+    if (m) return m[1] ? `ritam_refresh=${m[1]}` : '';
+  }
+  return undefined;
+}
+
+/** Jedan HTTP zahtev bez ikakve automatike. */
+async function rawReq(method, path, opts = {}) {
+  const { body, headers = {}, csrf = true, rawBody, token, cookie, base = BASE } = opts;
   const h = { ...headers };
   if (csrf && method !== 'GET' && method !== 'HEAD') h['X-Ritam'] = '1';
-  if (withCookie && cookie) h.Cookie = cookie;
+  if (token) h.Authorization = `Bearer ${token}`;
+  if (cookie) h.Cookie = cookie;
   let payload;
   if (rawBody !== undefined) {
     payload = rawBody;
@@ -69,7 +117,7 @@ async function req(method, path, opts = {}) {
     payload = JSON.stringify(body);
     h['Content-Type'] = 'application/json';
   }
-  const res = await fetch(BASE + path, { method, headers: h, body: payload });
+  const res = await fetch(base + path, { method, headers: h, body: payload });
   const text = await res.text();
   let json = null;
   try {
@@ -77,7 +125,49 @@ async function req(method, path, opts = {}) {
   } catch {
     json = null;
   }
-  return { status: res.status, headers: res.headers, json, text };
+  return { status: res.status, headers: res.headers, json, text, setCookie: refreshCookieFrom(res.headers) };
+}
+
+/** Odgovor sa AuthResponse → sesija korisnika (token u memoriji, kolačić iz Set-Cookie). */
+function applyAuth(u, r) {
+  if (r.setCookie !== undefined) u.cookie = r.setCookie;
+  if (r.json?.accessToken) {
+    u.token = r.json.accessToken;
+    u.exp = Date.now() + r.json.expiresIn * 1000;
+    u.id = r.json.user?.id ?? u.id;
+  }
+  return r;
+}
+
+/** POST /api/auth/refresh sa kolačićem sesije (kao klijent: rotira kolačić, nov access token). */
+async function refreshSession(u, opts = {}) {
+  const r = await rawReq('POST', '/api/auth/refresh', { cookie: u.cookie, headers: { 'X-Forwarded-For': u.ip }, ...opts });
+  if (r.setCookie !== undefined) u.cookie = r.setCookie;
+  if (r.status === 200) applyAuth(u, r);
+  return r;
+}
+
+/**
+ * Zahtev kao korisnik `as` (podrazumevano `current`): Bearer token, kolačić samo za /api/auth/*. Kao klijent:
+ * token kome ističe rok se prvo osveži, a 401 token_expired → refresh → isti zahtev još jednom.
+ * `auth: false` = bez tokena (i bez kolačića).
+ */
+async function req(method, path, opts = {}) {
+  const { as = current, auth = true, withCookie, retry = true, ...rest } = opts;
+  const useAuth = auth && withCookie !== false && !!as;
+  if (useAuth && as.token && as.cookie && Date.now() > as.exp - 1500) await refreshSession(as);
+  const r = await rawReq(method, path, {
+    ...rest,
+    token: useAuth ? as.token : undefined,
+    cookie: useAuth && path.startsWith('/api/auth/') ? as.cookie : undefined,
+    headers: { ...(useAuth ? { 'X-Forwarded-For': as.ip } : {}), ...(rest.headers ?? {}) },
+  });
+  if (useAuth && r.setCookie !== undefined) as.cookie = r.setCookie;
+  if (useAuth && retry && r.status === 401 && r.json?.code === 'token_expired' && as.cookie) {
+    await refreshSession(as);
+    return req(method, path, { ...opts, retry: false });
+  }
+  return r;
 }
 
 const get = (p, o) => req('GET', p, o);
@@ -85,6 +175,20 @@ const post = (p, body, o = {}) => req('POST', p, { ...o, body });
 const patch = (p, body, o = {}) => req('PATCH', p, { ...o, body });
 const put = (p, body, o = {}) => req('PUT', p, { ...o, body });
 const del = (p, o) => req('DELETE', p, o);
+
+/** Registracija (nova sesija); `code` podrazumevano kod iz env-a. */
+async function register(u, { code = CODE, email = u.email, password = u.password, ip = u.ip } = {}) {
+  const r = await rawReq('POST', '/api/auth/register', { body: { email, password, code }, headers: { 'X-Forwarded-For': ip } });
+  if (r.status === 201) applyAuth(u, r);
+  return r;
+}
+
+/** Prijava (nova sesija = nova familija refresh tokena). */
+async function login(u, { email = u.email, password = u.password, ip = u.ip, headers = {} } = {}) {
+  const r = await rawReq('POST', '/api/auth/login', { body: { email, password }, headers: { 'X-Forwarded-For': ip, ...headers } });
+  if (r.status === 200) applyAuth(u, r);
+  return r;
+}
 
 /** Očekuje status; vraća json (ili baca grešku da se grupa prekine). */
 async function expectOk(name, promise, status = 200) {
@@ -100,6 +204,25 @@ async function expectStatus(name, promise, status) {
   check(name, r.status === status && (status < 400 || typeof r.json?.error === 'string'), `status ${r.status}: ${r.text.slice(0, 200)}`);
   return r;
 }
+
+/** Očekuje grešku sa tačnim statusom, porukom i (opciono) kodom. */
+async function expectError(name, promise, status, error, code) {
+  const r = await promise;
+  check(
+    name,
+    r.status === status && (error === undefined || r.json?.error === error) && (code === undefined || r.json?.code === code),
+    `status ${r.status}: ${r.text.slice(0, 200)}`,
+  );
+  return r;
+}
+
+const jwtClaims = (t) => {
+  try {
+    return JSON.parse(Buffer.from(String(t).split('.')[1], 'base64url').toString('utf8'));
+  } catch {
+    return null;
+  }
+};
 
 const pad = (n) => String(n).padStart(2, '0');
 function addDays(iso, n) {
@@ -120,11 +243,40 @@ function logicalToday(dayStart) {
 const shape = (b) => [b.start, b.end, b.title, b.categoryId];
 const sortShapes = (list) => [...list].sort((x, y) => x[0] - y[0] || x[1] - y[1] || String(x[2]).localeCompare(String(y[2])));
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-const withoutStamp = (exp) => {
+/** Izvoz bez vremena izvoza (za poređenje identičnih podataka, i id-jeva). */
+const rawStamp = (exp) => {
   const { exportedAt, ...rest } = exp ?? {};
   return rest;
 };
+/**
+ * Izvoz bez vremena izvoza i bez konkretnih id-jeva: uvoz dodeljuje nove id-jeve (redosled ostaje), pa se
+ * kopije porede tako što svaki id postane redni broj reda u svojoj tabeli (i veze isto).
+ */
+const withoutStamp = (exp) => {
+  const x = rawStamp(exp);
+  if (!Array.isArray(x.categories)) return x;
+  const idx = (rows) => new Map((rows ?? []).map((r, i) => [r.id, i + 1]));
+  const cat = idx(x.categories);
+  const tpl = idx(x.templates);
+  const tb = idx(x.template_blocks);
+  const blk = idx(x.blocks);
+  const tsk = idx(x.tasks);
+  const c = (id) => (id == null ? null : (cat.get(id) ?? `?${id}`));
+  const t = (id) => (id == null ? null : (tpl.get(id) ?? `?${id}`));
+  return {
+    ...x,
+    categories: x.categories.map((r) => ({ ...r, id: cat.get(r.id) })),
+    templates: x.templates.map((r) => ({ ...r, id: tpl.get(r.id) })),
+    template_blocks: x.template_blocks.map((r) => ({ ...r, id: tb.get(r.id), template_id: t(r.template_id), category_id: c(r.category_id) })),
+    weekday_templates: x.weekday_templates.map((r) => ({ ...r, template_id: t(r.template_id) })),
+    days: x.days.map((r) => ({ ...r, template_id: t(r.template_id) })),
+    blocks: x.blocks.map((r) => ({ ...r, id: blk.get(r.id), category_id: c(r.category_id) })),
+    tasks: x.tasks.map((r) => ({ ...r, id: tsk.get(r.id), category_id: c(r.category_id) })),
+  };
+};
 const near = (a, b) => typeof a === 'number' && Math.abs(a - b) < 1e-9;
+const DATA_TABLES = ['categories', 'templates', 'template_blocks', 'days', 'blocks', 'tasks'];
+const isEmptyExport = (e) => DATA_TABLES.every((k) => Array.isArray(e?.[k]) && e[k].length === 0);
 
 // Datumi koje test koristi (daleko od stvarnih podataka).
 const FUT = '2099-06-15';
@@ -213,12 +365,377 @@ function wall(from, to, title, categoryId) {
   return { start, end, title, categoryId };
 }
 
+
 // ---------------------------------------------------------------- testovi
 
-let authRequired = true;
-let snapshot = null; // izvoz na početku — vraća se na kraju
+let snapshot = null; // izvoz korisnika A na početku — vraća se na kraju
 let fresh = false;
 let schedule = null;
+let signupPolicy = null;
+const A = newUser('a');
+const isLocal = ['localhost', '127.0.0.1', '[::1]', '::1'].includes(new URL(BASE).hostname);
+
+async function authSections() {
+  // ---- Konfiguracija i prvi nalog (A) ----
+  await section('auth config', async () => {
+    const r = await get('/api/auth/config', { auth: false });
+    check('config 200 { signup }', r.status === 200 && ['open', 'code', 'closed'].includes(r.json?.signup) && same(Object.keys(r.json), ['signup']), r.text);
+    check('config: no-store', r.headers.get('cache-control') === 'no-store', r.headers.get('cache-control'));
+    signupPolicy = r.json?.signup ?? null;
+  });
+  if (signupPolicy === 'closed') {
+    throw new Error('Registracija je zatvorena (SIGNUP=closed) — test pravi svoje naloge; pokreni ga na privremenoj instanci sa SIGNUP=open ili kodom.');
+  }
+  if (signupPolicy === 'code' && !CODE) throw new Error('Server traži kod za registraciju — postavi SIGNUP_CODE (ili APP_PASSWORD) za test.');
+
+  await section('register A', async () => {
+    // A je prvi nalog testa (vidi uputstvo na vrhu): mešana slova i razmaci → email malim slovima.
+    const shown = `  ${A.email.replace('smoke-a', 'Smoke-A').toUpperCase()}  `;
+    const r = await expectOk('registracija A → 201', register(A, { email: shown }), 201);
+    check('A: AuthResponse oblik', typeof r.accessToken === 'string' && r.accessToken.split('.').length === 3 && Number.isInteger(r.expiresIn) && r.expiresIn > 0 && same(Object.keys(r).sort(), ['accessToken', 'expiresIn', 'user']), r);
+    check('A: email trim + mala slova', r.user?.email === A.email && Number.isInteger(r.user?.id) && r.user.id > 0 && same(Object.keys(r.user).sort(), ['email', 'id']), r.user);
+    const claims = jwtClaims(r.accessToken);
+    check('A: JWT claims (sub, typ, iat, exp)', claims?.sub === String(r.user.id) && claims?.typ === 'access' && claims.exp - claims.iat === r.expiresIn, claims);
+    check('A: JWT header HS256', jwtClaims(`x.${r.accessToken.split('.')[0]}`)?.alg === 'HS256');
+    check('A: kolačić ritam_refresh', /^ritam_refresh=[A-Za-z0-9_-]{40,}$/.test(A.cookie), A.cookie);
+    const exp = await expectOk('A: izvoz odmah posle registracije', get('/api/export', { as: A }));
+    if (!isEmptyExport(exp)) {
+      console.log(
+        `\nSTOP: nalog ${A.email} (lozinka ${A.password}) je PRVI nalog na ovom serveru i preuzeo je postojeće podatke ` +
+          'iz verzije bez naloga. Ništa nije menjano. Prijavi se njime, preuzmi kopiju (Podešavanja → Preuzmi kopiju), ' +
+          'pa je uvezi u svoj nalog. Smoke test pokreći samo na privremenoj instanci.\n',
+      );
+      throw new Error('A je preuzeo postojeće podatke — prekidam pre ikakve izmene.');
+    }
+    fresh = true;
+  });
+  if (!fresh) throw new Error('Nalog A nije napravljen — prekidam.');
+  current = A;
+
+  await section('register', async () => {
+    const r0 = await rawReq('POST', '/api/auth/register', { body: { email: A.email, password: A.password, code: CODE }, headers: { 'X-Forwarded-For': A.ip } });
+    const sc = r0.headers.getSetCookie?.() ?? [];
+    check('duplikat: 409 bez kolačića', r0.status === 409 && sc.length === 0, r0.text);
+    const ip = fakeIp();
+    const reg = (body, o = {}) => rawReq('POST', '/api/auth/register', { body, headers: { 'X-Forwarded-For': ip }, ...o });
+    const X = newUser('x');
+    await expectStatus('registracija bez X-Ritam → 403', reg({ email: X.email, password: X.password, code: CODE }, { csrf: false }), 403);
+    await expectStatus('registracija: neispravan JSON → 400', rawReq('POST', '/api/auth/register', { rawBody: '{"email": ', headers: { 'X-Forwarded-For': ip } }), 400);
+    await expectError('registracija: neispravan email → 400', reg({ email: 'nije-email', password: X.password, code: CODE }), 400, 'Unesi ispravnu email adresu.');
+    await expectError('registracija: email bez domena → 400', reg({ email: 'a@b', password: X.password, code: CODE }), 400, 'Unesi ispravnu email adresu.');
+    await expectError('registracija: bez emaila → 400', reg({ password: X.password, code: CODE }), 400, 'Unesi ispravnu email adresu.');
+    await expectError('registracija: email > 254 → 400', reg({ email: `${'x'.repeat(250)}@example.test`, password: X.password, code: CODE }), 400, 'Unesi ispravnu email adresu.');
+    await expectError('registracija: lozinka 7 znakova → 400', reg({ email: X.email, password: 'kratka7', code: CODE }), 400, 'Lozinka mora imati bar 8 znakova.');
+    await expectError('registracija: bez lozinke → 400', reg({ email: X.email, code: CODE }), 400, 'Lozinka mora imati bar 8 znakova.');
+    await expectError('registracija: lozinka 201 znak → 400', reg({ email: X.email, password: 'x'.repeat(201), code: CODE }), 400, 'Lozinka može imati najviše 200 znakova.');
+    if (signupPolicy === 'code') {
+      await expectError('registracija bez koda → 403 bad_code', reg({ email: X.email, password: X.password }), 403, 'Pogrešan kod za registraciju.', 'bad_code');
+      await expectError('registracija pogrešan kod → 403 bad_code', reg({ email: X.email, password: X.password, code: `${CODE}x` }), 403, 'Pogrešan kod za registraciju.', 'bad_code');
+      await expectError('duplikat sa pogrešnim kodom → 403 (kod pre emaila)', reg({ email: A.email, password: X.password, code: 'pogresan' }), 403, undefined, 'bad_code');
+    } else {
+      skip('registracija: provere koda', `server nema kod (signup: ${signupPolicy})`);
+    }
+    await expectError('duplikat (velika slova) → 409', reg({ email: A.email.toUpperCase(), password: X.password, code: CODE }), 409, 'Nalog sa tom email adresom već postoji.');
+    const lg = await login(X, { ip });
+    check('neuspela registracija ne pravi nalog', lg.status === 401, lg.text);
+  });
+
+  // ---- Prijava ----
+  await section('login', async () => {
+    const ip = fakeIp();
+    await expectError('prijava pogrešna lozinka → 401', rawReq('POST', '/api/auth/login', { body: { email: A.email, password: 'pogresna-lozinka' }, headers: { 'X-Forwarded-For': ip } }), 401, 'Pogrešan email ili lozinka.');
+    await expectError('prijava nepostojeći email → 401 (ista poruka)', rawReq('POST', '/api/auth/login', { body: { email: `nema-${RUN}@example.test`, password: A.password }, headers: { 'X-Forwarded-For': ip } }), 401, 'Pogrešan email ili lozinka.');
+    await expectError('prijava neispravan email → 401', rawReq('POST', '/api/auth/login', { body: { email: 'nije-email', password: A.password }, headers: { 'X-Forwarded-For': ip } }), 401, 'Pogrešan email ili lozinka.');
+    await expectStatus('prijava bez lozinke → 400', rawReq('POST', '/api/auth/login', { body: { email: A.email }, headers: { 'X-Forwarded-For': ip } }), 400);
+    // Tab iz verzije pre naloga šalje samo { password } (APP_PASSWORD): poruka kaže da osveži stranicu.
+    await expectError('prijava bez emaila (stari klijent) → 400 client_outdated', rawReq('POST', '/api/auth/login', { body: { password: 'stara-lozinka-aplikacije' }, headers: { 'X-Forwarded-For': ip } }), 400, 'Ritam je ažuriran. Osveži stranicu (ili zatvori i ponovo otvori aplikaciju), pa se prijavi email-om.', 'client_outdated');
+    await expectStatus('prijava bez X-Ritam → 403', rawReq('POST', '/api/auth/login', { body: { email: A.email, password: A.password }, csrf: false, headers: { 'X-Forwarded-For': ip } }), 403);
+    const S = device(A);
+    const r = await expectOk('prijava (email velikim slovima) → 200', login(S, { email: ` ${A.email.toUpperCase()} `, ip }));
+    check('prijava: isti korisnik', r.user?.id === A.id && r.user?.email === A.email, r.user);
+    check('prijava: nov kolačić (nova sesija)', /^ritam_refresh=/.test(S.cookie) && S.cookie !== A.cookie, S.cookie);
+    const raw = await rawReq('POST', '/api/auth/login', { body: { email: A.email, password: A.password }, headers: { 'X-Forwarded-For': ip, 'X-Forwarded-Proto': 'https', Cookie: 'ritam_session=v1.1700000000000.AAAA' } });
+    const sc = raw.headers.getSetCookie?.() ?? [];
+    const rc = sc.find((x) => x.startsWith('ritam_refresh=')) ?? '';
+    check('kolačić: HttpOnly, SameSite=Strict, Path=/api/auth', /HttpOnly/i.test(rc) && /SameSite=Strict/i.test(rc) && /Path=\/api\/auth(;|$)/.test(rc), rc);
+    check(`kolačić: Max-Age ${REFRESH_TTL_SEC}`, new RegExp(`Max-Age=${REFRESH_TTL_SEC}(;|$)`).test(rc), rc);
+    check('kolačić: Secure preko HTTPS-a', /;\s*Secure/i.test(rc), rc);
+    check('kolačić: bez Secure preko HTTP-a', !/;\s*Secure/i.test(A.cookie) && !(await rawReq('POST', '/api/auth/login', { body: { email: A.email, password: A.password }, headers: { 'X-Forwarded-For': ip } })).headers.getSetCookie().some((x) => /Secure/i.test(x)));
+    check('stari kolačić ritam_session se briše', sc.some((x) => /^ritam_session=;/.test(x) && /Max-Age=0/i.test(x) && /Path=\/(;|$)/.test(x)), sc);
+  });
+
+  // ---- Access token ----
+  await section('bearer', async () => {
+    const protectedRoutes = [
+      ['GET', '/api/schedule'],
+      ['GET', '/api/days/2095-01-10'],
+      ['POST', '/api/days/2095-01-10/init'],
+      ['PATCH', '/api/days/2095-01-10'],
+      ['POST', '/api/days/2095-01-10/blocks'],
+      ['PATCH', '/api/blocks/1'],
+      ['DELETE', '/api/blocks/1'],
+      ['POST', '/api/blocks/1/split'],
+      ['POST', '/api/blocks/1/swap'],
+      ['POST', '/api/tasks'],
+      ['PATCH', '/api/tasks/1'],
+      ['DELETE', '/api/tasks/1'],
+      ['POST', '/api/tasks/carry'],
+      ['GET', '/api/tasks/done?from=2095-01-01&to=2095-01-02'],
+      ['GET', '/api/stats?from=2095-01-01&to=2095-01-02'],
+      ['GET', '/api/journal'],
+      ['POST', '/api/categories'],
+      ['PATCH', '/api/categories/1'],
+      ['DELETE', '/api/categories/1'],
+      ['POST', '/api/templates'],
+      ['PATCH', '/api/templates/1'],
+      ['DELETE', '/api/templates/1'],
+      ['PUT', '/api/templates/1/blocks'],
+      ['PUT', '/api/weekdays'],
+      ['PATCH', '/api/settings'],
+      ['POST', '/api/schedule/reset'],
+      ['GET', '/api/export'],
+      ['POST', '/api/import'],
+      ['GET', '/api/auth/me'],
+      ['POST', '/api/auth/password'],
+      ['GET', '/api/ne-postoji'],
+    ];
+    const bad = [];
+    for (const [m, p] of protectedRoutes) {
+      const r = await rawReq(m, p, { body: m === 'GET' ? undefined : {} });
+      if (!(r.status === 401 && r.json?.error === 'Nisi prijavljen.' && r.json?.code === 'unauthorized')) bad.push([m, p, r.status, r.text.slice(0, 80)]);
+    }
+    check(`${protectedRoutes.length} zaštićenih ruta bez tokena → 401 unauthorized`, bad.length === 0, bad);
+    await refreshSession(A); // svež token (kratak ACCESS_TOKEN_TTL_SEC u testu)
+    const tok = A.token;
+    const [h, p, s] = tok.split('.');
+    const tries = {
+      'smeće': 'abc',
+      'pokvaren potpis': `${h}.${p}.${s.slice(0, -2)}${s.endsWith('AA') ? 'BB' : 'AA'}`,
+      'izmenjen sub': `${h}.${Buffer.from(JSON.stringify({ ...jwtClaims(tok), sub: String(A.id + 1) })).toString('base64url')}.${s}`,
+      'alg none': `${Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url')}.${p}.`,
+    };
+    for (const [name, t] of Object.entries(tries)) {
+      await expectError(`token: ${name} → 401 unauthorized`, rawReq('GET', '/api/schedule', { token: t }), 401, 'Nisi prijavljen.', 'unauthorized');
+    }
+    await expectError('Authorization bez "Bearer" → 401', rawReq('GET', '/api/schedule', { headers: { Authorization: tok } }), 401, undefined, 'unauthorized');
+    await expectError('stari kolačić ritam_session ne prijavljuje', rawReq('GET', '/api/schedule', { cookie: 'ritam_session=v1.1700000000000.AAAA' }), 401, undefined, 'unauthorized');
+    await expectError('refresh kolačić nije access token', rawReq('GET', '/api/schedule', { cookie: A.cookie }), 401, undefined, 'unauthorized');
+    await expectStatus('važeći token ("bearer" malim slovima) → 200', rawReq('GET', '/api/schedule', { headers: { Authorization: `bearer ${tok}` } }), 200);
+    const me = await expectOk('GET /api/auth/me', get('/api/auth/me'));
+    check('me: { user: { id, email } }', same(me, { user: { id: A.id, email: A.email } }), me);
+    await expectStatus('izmena bez X-Ritam (sa tokenom) → 403', patch('/api/settings', { dayStart: 0 }, { csrf: false }), 403);
+    const unknown = await get('/api/ne-postoji');
+    check('nepoznata API ruta (prijavljen) → 404 JSON', unknown.status === 404 && typeof unknown.json?.error === 'string', unknown.text);
+    const health = await rawReq('GET', '/api/health');
+    check('health bez tokena → 200', health.status === 200 && health.json?.ok === true, health.text);
+  });
+
+  await section('access expiry', async () => {
+    const S = device(A);
+    const r = await expectOk('istek: nova sesija', login(S));
+    if (r.expiresIn > 10) {
+      skip('istek access tokena', `ACCESS_TOKEN_TTL_SEC=${r.expiresIn} (za proveru pokreni server sa npr. 3)`);
+      return;
+    }
+    const old = S.token;
+    await sleep(r.expiresIn * 1000 + 1100);
+    await expectError('istekao token → 401 token_expired', rawReq('GET', '/api/schedule', { token: old }), 401, 'Nisi prijavljen.', 'token_expired');
+    await expectError('istekao token: /api/auth/me → 401 token_expired', rawReq('GET', '/api/auth/me', { token: old }), 401, undefined, 'token_expired');
+    const rr = await refreshSession(S);
+    check('posle isteka: refresh → 200 i nov token', rr.status === 200 && S.token !== old && rr.json?.user?.id === A.id, rr.text);
+    await expectStatus('nov token radi', rawReq('GET', '/api/schedule', { token: S.token }), 200);
+  });
+
+  // ---- Refresh: rotacija, trka između tabova, ponovo upotrebljen token ----
+  await section('refresh', async () => {
+    await expectError('refresh bez kolačića → 401 no_session', rawReq('POST', '/api/auth/refresh'), 401, 'Nisi prijavljen.', 'no_session');
+    let r = await rawReq('POST', '/api/auth/refresh', { cookie: 'ritam_refresh=abc' });
+    check('refresh neispravan kolačić → 401 invalid_refresh + briše kolačić', r.status === 401 && r.json?.code === 'invalid_refresh' && r.setCookie === '', [r.status, r.text, r.setCookie]);
+    r = await rawReq('POST', '/api/auth/refresh', { cookie: `ritam_refresh=${'A'.repeat(43)}` });
+    check('refresh nepoznat token → 401 invalid_refresh', r.status === 401 && r.json?.code === 'invalid_refresh', r.text);
+    await expectStatus('refresh bez X-Ritam → 403', rawReq('POST', '/api/auth/refresh', { cookie: A.cookie, csrf: false }), 403);
+
+    const S = device(A);
+    await expectOk('refresh: nova sesija', login(S));
+    const t1 = S.cookie;
+    const tok1 = S.token;
+    r = await refreshSession(S);
+    const t2 = S.cookie;
+    check('refresh → 200, AuthResponse', r.status === 200 && typeof r.json?.accessToken === 'string' && r.json?.user?.id === A.id && r.json?.user?.email === A.email && Number.isInteger(r.json?.expiresIn), r.text);
+    check('refresh: rotiran kolačić', /^ritam_refresh=/.test(t2) && t2 !== t1, [t1, t2]);
+    const rc = (r.headers.getSetCookie?.() ?? []).find((x) => x.startsWith('ritam_refresh=')) ?? '';
+    check('refresh: kolačić HttpOnly, Strict, Path=/api/auth, Max-Age', /HttpOnly/i.test(rc) && /SameSite=Strict/i.test(rc) && /Path=\/api\/auth/.test(rc) && /Max-Age=\d+/.test(rc), rc);
+    check('refresh: nov access token radi', (await rawReq('GET', '/api/schedule', { token: S.token })).status === 200 && jwtClaims(S.token)?.iat >= jwtClaims(tok1)?.iat);
+
+    // Drugi tab je istovremeno poslao isti (upravo zamenjen) token: 401 refresh_race, bez ikakve izmene.
+    r = await rawReq('POST', '/api/auth/refresh', { cookie: t1 });
+    check('isti stari token odmah → 401 refresh_race', r.status === 401 && r.json?.code === 'refresh_race' && r.json?.error === 'Nisi prijavljen.', r.text);
+    check('refresh_race ne briše kolačić', r.setCookie === undefined, r.headers.getSetCookie?.());
+    r = await refreshSession(S);
+    const t3 = S.cookie;
+    check('posle trke sesija i dalje radi (nov token)', r.status === 200 && t3 !== t2, r.text);
+
+    if (RACE_GRACE_SEC > 35) {
+      skip('ponovo upotrebljen stari token posle roka', `REFRESH_RACE_GRACE_SEC=${RACE_GRACE_SEC}`);
+    } else {
+      await sleep(RACE_GRACE_SEC * 1000 + 600);
+      r = await rawReq('POST', '/api/auth/refresh', { cookie: t1 });
+      check('stari token posle roka (krađa) → 401 invalid_refresh + briše kolačić', r.status === 401 && r.json?.code === 'invalid_refresh' && r.setCookie === '', [r.status, r.text]);
+      r = await rawReq('POST', '/api/auth/refresh', { cookie: t3 });
+      check('krađa opoziva celu sesiju: i najnoviji token → 401', r.status === 401 && r.json?.code === 'invalid_refresh', r.text);
+      r = await rawReq('POST', '/api/auth/refresh', { cookie: t2 });
+      check('i srednji token → 401 invalid_refresh', r.status === 401 && r.json?.code === 'invalid_refresh', r.text);
+    }
+    r = await refreshSession(A);
+    check('druga sesija istog korisnika (A) nije pogođena', r.status === 200, r.text);
+  });
+
+  // ---- Odjava ----
+  await section('logout', async () => {
+    const S = device(A);
+    await expectOk('odjava: nova sesija', login(S));
+    const old = S.cookie;
+    const r = await rawReq('POST', '/api/auth/logout', { cookie: old });
+    const sc = (r.headers.getSetCookie?.() ?? []).find((x) => x.startsWith('ritam_refresh=')) ?? '';
+    check('odjava → 200 { ok: true }', r.status === 200 && same(r.json, { ok: true }), r.text);
+    check('odjava briše kolačić (Max-Age=0, Path=/api/auth)', /^ritam_refresh=;/.test(sc) && /Max-Age=0/i.test(sc) && /Path=\/api\/auth/.test(sc), sc);
+    const rr = await rawReq('POST', '/api/auth/refresh', { cookie: old });
+    check('posle odjave: refresh → 401 invalid_refresh', rr.status === 401 && rr.json?.code === 'invalid_refresh', rr.text);
+    check('odjava bez kolačića → 200', same((await rawReq('POST', '/api/auth/logout')).json, { ok: true }));
+    check('odjava sa neispravnim kolačićem → 200', (await rawReq('POST', '/api/auth/logout', { cookie: 'ritam_refresh=abc' })).status === 200);
+    await expectStatus('odjava bez X-Ritam → 403', rawReq('POST', '/api/auth/logout', { cookie: A.cookie, csrf: false }), 403);
+    const a = await refreshSession(A);
+    check('odjava jednog uređaja ne odjavljuje drugi', a.status === 200, a.text);
+  });
+
+  // ---- Promena lozinke ----
+  await section('password', async () => {
+    const C = newUser('c');
+    await expectOk('C: registracija', register(C), 201);
+    check('C nije prvi nalog (prazan)', isEmptyExport(await expectOk('C: izvoz', get('/api/export', { as: C }))));
+    const C2 = device(C);
+    await expectOk('C: druga sesija (drugi uređaj)', login(C2));
+    const oldCookie = C.cookie;
+    const newPassword = `${C.password}-nova`;
+    await expectError('promena lozinke bez tokena → 401', rawReq('POST', '/api/auth/password', { body: { currentPassword: C.password, newPassword } }), 401, undefined, 'unauthorized');
+    await expectStatus('promena lozinke bez X-Ritam → 403', post('/api/auth/password', { currentPassword: C.password, newPassword }, { as: C, csrf: false }), 403);
+    await expectError('pogrešna trenutna lozinka → 401 bad_password', post('/api/auth/password', { currentPassword: 'pogresna-lozinka', newPassword }, { as: C }), 401, 'Trenutna lozinka nije tačna.', 'bad_password');
+    await expectError('nova lozinka prekratka → 400', post('/api/auth/password', { currentPassword: C.password, newPassword: 'kratko' }, { as: C }), 400, 'Lozinka mora imati bar 8 znakova.');
+    await expectError('nova lozinka > 200 → 400', post('/api/auth/password', { currentPassword: C.password, newPassword: 'x'.repeat(201) }, { as: C }), 400, 'Lozinka može imati najviše 200 znakova.');
+    check('posle odbijenih promena C2 i dalje radi', (await refreshSession(C2)).status === 200);
+    const r = await post('/api/auth/password', { currentPassword: C.password, newPassword }, { as: C });
+    check('promena lozinke → 200 AuthResponse', r.status === 200 && typeof r.json?.accessToken === 'string' && r.json?.user?.id === C.id && r.json?.user?.email === C.email, r.text);
+    applyAuth(C, r);
+    check('promena lozinke: nov kolačić', /^ritam_refresh=/.test(C.cookie) && C.cookie !== oldCookie, C.cookie);
+    let x = await rawReq('POST', '/api/auth/refresh', { cookie: C2.cookie });
+    check('drugi uređaj odjavljen (refresh → 401 invalid_refresh)', x.status === 401 && x.json?.code === 'invalid_refresh', x.text);
+    x = await rawReq('POST', '/api/auth/refresh', { cookie: oldCookie });
+    check('stari kolačić ovog uređaja → 401 invalid_refresh', x.status === 401 && x.json?.code === 'invalid_refresh', x.text);
+    x = await refreshSession(C);
+    check('nov kolačić ovog uređaja radi', x.status === 200, x.text);
+    await expectError('prijava starom lozinkom → 401', rawReq('POST', '/api/auth/login', { body: { email: C.email, password: C.password }, headers: { 'X-Forwarded-For': C.ip } }), 401, 'Pogrešan email ili lozinka.');
+    const C3 = device(C);
+    await expectOk('prijava novom lozinkom → 200', login(C3, { password: newPassword }));
+    C.password = newPassword;
+  });
+
+  // ---- Ograničenje pokušaja (lažna adresa preko X-Forwarded-For radi samo sa lokalnog klijenta) ----
+  await section('rate limit', async () => {
+    if (!isLocal) return skip('ograničenja pokušaja', 'server nije lokalni');
+    if (process.env.SMOKE_RATE_LIMIT === '0') return skip('ograničenja pokušaja', 'SMOKE_RATE_LIMIT=0');
+    const R = newUser('r');
+    await expectOk('R: registracija', register(R), 201);
+    const ip1 = fakeIp();
+    const statuses = [];
+    for (let i = 0; i < 10; i++) {
+      const r = await rawReq('POST', '/api/auth/login', { body: { email: R.email, password: `pogresno-${i}` }, headers: { 'X-Forwarded-For': ip1 } });
+      statuses.push(r.status);
+    }
+    check('10 pogrešnih → 401', statuses.every((s) => s === 401), statuses);
+    const r = await rawReq('POST', '/api/auth/login', { body: { email: R.email, password: R.password }, headers: { 'X-Forwarded-For': ip1 } });
+    check('11. pokušaj (i tačna lozinka) → 429', r.status === 429 && r.json?.error === 'Previše pokušaja. Pokušaj ponovo za 15 minuta.' && r.json?.code === 'rate_limited', r.text);
+    const retry = Number(r.headers.get('retry-after'));
+    check('429: Retry-After u sekundama (do 15 min)', Number.isInteger(retry) && retry > 840 && retry <= 900, r.headers.get('retry-after'));
+    const byEmail = await rawReq('POST', '/api/auth/login', { body: { email: R.email, password: R.password }, headers: { 'X-Forwarded-For': fakeIp() } });
+    check('isti email sa druge adrese → 429 (ograničenje po emailu)', byEmail.status === 429, byEmail.text);
+    const byIp = await rawReq('POST', '/api/auth/login', { body: { email: A.email, password: A.password }, headers: { 'X-Forwarded-For': ip1 } });
+    check('drugi email sa iste adrese → 429 (ograničenje po adresi)', byIp.status === 429, byIp.text);
+    const other = await rawReq('POST', '/api/auth/login', { body: { email: `nema-${RUN}@example.test`, password: 'pogresno' }, headers: { 'X-Forwarded-For': fakeIp() } });
+    check('drugi email sa druge adrese nije blokiran', other.status === 401, other.text);
+    check('A se i dalje prijavljuje (druga adresa)', (await login(device(A))).status === 200);
+    // Sesija R ostaje (blokirana je samo prijava).
+    check('postojeća sesija R radi i dok je prijava blokirana', (await refreshSession(R)).status === 200);
+
+    // Uspele prijave se ne broje: više uređaja (ili cela kuća iza jedne adrese) ne dolazi do blokade.
+    const ipOk = fakeIp();
+    const okStatuses = [];
+    for (let i = 0; i < 12; i++) okStatuses.push((await login(device(A), { ip: ipOk })).status);
+    check('12 uspelih prijava sa iste adrese → sve 200', okStatuses.every((s) => s === 200), okStatuses);
+    const N = newUser('n');
+    await expectOk('N: registracija', register(N), 201);
+    const nOk = await login(device(N), { ip: ipOk });
+    check('i drugi nalog sa te adrese → 200', nOk.status === 200, nOk.text);
+    // …ali uspela prijava ne briše ranije neuspehe sa adrese (sopstveni nalog ne poništava blokadu).
+    const ipMix = fakeIp();
+    const wrong = (i) => rawReq('POST', '/api/auth/login', { body: { email: `nema-${i}-${RUN}@example.test`, password: 'pogresno' }, headers: { 'X-Forwarded-For': ipMix } });
+    const mix = [];
+    for (let i = 0; i < 9; i++) mix.push((await wrong(i)).status);
+    mix.push((await login(device(A), { ip: ipMix })).status);
+    mix.push((await wrong(9)).status);
+    check('9 neuspelih, uspela, neuspela sa iste adrese → 401…, 200, 401', same(mix, [...Array(9).fill(401), 200, 401]), mix);
+    const afterMix = await login(device(A), { ip: ipMix });
+    check('posle 10 neuspelih (uspela se ne računa) → 429', afterMix.status === 429 && afterMix.json?.code === 'rate_limited', afterMix.text);
+
+    // Tuđe neuspele prijave email-om naloga ne blokiraju promenu lozinke prijavljenom vlasniku.
+    const Q = newUser('q');
+    await expectOk('Q: registracija', register(Q), 201);
+    const ipQ = fakeIp();
+    const qs = [];
+    for (let i = 0; i < 10; i++) {
+      qs.push((await rawReq('POST', '/api/auth/login', { body: { email: Q.email, password: `pogresno-${i}` }, headers: { 'X-Forwarded-For': ipQ } })).status);
+    }
+    check('10 tuđih pogrešnih prijava Q email-om → 401', qs.every((s) => s === 401), qs);
+    check('prijava Q (druga adresa) → 429 (ograničenje po email-u)', (await login(device(Q))).status === 429);
+    const qNew = `${Q.password}-nova`;
+    const qp = await post('/api/auth/password', { currentPassword: Q.password, newPassword: qNew }, { as: Q });
+    check('promena lozinke prijavljenom Q i dalje radi → 200', qp.status === 200 && qp.json?.user?.id === Q.id, qp.text);
+    check('posle promene lozinke Q se prijavljuje novom lozinkom', (await login(device(Q), { password: qNew })).status === 200);
+
+    // Registracija: 10 pokušaja po adresi u 15 min (i uspeli; ograničava i pogađanje koda).
+    const ipR = fakeIp();
+    const reg = [];
+    for (let i = 0; i < 10; i++) {
+      const rr = await rawReq('POST', '/api/auth/register', { body: { email: A.email, password: A.password, code: signupPolicy === 'code' ? `pogresno-${i}` : CODE }, headers: { 'X-Forwarded-For': ipR } });
+      reg.push(rr.status);
+    }
+    check('10 odbijenih registracija (403/409)', reg.every((s) => s === (signupPolicy === 'code' ? 403 : 409)), reg);
+    const R2 = newUser('r2');
+    const r11 = await register(R2, { ip: ipR });
+    check('11. registracija sa iste adrese → 429', r11.status === 429 && r11.json?.code === 'rate_limited' && Number(r11.headers.get('retry-after')) > 0, r11.text);
+    check('registracija sa druge adrese radi', (await register(R2, { ip: fakeIp() })).status === 201);
+
+    // Provera trenutne lozinke (promena lozinke) se broji kao neuspela prijava za taj email.
+    const P = newUser('p');
+    await expectOk('P: registracija', register(P), 201);
+    const ps = [];
+    for (let i = 0; i < 10; i++) ps.push((await post('/api/auth/password', { currentPassword: `pogresno-${i}`, newPassword: 'nova-lozinka-1' }, { as: P })).status);
+    check('10 pogrešnih trenutnih lozinki → 401', ps.every((s) => s === 401), ps);
+    const p11 = await post('/api/auth/password', { currentPassword: P.password, newPassword: 'nova-lozinka-1' }, { as: P });
+    check('11. promena lozinke → 429', p11.status === 429, p11.text);
+    const pl = await rawReq('POST', '/api/auth/login', { body: { email: P.email, password: P.password }, headers: { 'X-Forwarded-For': fakeIp() } });
+    check('i prijava tim emailom → 429', pl.status === 429, pl.text);
+  });
+
+  await section('closed signup', async () => {
+    const url = process.env.SMOKE_CLOSED_URL?.replace(/\/+$/, '');
+    if (!url) return skip('zatvorena registracija', 'postavi SMOKE_CLOSED_URL (instanca sa SIGNUP=closed)');
+    const cfg = await rawReq('GET', '/api/auth/config', { base: url });
+    check('zatvorena: config { signup: "closed" }', same(cfg.json, { signup: 'closed' }), cfg.text);
+    await expectError('zatvorena: registracija → 403 signup_closed', rawReq('POST', '/api/auth/register', { base: url, body: { email: `z-${RUN}@example.test`, password: 'lozinka-123', code: CODE } }), 403, 'Registracija nije otvorena.', 'signup_closed');
+    await expectError('zatvorena: i neispravno telo → 403', rawReq('POST', '/api/auth/register', { base: url, body: {} }), 403, undefined, 'signup_closed');
+    await expectError('zatvorena: prijava radi (nepostojeći nalog → 401)', rawReq('POST', '/api/auth/login', { base: url, body: { email: `z-${RUN}@example.test`, password: 'lozinka-123' }, headers: { 'X-Forwarded-For': fakeIp() } }), 401, 'Pogrešan email ili lozinka.');
+  });
+}
 
 async function main() {
   console.log(`Ritam smoke test → ${BASE}`);
@@ -250,63 +767,21 @@ async function main() {
     check('health: HSTS preko HTTPS-a', /max-age=31536000/.test(tls.headers.get('strict-transport-security') || ''), tls.headers.get('strict-transport-security'));
   });
 
-  // ---- Prijava ----
-  await section('auth', async () => {
-    const me = await get('/api/auth/me', { withCookie: false });
-    check('me bez kolačića', me.status === 200 && typeof me.json?.authRequired === 'boolean', me.text);
-    authRequired = !!me.json?.authRequired;
-    if (!authRequired) {
-      check('me: auth isključen → authenticated', me.json?.authenticated === true, me.text);
-      skip('provere prijave', 'APP_PASSWORD nije postavljen na serveru');
-      return;
-    }
-    check('me: nije prijavljen', me.json?.authenticated === false, me.text);
-    if (!PASSWORD) throw new Error('Server traži lozinku — postavi PASSWORD env za smoke test.');
+  await authSections();
 
-    const no = await get('/api/schedule', { withCookie: false });
-    check('401 bez kolačića', no.status === 401 && no.json?.error === 'Nisi prijavljen.', no.text);
-    const tampered = await get('/api/schedule', { withCookie: false, headers: { Cookie: 'ritam_session=v1.1700000000000.AAAA' } });
-    check('401 sa lažnim kolačićem', tampered.status === 401, tampered.text);
-
-    const wrong = await post('/api/auth/login', { password: 'pogresna-lozinka' }, { withCookie: false });
-    check('login pogrešna lozinka → 401', wrong.status === 401 && wrong.json?.error === 'Pogrešna lozinka.', wrong.text);
-    const noCsrf = await post('/api/auth/login', { password: PASSWORD }, { withCookie: false, csrf: false });
-    check('login bez X-Ritam → 403', noCsrf.status === 403, noCsrf.text);
-
-    const ok = await post('/api/auth/login', { password: PASSWORD }, { withCookie: false });
-    const setCookie = ok.headers.get('set-cookie') || '';
-    check('login tačna lozinka → 200', ok.status === 200 && ok.json?.authenticated === true, ok.text);
-    check('login: kolačić ritam_session', /ritam_session=v1\.\d+\.[A-Za-z0-9_-]+/.test(setCookie), setCookie);
-    check('login: HttpOnly + SameSite=Lax + Path=/', /HttpOnly/i.test(setCookie) && /SameSite=Lax/i.test(setCookie) && /Path=\//.test(setCookie), setCookie);
-    check('login: Max-Age 400 dana', /Max-Age=34560000/.test(setCookie), setCookie);
-    cookie = setCookie.split(';')[0];
-
-    const me2 = await get('/api/auth/me');
-    check('me sa kolačićem → authenticated', me2.json?.authenticated === true, me2.text);
-  });
-
-  await section('unknown route', async () => {
-    const unknown = await get('/api/ne-postoji');
-    check('nepoznata API ruta → 404 JSON', unknown.status === 404 && typeof unknown.json?.error === 'string', unknown.text);
-  });
-
-  // ---- Početni snimak (za vraćanje na kraju) i raspored ----
+  // ---- Funkcionalne provere kao korisnik A. Početni snimak (vraća se na kraju) i raspored ----
+  current = A;
   await section('snapshot', async () => {
     snapshot = await expectOk('export na početku', get('/api/export'));
-    // Nova baza nema nijedan red podataka (ni kategorije ni šablone — ništa se ne upisuje unapred).
-    fresh = ['categories', 'templates', 'template_blocks', 'days', 'blocks', 'tasks'].every(
-      (k) => Array.isArray(snapshot[k]) && snapshot[k].length === 0,
-    );
+    // Nov nalog nema nijedan red podataka (ni kategorije ni šablone — ništa se ne upisuje unapred).
+    fresh = isEmptyExport(snapshot);
     schedule = await expectOk('GET schedule', get('/api/schedule'));
     check('schedule: oblik', Array.isArray(schedule.categories) && Array.isArray(schedule.archivedCategories) && Array.isArray(schedule.templates) && schedule.settings && schedule.weekdays && Object.keys(schedule.weekdays).length === 7, schedule);
   });
   if (!snapshot || !schedule) throw new Error('Nema početnog stanja — prekidam.');
-  if (!fresh && process.env.SMOKE_ALLOW_REAL !== '1') {
+  if (!fresh) {
     snapshot = null; // ništa nije menjano, nema šta da se vraća
-    throw new Error(
-      'Baza nije nova: test menja podatke i na kraju vraća kopiju sa početka, pa bi izmene sa drugih uređaja ' +
-        'tokom testa nestale. Pokreni ga na privremenoj instanci ili postavi SMOKE_ALLOW_REAL=1.',
-    );
+    throw new Error('Nalog A nije prazan — prekidam.');
   }
 
   // ---- Prazan start (samo nova baza): ništa nije unapred napravljeno, a API radi i bez rasporeda ----
@@ -1200,8 +1675,159 @@ async function main() {
   });
 }
 
+
+// ---- Odvojeni podaci: B ne vidi i ne menja ništa od A (svaki tuđ id/datum izgleda kao da ne postoji) ----
+async function isolationSection() {
+  await section('isolation', async () => {
+    current = A;
+    const DI = '2097-05-05';
+    const DI0 = addDays(DI, -1);
+    const DI1 = addDays(DI, 1);
+    let s = await expectOk('A: kategorija (izolacija)', post('/api/categories', { name: 'Izolacija', color: '#336699', counts: true }));
+    const catI = s.categories.find((c) => c.name === 'Izolacija');
+    s = await expectOk('A: šablon (izolacija)', post('/api/templates', { name: 'Izolacija šablon' }));
+    const tplI = s.templates.find((t) => t.name === 'Izolacija šablon');
+    await expectOk('A: blok šablona', put(`/api/templates/${tplI.id}/blocks`, { blocks: [{ start: 480, end: 600, title: 'A jutro', categoryId: catI.id }] }));
+    await expectOk('A: dan iz šablona', post(`/api/days/${DI}/init`, { reset: true, templateId: tplI.id }));
+    let d = await expectOk('A: drugi blok', post(`/api/days/${DI}/blocks`, { start: 700, end: 760, title: 'A podne', categoryId: null }));
+    const [ab1, ab2] = d.blocks;
+    await expectOk('A: blok urađen', patch(`/api/blocks/${ab1.id}`, { status: 'done' }));
+    await expectOk('A: beleška i ocena', patch(`/api/days/${DI}`, { note: 'A tajna beleška', rating: 5 }));
+    d = await expectOk('A: zadatak', post('/api/tasks', { date: DI, title: 'A zadatak', categoryId: catI.id }));
+    const at1 = d.tasks[0];
+    await expectOk('A: zadatak urađen', patch(`/api/tasks/${at1.id}`, { done: true }));
+    d = await expectOk('A: otvoren raniji zadatak', post('/api/tasks', { date: DI0, title: 'A otvoren', categoryId: null }));
+    const at2 = d.tasks.find((t) => t.title === 'A otvoren');
+    const aView = async () => ({
+      schedule: await expectOk('A: raspored', get('/api/schedule')),
+      day: await expectOk('A: dan', get(`/api/days/${DI}`)),
+      day0: await expectOk('A: raniji dan', get(`/api/days/${DI0}`)),
+      stats: await expectOk('A: statistika', get(`/api/stats?from=${DI0}&to=${DI1}`)),
+      journal: await expectOk('A: dnevnik', get('/api/journal?limit=100')),
+      done: await expectOk('A: završeni zadaci', get(`/api/tasks/done?from=${DI0}&to=${DI1}`)),
+    });
+    const before = await aView();
+    const ea0 = await expectOk('A: izvoz pre', get('/api/export'));
+    check('A: podaci za izolaciju postoje', before.day.blocks.length === 2 && before.day.note === 'A tajna beleška' && before.done.length === 1 && before.day0.tasks.length === 1, before.day);
+
+    const B = newUser('b');
+    const reg = await expectOk('B: registracija', register(B), 201);
+    check('B: drugi id', reg.user.id !== A.id, reg.user);
+    const asB = { as: B };
+    check('B: /api/auth/me je B', same(await expectOk('B: me', get('/api/auth/me', asB)), { user: { id: B.id, email: B.email } }));
+    const sb = await expectOk('B: raspored', get('/api/schedule', asB));
+    check(
+      'B: prazan raspored (bez A-ovih kategorija i šablona)',
+      sb.categories.length === 0 && sb.archivedCategories.length === 0 && sb.templates.length === 0 && same(sb.weekdays, NO_TEMPLATES) && same(sb.settings, EMPTY_SETTINGS),
+      sb,
+    );
+    const eb0 = await expectOk('B: izvoz', get('/api/export', asB));
+    check(
+      'B: prazan izvoz (7 dana u nedelji bez šablona, podrazumevana podešavanja)',
+      isEmptyExport(eb0) && same(eb0.weekday_templates, [1, 2, 3, 4, 5, 6, 7].map((weekday) => ({ weekday, template_id: null }))) && same(eb0.settings, EMPTY_SETTINGS),
+      eb0,
+    );
+    let bd = await expectOk('B: A-ov datum', get(`/api/days/${DI}`, asB));
+    check('B: ne vidi A-ov dan (blokove, zadatke, belešku, ocenu)', bd.initialized === false && bd.blocks.length === 0 && bd.tasks.length === 0 && bd.note === '' && bd.rating === null && bd.templateId === null && bd.openBefore === 0, bd);
+    bd = await expectOk('B: A-ov raniji datum', get(`/api/days/${DI1}`, asB));
+    check('B: openBefore ne broji A-ove zadatke', bd.openBefore === 0 && bd.tasks.length === 0, bd);
+
+    const is404 = (name, p) => expectStatus(`B: ${name} → 404`, p, 404);
+    const is400 = (name, p) => expectStatus(`B: ${name} → 400`, p, 400);
+    await is404('PATCH A-ovog bloka', patch(`/api/blocks/${ab1.id}`, { status: 'skipped' }, asB));
+    await is404('DELETE A-ovog bloka', del(`/api/blocks/${ab1.id}`, asB));
+    await is404('split A-ovog bloka', post(`/api/blocks/${ab1.id}/split`, { at: 540 }, asB));
+    await is404('swap dva A-ova bloka', post(`/api/blocks/${ab1.id}/swap`, { with: ab2.id }, asB));
+    bd = await expectOk('B: svoj blok na istom datumu', post(`/api/days/${DI}/blocks`, { start: 900, end: 960, title: 'B blok', categoryId: null }, asB));
+    const bb = bd.blocks[0];
+    check('B: njegov dan ima samo njegov blok (bez A-ovog šablona)', bd.initialized === true && bd.blocks.length === 1 && bb?.title === 'B blok' && bd.templateId === null && bd.note === '', bd);
+    await is404('swap svog bloka sa A-ovim', post(`/api/blocks/${bb.id}/swap`, { with: ab1.id }, asB));
+    await is404('swap A-ovog bloka sa svojim', post(`/api/blocks/${ab1.id}/swap`, { with: bb.id }, asB));
+    await is404('čekiranje A-ovog zadatka', patch(`/api/tasks/${at1.id}`, { done: false }, asB));
+    await is404('premeštanje A-ovog zadatka', patch(`/api/tasks/${at2.id}`, { date: DI }, asB));
+    await is404('DELETE A-ovog zadatka', del(`/api/tasks/${at2.id}`, asB));
+    await is404('PATCH A-ove kategorije', patch(`/api/categories/${catI.id}`, { name: 'B je promenio' }, asB));
+    await is404('DELETE A-ove kategorije', del(`/api/categories/${catI.id}`, asB));
+    await is404('PATCH A-ovog šablona', patch(`/api/templates/${tplI.id}`, { name: 'B je promenio' }, asB));
+    await is404('DELETE A-ovog šablona', del(`/api/templates/${tplI.id}`, asB));
+    await is404('PUT blokova A-ovog šablona', put(`/api/templates/${tplI.id}/blocks`, { blocks: [] }, asB));
+    await is400('blok sa A-ovom kategorijom', post(`/api/days/${DI}/blocks`, { start: 1000, end: 1010, title: 'X', categoryId: catI.id }, asB));
+    await is400('zadatak sa A-ovom kategorijom', post('/api/tasks', { date: DI, title: 'X', categoryId: catI.id }, asB));
+    await is400('svoj blok u A-ovu kategoriju', patch(`/api/blocks/${bb.id}`, { categoryId: catI.id }, asB));
+    await is400('kopija A-ovog šablona', post('/api/templates', { name: 'Kopija', copyFrom: tplI.id }, asB));
+    await is400('A-ov šablon za dan u nedelji', put('/api/weekdays', { 1: tplI.id }, asB));
+    await is400('dan iz A-ovog šablona', post(`/api/days/${DI1}/init`, { templateId: tplI.id }, asB));
+    let bs = await expectOk('B: kategorija sa istim nazivom kao A-ova', post('/api/categories', { name: 'Izolacija', color: '#112233', counts: true }, asB));
+    const bcat = bs.categories.find((c) => c.name === 'Izolacija');
+    check('B: nazivi su jedinstveni samo unutar naloga', bs.categories.length === 1 && bcat && bcat.id !== catI.id, bs.categories);
+    bs = await expectOk('B: šablon sa istim nazivom kao A-ov', post('/api/templates', { name: 'Izolacija šablon' }, asB));
+    const btpl = bs.templates[0];
+    check('B: vidi samo svoj šablon', bs.templates.length === 1 && btpl.id !== tplI.id && btpl.blocks.length === 0, bs.templates);
+    await is400('blokovi svog šablona sa A-ovom kategorijom', put(`/api/templates/${btpl.id}/blocks`, { blocks: [{ start: 600, end: 660, title: 'X', categoryId: catI.id }] }, asB));
+    bs = await expectOk('B: blok svog šablona', put(`/api/templates/${btpl.id}/blocks`, { blocks: [{ start: 600, end: 660, title: 'B šablon blok', categoryId: bcat.id }] }, asB));
+    check('B: samo njegov blok šablona', same(bs.templates.flatMap((t) => t.blocks.map(shape)), [[600, 660, 'B šablon blok', bcat.id]]), bs.templates);
+    await expectOk('B: beleška i ocena na A-ovom datumu', patch(`/api/days/${DI}`, { note: 'B beleška', rating: 1 }, asB));
+    bd = await expectOk('B: prebaci nezavršene', post('/api/tasks/carry', { to: DI1 }, asB));
+    check('B: carry ne dira A-ove zadatke', bd.tasks.length === 0 && bd.openBefore === 0, bd.tasks);
+    await expectOk('B: zadatak', post('/api/tasks', { date: DI, title: 'B zadatak' }, asB));
+    const bst = await expectOk('B: statistika', get(`/api/stats?from=${DI0}&to=${DI1}`, asB));
+    check(
+      'B: statistika samo njegova',
+      bst.totals.daysTracked === 0 && bst.totals.tasksTotal === 1 && bst.totals.tasksDone === 0 && bst.days[1].rating === 1 && bst.days[1].summary === null && bst.days[0].tasksTotal === 0 && bst.streak === 0,
+      bst,
+    );
+    const bj = await expectOk('B: dnevnik', get('/api/journal?limit=100', asB));
+    check('B: dnevnik samo njegov', bj.length === 1 && bj[0].note === 'B beleška' && bj[0].rating === 1, bj);
+    const bjq = await expectOk('B: pretraga dnevnika', get(`/api/journal?q=${encodeURIComponent('tajna')}`, asB));
+    check('B: pretraga ne nalazi A-ovu belešku', bjq.length === 0, bjq);
+    const bdone = await expectOk('B: završeni zadaci', get(`/api/tasks/done?from=${DI0}&to=${DI1}`, asB));
+    check('B: nema A-ovih završenih zadataka', bdone.length === 0, bdone);
+    await expectOk('B: podešavanja', patch('/api/settings', { dayStart: 120, streakThreshold: 0.5 }, asB));
+    await expectOk('B: raspored ispočetka', post('/api/schedule/reset', { dayStart: true }, asB));
+    const eb1 = await expectOk('B: izvoz', get('/api/export', asB));
+    const aIds = (k) => new Set(ea0[k].map((r) => r.id));
+    const disjoint = (e) => ['categories', 'templates', 'template_blocks', 'blocks', 'tasks'].every((k) => e[k].every((r) => !aIds(k).has(r.id)));
+    check(
+      'B: izvoz samo sa njegovim redovima',
+      eb1.days.length === 1 && eb1.days[0].note === 'B beleška' && eb1.blocks.length === 1 && eb1.blocks[0].title === 'B blok' && eb1.tasks.length === 1 && eb1.tasks[0].title === 'B zadatak' && eb1.categories.length === 1 && eb1.categories[0].archived === 1 && eb1.templates.length === 0 && eb1.template_blocks.length === 0 && same(eb1.settings, { dayStart: 0, streakThreshold: 0.5 }) && disjoint(eb1),
+      eb1,
+    );
+
+    // B uvozi A-ovu kopiju (isti id-jevi kao A-ovi redovi): dobija iste podatke pod svojim novim id-jevima.
+    await expectStatus('B: neispravna kopija → 400', post('/api/import', { ...ea0, blocks: [...ea0.blocks, { ...ea0.blocks[0], id: 99999999, date: '2001-01-01' }] }, asB), 400);
+    await expectStatus('B: kopija sa vezom ka nepostojećem šablonu → 400', post('/api/import', { ...ea0, weekday_templates: [{ weekday: 1, template_id: 99999999 }] }, asB), 400);
+    await expectStatus('B: kopija sa duplim id-jem → 400', post('/api/import', { ...ea0, tasks: [...ea0.tasks, { ...ea0.tasks[0] }] }, asB), 400);
+    check('B: odbijen uvoz ne menja njegove podatke', same(rawStamp(await expectOk('B: izvoz posle odbijenih', get('/api/export', asB))), rawStamp(eb1)));
+    await expectOk('B: uvoz A-ove kopije', post('/api/import', ea0, asB));
+    const eb2 = await expectOk('B: izvoz posle uvoza', get('/api/export', asB));
+    check('B: isti sadržaj kao kopija', same(withoutStamp(eb2), withoutStamp(ea0)), eb2);
+    check('B: uvezeni redovi imaju nove id-jeve (ne A-ove)', disjoint(eb2), eb2);
+    await is404('posle uvoza: PATCH A-ovog bloka', patch(`/api/blocks/${ab1.id}`, { status: 'skipped' }, asB));
+    await is404('posle uvoza: DELETE A-ovog zadatka', del(`/api/tasks/${at1.id}`, asB));
+    const bDay = await expectOk('B: dan posle uvoza', get(`/api/days/${DI}`, asB));
+    check('B: dan iz kopije (svoji id-jevi)', bDay.note === 'A tajna beleška' && bDay.blocks.length === 2 && bDay.blocks.every((b) => b.id !== ab1.id && b.id !== ab2.id), bDay);
+    await expectOk('B: menja svoj uvezen blok', patch(`/api/blocks/${bDay.blocks[0].id}`, { status: 'skipped', note: 'B menja svoju kopiju' }, asB));
+    await expectOk('B: briše svoj uvezen zadatak', del(`/api/tasks/${bDay.tasks[0].id}`, asB));
+
+    // A: ništa se nije promenilo (i id-jevi su isti), a ni A ne vidi B-ove redove.
+    const ea1 = await expectOk('A: izvoz posle', get('/api/export'));
+    check('A: izvoz identičan, sa istim id-jevima', same(rawStamp(ea1), rawStamp(ea0)), ea1);
+    const after = await aView();
+    for (const k of Object.keys(before)) check(`A: ${k} isto posle svega što je B radio`, same(after[k], before[k]), after[k]);
+    await expectStatus('A: B-ov blok → 404', patch(`/api/blocks/${bDay.blocks[0].id}`, { status: 'done' }), 404);
+    await expectStatus('A: B-ova kategorija → 404', patch(`/api/categories/${bcat.id}`, { name: 'A je promenio' }), 404);
+
+    const out = await rawReq('POST', '/api/auth/logout', { cookie: B.cookie });
+    check('B: odjava', out.status === 200);
+    // Uklanjanje podataka testa (A): šablon i kategorija; dani se vraćaju sa početnim snimkom (restore).
+    await expectOk('A: obriši šablon (izolacija)', del(`/api/templates/${tplI.id}`));
+    await expectOk('A: obriši kategoriju (izolacija)', del(`/api/categories/${catI.id}`));
+  });
+}
+
 async function restore() {
   if (!snapshot) return;
+  current = A;
   await section('restore', async () => {
     await expectOk('vrati početno stanje', post('/api/import', snapshot));
     const after = await expectOk('export posle vraćanja', get('/api/export'));
@@ -1210,47 +1836,20 @@ async function restore() {
 }
 
 async function finish() {
-  // Odjava.
-  await section('logout', async () => {
-    if (!authRequired) return;
-    const r = await post('/api/auth/logout', {});
-    const sc = r.headers.get('set-cookie') || '';
-    check('logout briše kolačić', r.status === 200 && r.json?.authenticated === false && /ritam_session=;/.test(sc) && /Max-Age=0/i.test(sc), sc);
-    cookie = '';
-  });
-
-  // Ograničenje pokušaja (lažna adresa preko X-Forwarded-For radi samo sa lokalnog klijenta).
-  // Iza Docker-a se svi klijenti vide sa iste adrese, pa bi 10 pogrešnih prijava na 15 min
-  // blokiralo nove prijave sa svih uređaja — zato samo na novoj bazi.
-  await section('rate limit', async () => {
-    if (!authRequired) return;
-    if (!fresh && process.env.SMOKE_RATE_LIMIT !== '1') {
-      skip('429 posle 10 pokušaja', 'baza nije nova — SMOKE_RATE_LIMIT=1 za proveru');
-      return;
-    }
-    const host = new URL(BASE).hostname;
-    if (!['localhost', '127.0.0.1', '[::1]', '::1'].includes(host)) {
-      skip('429 posle 10 pokušaja', 'server nije lokalni');
-      return;
-    }
-    const ip = `198.51.100.${Math.floor(Math.random() * 250) + 1}`;
-    const statuses = [];
-    for (let i = 0; i < 10; i++) {
-      const r = await post('/api/auth/login', { password: `pogresno-${i}` }, { withCookie: false, headers: { 'X-Forwarded-For': ip } });
-      statuses.push(r.status);
-    }
-    check('10 pogrešnih → 401', statuses.every((s) => s === 401), statuses);
-    const r = await post('/api/auth/login', { password: PASSWORD }, { withCookie: false, headers: { 'X-Forwarded-For': ip } });
-    check('11. pokušaj (i tačna lozinka) → 429', r.status === 429 && r.json?.error === 'Previše pokušaja. Pokušaj ponovo za 15 minuta.', r.text);
-    const retry = Number(r.headers.get('retry-after'));
-    check('429: Retry-After u sekundama (do 15 min)', Number.isInteger(retry) && retry > 840 && retry <= 900, r.headers.get('retry-after'));
-    const other = await post('/api/auth/login', { password: 'pogresno' }, { withCookie: false, headers: { 'X-Forwarded-For': '203.0.113.7' } });
-    check('drugi klijent nije blokiran', other.status === 401, other.text);
+  await section('logout A', async () => {
+    if (!A.cookie) return;
+    const r = await rawReq('POST', '/api/auth/logout', { cookie: A.cookie });
+    const sc = (r.headers.getSetCookie?.() ?? []).find((x) => x.startsWith('ritam_refresh=')) ?? '';
+    check('logout briše kolačić', r.status === 200 && /^ritam_refresh=;/.test(sc) && /Max-Age=0/i.test(sc), sc);
+    const rr = await rawReq('POST', '/api/auth/refresh', { cookie: A.cookie });
+    check('posle odjave A: refresh → 401', rr.status === 401, rr.text);
+    A.cookie = '';
   });
 }
 
 try {
   await main();
+  await isolationSection();
 } catch (err) {
   check('smoke test se izvršio do kraja', false, err?.stack || String(err));
 } finally {

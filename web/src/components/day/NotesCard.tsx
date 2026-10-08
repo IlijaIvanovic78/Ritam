@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { fmtDateMedium } from '../../../../shared/time.ts';
+import { sessionUserId } from '../../api.ts';
 import { useDebouncedCallback } from '../../lib/hooks.ts';
 import {
+  NOTES_FLUSH_EVENT,
   markNoteOpen,
   markNoteTyped,
   readNoteDraft,
@@ -72,8 +74,10 @@ export function NotesCard({
   }, []);
   const [conflict, setConflict] = useState(false);
   const [touched, setTouched] = useState(false);
+  // Nalog za koji je kartica otvorena: njegov draft se čita i piše samo dok je on prijavljen u tabu.
+  const [owner] = useState(sessionUserId);
   // Nesačuvan tekst sa ovog uređaja iz ranije sesije (još nije vraćen u polje).
-  const [stored, setStored] = useState<NoteDraft | null>(() => readNoteDraft(date));
+  const [stored, setStored] = useState<NoteDraft | null>(() => readNoteDraft(date, owner));
 
   const draftRef = useRef(note);
   const savedRef = useRef(note);
@@ -146,12 +150,14 @@ export function NotesCard({
       if (res === 'ok') {
         setSaved(savedRef.current);
         setError(false);
-        if (text === draftRef.current) removeNoteDraft(d);
+        if (text === draftRef.current) removeNoteDraft(d, owner);
         else if (!conflictRef.current) {
           // U međuvremenu je dopisano: lokalna kopija sad nastaje nad upravo sačuvanim tekstom
           // (inače bi se posle zatvaranja aplikacije samo nudila, umesto da se sama vrati i pošalje).
-          const s = readNoteDraft(d);
-          if (s && s.text === draftRef.current && s.base !== text) writeNoteDraft(d, { base: text, text: s.text });
+          const s = readNoteDraft(d, owner);
+          if (s && s.text === draftRef.current && s.base !== text) {
+            writeNoteDraft(d, { base: text, text: s.text }, owner);
+          }
         }
       } else if (res === 'conflict') {
         enterConflict();
@@ -192,7 +198,7 @@ export function NotesCard({
       setTouched(true);
       setError(false);
       setStored(null);
-      writeNoteDraft(date, { base, text });
+      writeNoteDraft(date, { base, text }, owner);
       scheduledRef.current = true;
       schedule(date, text);
     },
@@ -205,7 +211,7 @@ export function NotesCard({
   useLayoutEffect(() => {
     if (!stored || !fresh) return;
     if (stored.text === note) {
-      removeNoteDraft(date);
+      removeNoteDraft(date, owner);
       setStored(null);
     } else if (stored.base === note && draftRef.current === savedRef.current) {
       applyStored(stored.text, note);
@@ -224,7 +230,7 @@ export function NotesCard({
       setSaved(note);
       setError(false);
       if (conflictRef.current) leaveConflict();
-      if (!stored) removeNoteDraft(date);
+      if (!stored) removeNoteDraft(date, owner);
       return;
     }
     const clean = draftRef.current === savedRef.current && inflightRef.current === 0 && !scheduledRef.current;
@@ -236,7 +242,7 @@ export function NotesCard({
       setSaved(note);
       if (conflictRef.current) {
         leaveConflict();
-        removeNoteDraft(date);
+        removeNoteDraft(date, owner);
       }
       return;
     }
@@ -249,7 +255,7 @@ export function NotesCard({
       const resume = conflictRef.current || errorRef.current;
       if (conflictRef.current) leaveConflict();
       setError(false);
-      if (draftRef.current !== note) writeNoteDraft(date, { base: note, text: draftRef.current });
+      if (draftRef.current !== note) writeNoteDraft(date, { base: note, text: draftRef.current }, owner);
       // Ostatak teksta (dopisan posle tog čuvanja) se šalje odmah, ako je čuvanje ranije zapelo.
       if (resume) saveIfDirtyRef.current();
       return;
@@ -285,16 +291,18 @@ export function NotesCard({
     if (errorRef.current || leftBehind) saveIfDirtyRef.current();
   }, [syncs]);
 
-  // Napuštanje stranice / prelazak u pozadinu: sačuvaj odmah. Povratak i povratak mreže:
-  // pošalji ponovo ono što ranije nije prošlo.
+  // Napuštanje stranice / prelazak u pozadinu / "Osveži" za novu verziju: sačuvaj odmah. Povratak i
+  // povratak mreže: pošalji ponovo ono što ranije nije prošlo.
   useEffect(() => {
     document.addEventListener('visibilitychange', saveIfDirty);
     window.addEventListener('pagehide', saveIfDirty);
     window.addEventListener('online', saveIfDirty);
+    window.addEventListener(NOTES_FLUSH_EVENT, saveIfDirty);
     return () => {
       document.removeEventListener('visibilitychange', saveIfDirty);
       window.removeEventListener('pagehide', saveIfDirty);
       window.removeEventListener('online', saveIfDirty);
+      window.removeEventListener(NOTES_FLUSH_EVENT, saveIfDirty);
     };
   }, [saveIfDirty]);
 
@@ -315,15 +323,15 @@ export function NotesCard({
         savedRef.current = server;
         setSaved(server);
         leaveConflict();
-        removeNoteDraft(date);
+        removeNoteDraft(date, owner);
       } else {
         // `base` ostaje stara beleška: draft se pri sledećem otvaranju samo nudi, ne vraća sam.
-        writeNoteDraft(date, { base: savedRef.current, text: v });
+        writeNoteDraft(date, { base: savedRef.current, text: v }, owner);
       }
       return;
     }
-    if (v === savedRef.current) removeNoteDraft(date);
-    else writeNoteDraft(date, { base: savedRef.current, text: v });
+    if (v === savedRef.current) removeNoteDraft(date, owner);
+    else writeNoteDraft(date, { base: savedRef.current, text: v }, owner);
     scheduledRef.current = true;
     schedule(date, v);
   };
@@ -336,10 +344,10 @@ export function NotesCard({
     leaveConflict();
     const text = draftRef.current;
     if (text === server) {
-      removeNoteDraft(date);
+      removeNoteDraft(date, owner);
       return;
     }
-    writeNoteDraft(date, { base: server, text });
+    writeNoteDraft(date, { base: server, text }, owner);
     cancel();
     void save(date, text);
   };
@@ -355,7 +363,7 @@ export function NotesCard({
     setSaved(server);
     setError(false);
     leaveConflict();
-    removeNoteDraft(date);
+    removeNoteDraft(date, owner);
   };
 
   /** "Pokušaj ponovo": pošalji odmah; ako se čeka svež odgovor servera, zatraži ga odmah. */
@@ -365,7 +373,7 @@ export function NotesCard({
   };
 
   const discardStored = () => {
-    removeNoteDraft(date);
+    removeNoteDraft(date, owner);
     setStored(null);
   };
 

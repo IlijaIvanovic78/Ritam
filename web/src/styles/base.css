@@ -43,6 +43,26 @@ h1 {
   letter-spacing: -0.01em;
 }
 
+/* Naslovni serif (uz logo) — samo za naslove: stranice, datum dana, sheet, prazna stanja i prvo
+   pokretanje, period u Napretku, datumi u Dnevniku i podnaslov prijave. Jedna težina (500). Serif
+   je optički manji od sans-a iste veličine (niža x-visina), pa su ovi naslovi u px veći. Sve što se
+   čita u prolazu ili poredi (vremena, nazivi blokova, brojevi, dugmad, polja) ostaje sistemski sans. */
+.page-title,
+.sheet-title,
+.empty-title,
+.day-welcome-title,
+.prog-period-title,
+.jr-date,
+.login-sub {
+  font-family: var(--font-display);
+  font-weight: 500;
+  letter-spacing: 0;
+  font-kerning: normal;
+  font-variant-numeric: lining-nums proportional-nums;
+  font-synthesis: none; /* nikad lažni bold/kurziv: učitana je samo težina 500 */
+  text-rendering: optimizeLegibility;
+}
+
 h2 {
   font-size: 15px;
   font-weight: 600;
@@ -175,9 +195,10 @@ ol {
   width: 100%;
   max-width: var(--page-max);
   margin: 0 auto;
-  /* Bočno bar 16px, a u landscape-u na iPhone-u i van izreza/ostrvca ekrana. */
-  padding: 16px max(16px, env(safe-area-inset-right)) calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 28px)
-    max(16px, env(safe-area-inset-left));
+  /* Bočno bar 16px, a u landscape-u na iPhone-u i van izreza/ostrvca ekrana. Dole i visina trake
+     nove verzije dok je prikazana (--update-h, App.tsx). */
+  padding: 16px max(16px, env(safe-area-inset-right))
+    calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 28px + var(--update-h, 0px)) max(16px, env(safe-area-inset-left));
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -185,7 +206,7 @@ ol {
 
 @media (min-width: 860px) {
   .page {
-    padding: 28px max(32px, env(safe-area-inset-right)) 48px max(32px, env(safe-area-inset-left));
+    padding: 28px max(32px, env(safe-area-inset-right)) calc(48px + var(--update-h, 0px)) max(32px, env(safe-area-inset-left));
     gap: 20px;
   }
 }
@@ -205,11 +226,18 @@ ol {
 }
 
 .page-title {
-  font-size: 22px;
+  font-size: 30px;
+  line-height: 1.1;
+}
+
+@media (min-width: 860px) {
+  .page-title {
+    font-size: 34px;
+  }
 }
 
 .page-sub {
-  margin-top: 2px;
+  margin-top: 4px;
   color: var(--text-2);
   font-size: 14px;
 }

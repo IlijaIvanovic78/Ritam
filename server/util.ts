@@ -7,13 +7,19 @@ import { isValidISODate } from '../shared/time.ts';
 /** HTTP statusi koje API namerno vraća. */
 export type ErrorStatus = 400 | 401 | 403 | 404 | 409 | 413 | 429 | 500;
 
-/** Greška koju error handler pretvara u `{ error }` odgovor sa datim statusom. */
+/** Greška koju error handler pretvara u `{ error, code? }` odgovor sa datim statusom. */
 export class HttpError extends Error {
   status: ErrorStatus;
-  constructor(status: ErrorStatus, message: string) {
+  /** Mašinski čitljiv razlog (npr. 'token_expired'); klijent prikazuje `error`. */
+  code: string | undefined;
+  /** Dodatni headeri odgovora (npr. Retry-After). */
+  headers: Record<string, string> | undefined;
+  constructor(status: ErrorStatus, message: string, code?: string, headers?: Record<string, string>) {
     super(message);
     this.name = 'HttpError';
     this.status = status;
+    this.code = code;
+    this.headers = headers;
   }
 }
 

@@ -164,6 +164,16 @@
   color: var(--text-3);
 }
 
+/* Onemogućeno polje / izbor: jasno neaktivno (ne samo providnost browser-a), a i dalje čitljivo.
+   background-color, ne background: strelica .select-a je background-image. */
+.input:disabled {
+  color: var(--text-3);
+  background-color: var(--surface-2);
+  border-color: var(--border);
+  opacity: 1;
+  cursor: default;
+}
+
 /* 24h izbor vremena: dva select-a (sat : minuti). */
 .time-input {
   display: inline-flex;
@@ -189,6 +199,8 @@
 .select {
   appearance: none;
   padding-right: 34px;
+  /* Dugačak naziv se skraćuje sa "…" (ne seče se usred slova); ceo je u native listi i u title. */
+  text-overflow: ellipsis;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23858583' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 10px center;
@@ -221,9 +233,15 @@
   min-height: 44px;
 }
 
+/* Naslov kartice: mala proređena verzalna oznaka — tiši od serifnog naslova stranice, a stavke u
+   kartici (sans, 15px) ostaju ono što se čita. */
 .card-title {
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-2);
 }
 
 .card-actions {
@@ -249,11 +267,12 @@
 }
 
 .empty-title {
-  font-weight: 600;
+  font-size: 22px;
+  line-height: 1.2;
 }
 
 .empty-text {
-  margin-top: 4px;
+  margin-top: 6px;
   color: var(--text-2);
   font-size: 14px;
 }
@@ -327,7 +346,7 @@
 .ring-label {
   position: relative;
   font-size: 13px;
-  font-weight: 650;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 
@@ -345,7 +364,7 @@
 .seg-btn {
   height: 32px;
   padding: 0 12px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   font-size: 14px;
   font-weight: 550;
   color: var(--text-2);
@@ -381,6 +400,33 @@
   display: inline-block;
   flex-shrink: 0;
   border-radius: 50%;
+}
+
+/* Crta kategorije uz red bloka (`CategoryStroke`, blag integral): kuke 10×14 gore i dole se ne
+   razvlače, a crta od 2px između njih (po sredini, x = 5 kao uspravni deo kuka) popunjava visinu reda. */
+.cat-stroke {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 10px;
+  min-height: 32px;
+}
+
+.cat-stroke svg {
+  display: block;
+  flex: none;
+  width: 10px;
+  height: 14px;
+  /* Zaobljeni krajevi izlaze ~1px van okvira (vrh kuke, spoj sa crtom). */
+  overflow: visible;
+}
+
+.cat-stroke-stem {
+  flex: 1 1 auto;
+  width: 2px;
+  min-height: 4px;
+  background: currentColor;
 }
 
 .chips {
@@ -527,10 +573,11 @@
   gap: 6px;
 }
 
+/* Krug (kao krug zadatka i izbor statusa): 36px na desktopu, 40px na telefonu. */
 .rating-btn {
-  width: 40px;
+  width: 36px;
   height: 36px;
-  border-radius: var(--radius);
+  border-radius: 50%;
   border: 1px solid var(--border-strong);
   background: var(--surface);
   font-size: 14px;
@@ -614,8 +661,8 @@
 }
 
 .sheet-title {
-  font-size: 17px;
-  font-weight: 600;
+  font-size: 24px;
+  line-height: 1.15;
   min-width: 0;
 }
 
@@ -634,7 +681,7 @@
   align-items: center;
   gap: 8px;
   padding: 12px max(20px, env(safe-area-inset-right)) 12px max(20px, env(safe-area-inset-left));
-  border-top: 1px solid var(--border);
+  border-top: var(--hairline) solid var(--divider);
   flex-shrink: 0;
 }
 
@@ -652,7 +699,7 @@
   }
 
   .sheet-panel {
-    border-radius: 16px 16px 0 0;
+    border-radius: 14px 14px 0 0;
     max-height: min(92dvh, var(--vvh, 92dvh));
     padding-bottom: env(safe-area-inset-bottom);
   }
@@ -711,8 +758,11 @@
   position: fixed;
   left: 50%;
   transform: translateX(-50%);
-  /* Iznad donje trake, a dok je tastatura otvorena iznad nje. */
-  bottom: max(calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 12px), calc(var(--kb, 0px) + 12px));
+  /* Iznad donje trake (i trake nove verzije, --update-h), a dok je tastatura otvorena iznad nje. */
+  bottom: max(
+    calc(var(--tabbar-h) + env(safe-area-inset-bottom) + var(--update-h, 0px) + 12px),
+    calc(var(--kb, 0px) + 12px)
+  );
   z-index: 100;
   display: flex;
   flex-direction: column;
@@ -723,7 +773,7 @@
 
 @media (min-width: 860px) {
   .toaster {
-    bottom: 24px;
+    bottom: calc(24px + var(--update-h, 0px));
   }
 
   /* Po sredini sadržaja, ne celog prozora (levo je bočna traka). U sheet-u ostaje po sredini ekrana. */
@@ -737,6 +787,11 @@
 .toaster.toaster-top {
   top: calc(env(safe-area-inset-top) + 12px);
   bottom: auto;
+}
+
+/* Na vrhu sheet-a: kraća senka, da ne zatamni naslov sheet-a ispod. */
+.toaster-top .toast {
+  box-shadow: var(--shadow-toast-top);
 }
 
 .toast {
@@ -762,6 +817,8 @@
 
 .toast-close {
   pointer-events: auto;
+  /* Poruka u dva reda ne sme da suzi × ispod dodirne površine. */
+  flex-shrink: 0;
   width: 28px;
   height: 28px;
   border-radius: 6px;
@@ -815,6 +872,7 @@
   }
 
   .rating-btn {
+    width: 40px;
     height: 40px;
   }
 

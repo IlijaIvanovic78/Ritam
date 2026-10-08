@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { logicalNow } from '../../../shared/time.ts';
-import { serverStaleStore } from '../api.ts';
+import { serverStaleStore, sessionStore, type SessionState } from '../api.ts';
 import { useSettings } from './store.ts';
 
 /** Trenutno vreme, osvežava se na svakih `intervalMs` i kad se aplikacija vrati u fokus. */
@@ -68,6 +68,11 @@ export function useOnline(): boolean {
  */
 export function useServerStale(): boolean {
   return useSyncExternalStore(serverStaleStore.subscribe, serverStaleStore.get);
+}
+
+/** Prijavljen nalog (ili poslednji nalog ovog uređaja dok se radi bez servera). */
+export function useSession(): SessionState {
+  return useSyncExternalStore(sessionStore.subscribe, sessionStore.get);
 }
 
 /**

@@ -1,5 +1,7 @@
-// Rezervna kopija: izvoz svih tabela kao sirovih redova i uvoz (zamena svega)
-// u jednoj transakciji.
+// Rezervna kopija jednog korisnika: izvoz njegovih redova (bez user_id) i uvoz koji zamenjuje SAMO njegove
+// podatke, u jednoj transakciji. Uvoz dodeljuje nove id-jeve svim redovima (kategorije, šabloni, blokovi
+// šablona, dani u nedelji, dani, blokovi, zadaci) i prevodi sve veze među njima, pa kopija nikad ne može da
+// se sudari sa tuđim redovima ni da ih dotakne, kakve god id-jeve sadržala.
 
 import type { DatabaseSync } from 'node:sqlite';
 import { z } from 'zod';
@@ -8,46 +10,46 @@ import { isValidISODate, isValidRange } from '../shared/time.ts';
 import { tx } from './db.ts';
 import { HttpError, badRequest } from './util.ts';
 
-/** Tabele redom kojim se upisuju (roditelji pre dece zbog stranih ključeva). */
-const TABLES = [
-  { name: 'categories', order: 'id', columns: ['id', 'name', 'color', 'counts', 'sort', 'archived'] },
-  { name: 'templates', order: 'id', columns: ['id', 'name', 'sort'] },
-  {
-    name: 'template_blocks',
-    order: 'id',
-    columns: ['id', 'template_id', 'start_min', 'end_min', 'title', 'category_id'],
-  },
-  { name: 'weekday_templates', order: 'weekday', columns: ['weekday', 'template_id'] },
-  { name: 'days', order: 'date', columns: ['date', 'initialized', 'template_id', 'note', 'rating', 'updated_at'] },
-  {
-    name: 'blocks',
-    order: 'id',
-    columns: ['id', 'date', 'start_min', 'end_min', 'title', 'category_id', 'status', 'actual_min', 'note'],
-  },
-  {
-    name: 'tasks',
-    order: 'id',
-    columns: ['id', 'date', 'title', 'done', 'done_at', 'category_id', 'sort', 'created_at'],
-  },
-] as const;
+/** Oblik kopije (isti kao pre naloga, pa se stare kopije uvoze bez izmena). */
+export const BACKUP_VERSION = 1;
 
-type TableName = (typeof TABLES)[number]['name'];
+/** Kolone po tabeli (redosled ključeva u izvozu). */
+const COLUMNS = {
+  categories: ['id', 'name', 'color', 'counts', 'sort', 'archived'],
+  templates: ['id', 'name', 'sort'],
+  template_blocks: ['id', 'template_id', 'start_min', 'end_min', 'title', 'category_id'],
+  weekday_templates: ['weekday', 'template_id'],
+  days: ['date', 'initialized', 'template_id', 'note', 'rating', 'updated_at'],
+  blocks: ['id', 'date', 'start_min', 'end_min', 'title', 'category_id', 'status', 'actual_min', 'note'],
+  tasks: ['id', 'date', 'title', 'done', 'done_at', 'category_id', 'sort', 'created_at'],
+} as const;
 
-export function exportData(db: DatabaseSync, settings: Settings) {
-  const out: Record<string, unknown> = {
+const cols = (table: keyof typeof COLUMNS, alias = '') => COLUMNS[table].map((c) => alias + c).join(', ');
+
+/** Svi podaci korisnika `uid`, sirovi redovi (snake_case), bez user_id. */
+export function exportData(db: DatabaseSync, uid: number, settings: Settings) {
+  // Redovi iz node:sqlite imaju null prototip — kopiramo ih u obične objekte.
+  const all = (sql: string) =>
+    db
+      .prepare(sql)
+      .all(uid)
+      .map((r) => ({ ...r }));
+  return {
     app: 'ritam',
-    version: 1,
+    version: BACKUP_VERSION,
     exportedAt: new Date().toISOString(),
     settings,
+    categories: all(`SELECT ${cols('categories')} FROM categories WHERE user_id = ? ORDER BY id`),
+    templates: all(`SELECT ${cols('templates')} FROM templates WHERE user_id = ? ORDER BY id`),
+    template_blocks: all(
+      `SELECT ${cols('template_blocks', 'tb.')} FROM template_blocks tb
+       JOIN templates t ON t.id = tb.template_id WHERE t.user_id = ? ORDER BY tb.id`,
+    ),
+    weekday_templates: all(`SELECT ${cols('weekday_templates')} FROM weekday_templates WHERE user_id = ? ORDER BY weekday`),
+    days: all(`SELECT ${cols('days')} FROM days WHERE user_id = ? ORDER BY date`),
+    blocks: all(`SELECT ${cols('blocks')} FROM blocks WHERE user_id = ? ORDER BY id`),
+    tasks: all(`SELECT ${cols('tasks')} FROM tasks WHERE user_id = ? ORDER BY id`),
   };
-  for (const t of TABLES) {
-    // Redovi iz node:sqlite imaju null prototip — kopiramo ih u obične objekte.
-    out[t.name] = db
-      .prepare(`SELECT ${t.columns.join(', ')} FROM ${t.name} ORDER BY ${t.order}`)
-      .all()
-      .map((r) => ({ ...r }));
-  }
-  return out;
 }
 
 // ---- Validacija uvoza ----
@@ -70,7 +72,7 @@ const note = (max: number) => z.string().max(max);
 
 const backupSchema = z.object({
   app: z.literal('ritam'),
-  version: z.literal(1),
+  version: z.literal(BACKUP_VERSION),
   settings: z.object({
     dayStart: z.int().min(0).max(360),
     streakThreshold: z.number().min(0.1).max(1),
@@ -134,12 +136,37 @@ const backupSchema = z.object({
 
 type Backup = z.output<typeof backupSchema>;
 
+const MISMATCH = 'Kopija nije ispravna: podaci se međusobno ne slažu.';
+
 function isSqliteError(err: unknown): boolean {
   return err instanceof Error && (err as { code?: string }).code === 'ERR_SQLITE_ERROR';
 }
 
-/** Briše sve podatke i upisuje redove iz kopije. Sve ili ništa. */
-export function importData(db: DatabaseSync, input: unknown): void {
+/** Redovi po rastućem id-ju: novi id-jevi zadržavaju redosled (sortiranje po id-ju kao drugi ključ). */
+const byId = <T extends { id: number }>(rows: T[]): T[] => [...rows].sort((a, b) => a.id - b.id);
+
+/** Prevod id-ja iz kopije u nov id; veza ka redu kog nema u kopiji → 400 (kao strani ključ). */
+function mapper(name: string) {
+  const map = new Map<number, number>();
+  return {
+    add(oldId: number, newId: number) {
+      if (map.has(oldId)) throw badRequest(`${MISMATCH} (${name}: dupli id ${oldId})`);
+      map.set(oldId, newId);
+    },
+    ref(oldId: number | null): number | null {
+      if (oldId == null) return null;
+      const v = map.get(oldId);
+      if (v === undefined) throw badRequest(MISMATCH);
+      return v;
+    },
+  };
+}
+
+/**
+ * Briše SVE podatke korisnika `uid` i upisuje redove iz kopije pod novim id-jevima. Sve ili ništa;
+ * drugi korisnici se ne diraju. Podešavanja iz kopije postaju podešavanja korisnika.
+ */
+export function importData(db: DatabaseSync, uid: number, input: unknown): void {
   const parsed = backupSchema.safeParse(input);
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
@@ -150,29 +177,128 @@ export function importData(db: DatabaseSync, input: unknown): void {
 
   try {
     tx(db, () => {
-      // Deca pre roditelja.
-      for (const t of [...TABLES].reverse()) db.exec(`DELETE FROM ${t.name}`);
-      for (const t of TABLES) {
-        const cols = t.columns as readonly string[];
-        const ins = db.prepare(
-          `INSERT INTO ${t.name} (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`,
+      // Deca pre roditelja; samo redovi ovog korisnika (blokovi šablona preko šablona).
+      db.prepare('DELETE FROM blocks WHERE user_id = ?').run(uid);
+      db.prepare('DELETE FROM tasks WHERE user_id = ?').run(uid);
+      db.prepare('DELETE FROM days WHERE user_id = ?').run(uid);
+      db.prepare('DELETE FROM weekday_templates WHERE user_id = ?').run(uid);
+      db.prepare('DELETE FROM template_blocks WHERE template_id IN (SELECT id FROM templates WHERE user_id = ?)').run(uid);
+      db.prepare('DELETE FROM templates WHERE user_id = ?').run(uid);
+      db.prepare('DELETE FROM categories WHERE user_id = ?').run(uid);
+
+      const insert = (sql: string, ...values: (string | number | null)[]) => Number(db.prepare(sql).run(...values).lastInsertRowid);
+
+      const cat = mapper('categories');
+      for (const r of byId(data.categories)) {
+        cat.add(
+          r.id,
+          insert(
+            'INSERT INTO categories (user_id, name, color, counts, sort, archived) VALUES (?, ?, ?, ?, ?, ?)',
+            uid,
+            r.name,
+            r.color,
+            r.counts,
+            r.sort,
+            r.archived,
+          ),
         );
-        const rows = data[t.name as TableName] as Record<string, string | number | null>[];
-        for (const row of rows) ins.run(...cols.map((c) => row[c] ?? null));
       }
+
+      const tpl = mapper('templates');
+      for (const r of byId(data.templates)) {
+        tpl.add(r.id, insert('INSERT INTO templates (user_id, name, sort) VALUES (?, ?, ?)', uid, r.name, r.sort));
+      }
+
+      const tb = mapper('template_blocks');
+      for (const r of byId(data.template_blocks)) {
+        tb.add(
+          r.id,
+          insert(
+            'INSERT INTO template_blocks (template_id, start_min, end_min, title, category_id) VALUES (?, ?, ?, ?, ?)',
+            tpl.ref(r.template_id),
+            r.start_min,
+            r.end_min,
+            r.title,
+            cat.ref(r.category_id),
+          ),
+        );
+      }
+
+      // Dupli dan u nedelji ili datum → PRIMARY KEY (user_id, …) → 400 ispod.
+      for (const r of data.weekday_templates) {
+        insert(
+          'INSERT INTO weekday_templates (user_id, weekday, template_id) VALUES (?, ?, ?)',
+          uid,
+          r.weekday,
+          tpl.ref(r.template_id),
+        );
+      }
+
+      for (const r of data.days) {
+        insert(
+          `INSERT INTO days (user_id, date, initialized, template_id, note, rating, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          uid,
+          r.date,
+          r.initialized,
+          tpl.ref(r.template_id),
+          r.note,
+          r.rating,
+          r.updated_at,
+        );
+      }
+
+      // Blok čiji dan nije u kopiji → strani ključ (user_id, date) → 400 ispod.
+      const blk = mapper('blocks');
+      for (const r of byId(data.blocks)) {
+        blk.add(
+          r.id,
+          insert(
+            `INSERT INTO blocks (user_id, date, start_min, end_min, title, category_id, status, actual_min, note)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            uid,
+            r.date,
+            r.start_min,
+            r.end_min,
+            r.title,
+            cat.ref(r.category_id),
+            r.status,
+            r.actual_min,
+            r.note,
+          ),
+        );
+      }
+
+      const tsk = mapper('tasks');
+      for (const r of byId(data.tasks)) {
+        tsk.add(
+          r.id,
+          insert(
+            `INSERT INTO tasks (user_id, date, title, done, done_at, category_id, sort, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            uid,
+            r.date,
+            r.title,
+            r.done,
+            r.done_at,
+            cat.ref(r.category_id),
+            r.sort,
+            r.created_at,
+          ),
+        );
+      }
+
       // Šabloni ne koriste obrisane kategorije (kao posle brisanja kroz API).
-      db.exec(
-        'UPDATE template_blocks SET category_id = NULL WHERE category_id IN (SELECT id FROM categories WHERE archived = 1)',
-      );
       db.prepare(
-        `INSERT INTO meta (key, value) VALUES ('settings', ?)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-      ).run(JSON.stringify(data.settings));
+        `UPDATE template_blocks SET category_id = NULL
+         WHERE category_id IN (SELECT id FROM categories WHERE user_id = ? AND archived = 1)`,
+      ).run(uid);
+      db.prepare('UPDATE users SET settings = ? WHERE id = ?').run(JSON.stringify(data.settings), uid);
     });
   } catch (err) {
     if (err instanceof HttpError) throw err;
-    // Duplirani id-jevi ili veze ka nepostojećim redovima.
-    if (isSqliteError(err)) throw badRequest('Kopija nije ispravna: podaci se međusobno ne slažu.');
+    // Duplirani dani ili veze ka nepostojećim redovima.
+    if (isSqliteError(err)) throw badRequest(MISMATCH);
     throw err;
   }
 }

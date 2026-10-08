@@ -17,7 +17,7 @@
 .set-row + .set-row {
   margin-top: 14px;
   padding-top: 14px;
-  border-top: 1px solid var(--border);
+  border-top: var(--hairline) solid var(--divider);
 }
 
 .set-row-text {
@@ -143,12 +143,6 @@
   font-variant-numeric: tabular-nums;
 }
 
-.set-version {
-  padding: 4px 2px 0;
-  font-size: 13px;
-  color: var(--text-3);
-}
-
 /* ---- Raspored ispočetka: objašnjenje, opcija, pa akcija ---- */
 
 .set-reset {
@@ -156,4 +150,23 @@
   flex-direction: column;
   align-items: flex-start;
   gap: 12px;
+}
+
+/* ---- Nalog ---- */
+
+/* Dugačka email adresa se prelama posle "@" (<wbr>, SettingsPage), a deo duži od reda bilo gde —
+   nikad ne gura karticu u širinu. */
+.set-email {
+  overflow-wrap: anywhere;
+}
+
+/* Greška u podnožju sheet-a (promena lozinke) zauzima ceo red iznad dugmadi. */
+.sheet-foot:has(> .set-foot-error) {
+  flex-wrap: wrap;
+}
+
+.set-foot-error {
+  flex: 1 0 100%;
+  font-size: 13px;
+  color: var(--danger);
 }

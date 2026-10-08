@@ -5,9 +5,11 @@ import { existsSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { serve } from '@hono/node-server';
 import { createApp } from './app.ts';
-import { createAuth, loadSessionKey } from './auth.ts';
+import { Accounts } from './accounts.ts';
+import { createAccessTokens, dummyPasswordHash, loadSessionKey } from './auth.ts';
+import type { SignupPolicy } from './auth.ts';
 import { openDatabase } from './db.ts';
-import { Repo } from './repo.ts';
+import { repoFactory } from './repo.ts';
 
 /** Koren projekta; relativne putanje iz env-a se računaju od njega. */
 const ROOT = resolve(import.meta.dirname, '..');
@@ -18,19 +20,64 @@ if (!Number.isInteger(port) || port < 1 || port > 65535) {
   console.error(`Ritam: neispravan PORT "${env.PORT}".`);
   process.exit(1);
 }
-const password = env.APP_PASSWORD ?? '';
-// Bez lozinke nema prijave, pa server podrazumevano sluša samo na ovoj mašini (ne na celoj mreži).
-const host = env.HOST || (password ? '0.0.0.0' : '127.0.0.1');
+/** Ceo broj iz env-a u opsegu; neispravna vrednost → poruka i izlaz 1. */
+function intEnv(name: string, fallback: number, min: number, max: number): number {
+  const raw = (env[name] ?? '').trim();
+  if (raw === '') return fallback;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < min || n > max) {
+    console.error(`Ritam: neispravan ${name} "${raw}" (ceo broj od ${min} do ${max}).`);
+    process.exit(1);
+  }
+  return n;
+}
+
+// Registracija: SIGNUP = open | code | closed. Kod je SIGNUP_CODE, a ako nije postavljen APP_PASSWORD
+// (docker-compose.yml ga uvek prosleđuje — više nije lozinka za prijavu, nego kod za registraciju).
+const signupCode = env.SIGNUP_CODE || env.APP_PASSWORD || '';
+const signupRaw = (env.SIGNUP ?? '').trim().toLowerCase();
+let signup: SignupPolicy;
+if (signupRaw === '') signup = signupCode ? 'code' : 'open';
+else if (signupRaw === 'open' || signupRaw === 'code' || signupRaw === 'closed') signup = signupRaw;
+else {
+  console.error(`Ritam: neispravan SIGNUP "${env.SIGNUP}" (open, code ili closed).`);
+  process.exit(1);
+}
+if (signup === 'code' && !signupCode) {
+  console.error('Ritam: SIGNUP=code, a kod nije postavljen — postavi SIGNUP_CODE (ili APP_PASSWORD).');
+  process.exit(1);
+}
+if (env.ALLOW_NO_AUTH) {
+  console.warn(
+    'Ritam: ALLOW_NO_AUTH se više ne koristi — prijava (nalozi) je uvek uključena; registraciju bira SIGNUP.',
+  );
+}
+// Bez koda (i bez izričitog SIGNUP=open) registracija je otvorena, pa server podrazumevano sluša samo na ovoj
+// mašini: svako na mreži bi inače mogao da napravi nalog pre vlasnika, a PRVI nalog preuzima postojeće podatke.
+// Sa kodom (Docker: APP_PASSWORD) ili izričitom politikom sluša na svim adresama.
+const openByDefault = signupRaw === '' && signup === 'open';
+const host = env.HOST || (openByDefault ? '127.0.0.1' : '0.0.0.0');
 const isLoopbackHost = host === 'localhost' || host === '::1' || /^127\.\d+\.\d+\.\d+$/.test(host);
-// Bez lozinke i otvoren mreži (Docker postavlja HOST=0.0.0.0) = svako ko vidi server vidi i sve beleške.
-// Zato se server ne pokreće — npr. kad APP_PASSWORD nedostaje ili je pogrešno napisan na Railway-u.
-if (!password && !isLoopbackHost && env.ALLOW_NO_AUTH !== '1') {
+if (openByDefault && !isLoopbackHost) {
   console.error(
-    `Ritam: APP_PASSWORD nije postavljen, a server bi slušao na HOST=${host} — bez prijave bi svako ko vidi ` +
-      'server video sve tvoje podatke. Postavi APP_PASSWORD (ili ALLOW_NO_AUTH=1 ako je to baš namerno).',
+    `Ritam: nema koda za registraciju (SIGNUP_CODE ili APP_PASSWORD), a server bi slušao na HOST=${host} — svako ` +
+      'ko vidi server mogao bi da napravi nalog, a prvi nalog preuzima postojeće podatke. Postavi SIGNUP_CODE (ili ' +
+      'APP_PASSWORD), ili SIGNUP=open ako je otvorena registracija baš namerna.',
   );
   process.exit(1);
 }
+// Ključ potpisa access tokena se izvodi samo iz SESSION_SECRET: svako ko ima nalog dobija potpisan token i može
+// offline da pogađa kratak (ili rečnički) SECRET, pa da lažira token za bilo koji nalog.
+if (env.SESSION_SECRET && env.SESSION_SECRET.length < 32) {
+  console.warn(
+    'Ritam: SESSION_SECRET je prekratak (manje od 32 znaka) — ko ima nalog može offline da pogađa ključ i lažira ' +
+      'tokene za druge naloge. Generiši nov sa `openssl rand -hex 32` (promena nikog ne odjavljuje).',
+  );
+}
+// Trajanje tokena (testovi ih skraćuju; vidi README, smoke test).
+const accessTtlSec = intEnv('ACCESS_TOKEN_TTL_SEC', 15 * 60, 1, 24 * 60 * 60);
+const refreshTtlSec = intEnv('REFRESH_TOKEN_TTL_SEC', 90 * 24 * 60 * 60, 60, 400 * 24 * 60 * 60);
+const raceGraceSec = intEnv('REFRESH_RACE_GRACE_SEC', 30, 0, 300);
 // Iza reverse proxy-ja (Caddy, Railway) adresa klijenta je u X-Forwarded-For: TRUST_PROXY = broj proxy-ja.
 const trustRaw = (env.TRUST_PROXY ?? '').trim().toLowerCase();
 const proxyHops = trustRaw === 'true' ? 1 : trustRaw === '' || trustRaw === 'false' ? 0 : Number(trustRaw);
@@ -44,24 +91,41 @@ const staticCandidate = resolve(ROOT, env.STATIC_DIR || 'dist/web');
 const staticDir = existsSync(join(staticCandidate, 'index.html')) ? staticCandidate : null;
 
 const db = openDatabase(dbFile);
-const repo = new Repo(db);
+const repos = repoFactory(db);
+const accounts = new Accounts(db, { refreshTtlSec, raceGraceSec });
 // Blok šablona ceo van logičkog dana (npr. sačuvan ranijom verzijom klijenta) bio bi skriven na traci i u
-// danu: prelazi na drugi kraj dana, isto kao pri promeni dayStart. Ponovljeno pokretanje ništa ne menja.
-const movedTemplateBlocks = repo.normalizeTemplateBlocks();
+// danu: prelazi na drugi kraj dana, isto kao pri promeni dayStart (za svakog korisnika, po njegovom dayStart).
+// Ponovljeno pokretanje ništa ne menja.
+const movedTemplateBlocks = accounts.userIds().reduce((n, uid) => n + repos(uid).normalizeTemplateBlocks(), 0);
 if (movedTemplateBlocks > 0) {
   console.log(`Ritam: blokovi šablona van logičkog dana premešteni na drugi kraj dana (${movedTemplateBlocks}).`);
 }
-// Bez SESSION_SECRET ključ sesije je nasumičan i čuva se uz bazu (DATA_DIR/session.key).
-const auth = createAuth(password, password ? env.SESSION_SECRET || loadSessionKey(join(dataDir, 'session.key')) : '');
-const app = createApp({ db, repo, auth, staticDir, proxyHops });
-
-if (!auth.required) {
+const userCount = accounts.userIds().length;
+const unclaimed = userCount === 0 && accounts.hasUnclaimedData();
+if (unclaimed) {
+  console.log('Ritam: baza ima podatke iz verzije bez naloga — prvi nalog koji se registruje ih preuzima.');
+}
+if (signup === 'open' && !isLoopbackHost) {
+  // Ovde je SIGNUP=open izričit (podrazumevano otvorena registracija na mreži se ne pokreće, vidi gore).
   console.warn(
-    isLoopbackHost
-      ? `Ritam: APP_PASSWORD nije postavljen — prijava je isključena, server sluša samo na ${host}.`
-      : `Ritam: APP_PASSWORD nije postavljen — prijava je isključena (ALLOW_NO_AUTH=1), aplikaciji može pristupiti svako ko vidi server (HOST=${host}).`,
+    `Ritam: registracija je otvorena svima (SIGNUP=open, HOST=${host}) — bilo ko ko vidi server može da napravi ` +
+      'nalog. Postavi SIGNUP_CODE (ili APP_PASSWORD) da registracija traži kod, ili SIGNUP=closed kad napraviš svoje naloge.' +
+      (unclaimed ? ' PAŽNJA: prvi ko napravi nalog preuzima SVE postojeće podatke — odmah napravi svoj nalog.' : ''),
+  );
+} else if (openByDefault) {
+  console.log(
+    `Ritam: nema koda za registraciju — registracija je otvorena, pa server sluša samo na ${host}. Za pristup sa ` +
+      'telefona ili druge mašine postavi SIGNUP_CODE (kod za registraciju).',
   );
 }
+// Ključ za potpis access tokena: SESSION_SECRET ili nasumičan ključ uz bazu (DATA_DIR/session.key).
+const sessionKey = env.SESSION_SECRET || loadSessionKey(join(dataDir, 'session.key'));
+const tokens = createAccessTokens(sessionKey, accessTtlSec);
+// Heš za prijavu sa nepostojećim emailom se pravi unapred (ni prva takva prijava ne traje duže).
+void dummyPasswordHash();
+const app = createApp({ db, repos, accounts, tokens, signup, signupCode, refreshTtlSec, staticDir, proxyHops });
+
+const SIGNUP_LABEL: Record<SignupPolicy, string> = { open: 'otvorena', code: 'uz kod', closed: 'zatvorena' };
 
 /** Kraći prikaz putanje u logu (relativno na trenutni folder kad je moguće). */
 function displayPath(p: string): string {
@@ -73,7 +137,7 @@ const server = serve({ fetch: app.fetch, port, hostname: host }, (info) => {
   const shownHost = host === '0.0.0.0' || host === '::' ? 'localhost' : host;
   const extra = staticDir ? '' : ', bez web build-a — za razvoj koristi Vite na :5173';
   console.log(
-    `Ritam: http://${shownHost}:${info.port} (baza: ${displayPath(dbFile)}, prijava: ${auth.required ? 'uključena' : 'isključena'}${extra})`,
+    `Ritam: http://${shownHost}:${info.port} (baza: ${displayPath(dbFile)}, registracija: ${SIGNUP_LABEL[signup]}, nalozi: ${userCount}${extra})`,
   );
 });
 

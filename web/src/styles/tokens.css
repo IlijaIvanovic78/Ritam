@@ -1,5 +1,8 @@
 /* Dizajn tokeni. Topli neutralni tonovi, jedna "mastilo" boja za primarne akcije,
-   statusne boje samo za stanje blokova. Bez gradijenata i staklenih efekata. */
+   statusne boje samo za stanje blokova. Bez gradijenata i staklenih efekata.
+   Jedan akcenat po temi (--now): trenutno vreme, današnji dan, aktivan tab i fokus — nikad za
+   status ni kategorije. Tamna tema: prigušena "šampanj" boja (kao zlatotisak na crnom); svetla:
+   tamno "mastilo" plavo (smeđe-zlatna bi se na papiru mešala sa --partial). */
 
 :root {
   color-scheme: light;
@@ -17,7 +20,7 @@
 
   --accent: #1d1d1b; /* primarna dugmad */
   --accent-contrast: #ffffff;
-  --focus: #2f6db5;
+  --focus: #3a5f8f;
   /* Izabrana stavka Segmented kontrole i dugme prekidača: svetlije od staze. */
   --raised: #ffffff;
   --raised-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
@@ -33,8 +36,8 @@
   --skipped-bg: #f6e2de;
   --danger: #b4483c;
   --danger-contrast: #ffffff; /* tekst na --danger */
-  --now: #2f6db5;
-  --now-bg: #edf3fb;
+  --now: #3a5f8f;
+  --now-bg: #eef2f7;
 
   /* Napredak: udeo --done u ćelijama heatmape po nivou 0–3 (nivo 4 je puna --done); tekst na nivou 3. */
   --heat-0: 26%;
@@ -44,13 +47,27 @@
   --heat-ink-3: var(--text);
 
   --shadow-pop: 0 12px 32px rgba(20, 20, 18, 0.14), 0 2px 6px rgba(20, 20, 18, 0.06);
+  /* Toast na vrhu otvorenog sheet-a: kratka senka (ne sme da zatamni naslov sheet-a ispod). */
+  --shadow-toast-top: var(--shadow-pop);
   --backdrop: rgba(20, 20, 18, 0.32);
 
-  --radius-sm: 6px;
-  --radius: 8px;
-  --radius-lg: 12px;
+  /* Razdelnici unutar kartica i traka (redovi liste, podnožje sheet-a, donja traka): na ekranima
+     visoke gustine tanji od piksela (1 fizički piksel), kao fine linije u logotipu; zato malo
+     tamnija boja, da se vide jednako kao ranije. Okviri kartica i polja ostaju 1px --border. */
+  --hairline: 1px;
+  --divider: var(--border);
+
+  /* Nešto oštriji uglovi nego ranije: uz klasični serif kartice deluju kao list papira, ne kao balon. */
+  --radius-sm: 5px;
+  --radius: 7px;
+  --radius-lg: 10px;
 
   --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  /* Samo za naslove (stranica, datum dana, sheet, prazna stanja, period u Napretku, datumi u
+     Dnevniku): knjiški serif uz logo. Nikad za podatke (vreme, brojevi, nazivi blokova).
+     'EB Garamond Fallback' (fonts.css) je Georgia podešena na meru EB Garamonda, pa se naslov ne
+     pomera kad font stigne. */
+  --font-display: 'EB Garamond', 'EB Garamond Fallback', 'Iowan Old Style', 'Palatino Linotype', Georgia, serif;
   --mono: ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, Consolas, monospace;
 
   --tabbar-h: 58px;
@@ -74,7 +91,7 @@
     --text-3: #858583;
     --accent: #ededeb;
     --accent-contrast: #0a0a0a;
-    --focus: #8ab4f0;
+    --focus: #cbbd9f;
     --raised: #2a2a2a;
     --raised-shadow: inset 0 0 0 1px #333333;
     --toggle-knob: #858583;
@@ -87,8 +104,8 @@
     --skipped-bg: rgba(224, 123, 107, 0.13);
     --danger: #e07b6b;
     --danger-contrast: #0a0a0a;
-    --now: #8ab4f0;
-    --now-bg: rgba(138, 180, 240, 0.07);
+    --now: #cbbd9f;
+    --now-bg: rgba(203, 189, 159, 0.07);
     /* Ravnomerniji koraci na crnoj podlozi; nivo 0 se i dalje razlikuje od nepraćenog dana. */
     --heat-0: 22%;
     --heat-1: 36%;
@@ -96,6 +113,7 @@
     --heat-3: 70%;
     --heat-ink-3: var(--bg);
     --shadow-pop: 0 0 0 1px #262626, 0 18px 44px rgba(0, 0, 0, 0.7);
+    --shadow-toast-top: 0 0 0 1px #262626, 0 4px 12px rgba(0, 0, 0, 0.35);
     --backdrop: rgba(0, 0, 0, 0.68);
   }
 }
@@ -113,7 +131,7 @@
   --text-3: #858583;
   --accent: #ededeb;
   --accent-contrast: #0a0a0a;
-  --focus: #8ab4f0;
+  --focus: #cbbd9f;
   --raised: #2a2a2a;
   --raised-shadow: inset 0 0 0 1px #333333;
   --toggle-knob: #858583;
@@ -126,13 +144,22 @@
   --skipped-bg: rgba(224, 123, 107, 0.13);
   --danger: #e07b6b;
   --danger-contrast: #0a0a0a;
-  --now: #8ab4f0;
-  --now-bg: rgba(138, 180, 240, 0.07);
+  --now: #cbbd9f;
+  --now-bg: rgba(203, 189, 159, 0.07);
   --heat-0: 22%;
   --heat-1: 36%;
   --heat-2: 52%;
   --heat-3: 70%;
   --heat-ink-3: var(--bg);
   --shadow-pop: 0 0 0 1px #262626, 0 18px 44px rgba(0, 0, 0, 0.7);
+  --shadow-toast-top: 0 0 0 1px #262626, 0 4px 12px rgba(0, 0, 0, 0.35);
   --backdrop: rgba(0, 0, 0, 0.68);
+}
+
+/* Ekrani visoke gustine (telefoni, retina): razdelnici od jednog fizičkog piksela. */
+@media (-webkit-min-device-pixel-ratio: 2), (min-resolution: 2dppx) {
+  :root {
+    --hairline: 0.5px;
+    --divider: color-mix(in srgb, var(--border) 50%, var(--border-strong));
+  }
 }

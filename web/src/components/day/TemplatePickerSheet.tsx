@@ -61,7 +61,7 @@ export function TemplatePickerSheet({
               <button type="button" className={cx('day-tpl', current && 'is-current')} onClick={() => onPick(t.id)}>
                 <span className="day-tpl-top">
                   <span className="day-tpl-name">{t.name}</span>
-                  {current && <span className="day-tag">trenutni</span>}
+                  {current && <span className="day-tpl-current">trenutni</span>}
                 </span>
                 <MiniBar template={t} dayStart={dayStart} catMap={catMap} />
                 <span className="day-tpl-meta">
