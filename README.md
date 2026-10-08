@@ -12,9 +12,16 @@ Treba ti Docker Desktop. U folderu projekta:
 docker compose up -d --build
 ```
 
-Otvori http://localhost:3000. Lozinka je `APP_PASSWORD` iz fajla `.env`; ako fajl ne postoji, napravi ga
-po uzoru na `.env.example`. Vrednosti u `.env` piši u jednostrukim navodnicima (`APP_PASSWORD='…'`):
-bez njih Docker Compose menja znak `$` u lozinki, pa prava lozinka ne bi radila.
+Otvori http://localhost:3001. Lozinka je `APP_PASSWORD` iz fajla `.env`; ako fajl ne postoji, napravi ga
+po uzoru na `.env.example` (`APP_PASSWORD` i `SESSION_SECRET` su obavezni). Vrednosti u `.env` piši u
+jednostrukim navodnicima (`APP_PASSWORD='…'`): bez njih Docker Compose menja znak `$` u lozinki, pa prava
+lozinka ne bi radila.
+
+`docker-compose.yml` vezuje aplikaciju samo na `127.0.0.1:3001`, pa je na serveru dostupna samo preko
+reverse proxy-ja (nginx, Caddy…) na istoj mašini. Proxy treba da prosledi `X-Forwarded-For` i
+`X-Forwarded-Proto` (npr. nginx: `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;` i
+`proxy_set_header X-Forwarded-Proto $scheme;`). Za VPS bez sopstvenog proxy-ja postoji
+`docker-compose.prod.yml` sa Caddy-jem (vidi Opciju B ispod).
 
 Zaustavljanje: `docker compose down`. Podaci ostaju u Docker volumenu `<ime foldera>_ritam-data`
 (npr. `app_ritam-data`; vidi `docker volume ls`).
