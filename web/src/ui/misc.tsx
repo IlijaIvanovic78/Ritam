@@ -1,5 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import type { Category } from '../../../shared/types.ts';
+import { useT, type MessageKey } from '../i18n/index.ts';
 import { Icon } from './Icon.tsx';
 import { cx } from './cx.ts';
 
@@ -65,7 +66,8 @@ export function Empty({ title, text, action }: { title: ReactNode; text?: ReactN
 }
 
 export function Spinner({ small }: { small?: boolean }) {
-  return <span className={cx('spinner', small && 'spinner-sm')} role="status" aria-label="Učitavanje" />;
+  const t = useT();
+  return <span className={cx('spinner', small && 'spinner-sm')} role="status" aria-label={t('ui.loading')} />;
 }
 
 export function PageLoader() {
@@ -242,9 +244,10 @@ export const CategoryPicker = forwardRef<
     onPendingChange?: (pending: boolean) => void;
   }
 >(function CategoryPicker(
-  { categories, value, onChange, allowNone = true, label = 'Kategorija', onCreate, onPendingChange },
+  { categories, value, onChange, allowNone = true, label, onCreate, onPendingChange },
   ref,
 ) {
+  const t = useT();
   const values: Array<number | null> = categories.map((c) => c.id);
   if (allowNone) values.push(null);
   const selected = values.indexOf(value);
@@ -295,7 +298,7 @@ export const CategoryPicker = forwardRef<
     if (!onCreate) return Promise.resolve(null);
     const trimmed = name.trim();
     if (!trimmed) {
-      const msg = 'Upiši naziv kategorije.';
+      const msg = t('ui.categoryPicker.nameRequired');
       setError(msg);
       inputRef.current?.focus();
       return Promise.reject(new Error(msg));
@@ -311,7 +314,7 @@ export const CategoryPicker = forwardRef<
         refocus.current = id != null ? 'selected' : 'add';
         return id;
       } catch (e) {
-        setError(e instanceof Error && e.message ? e.message : 'Kategorija nije napravljena. Pokušaj ponovo.');
+        setError(e instanceof Error && e.message ? e.message : t('ui.categoryPicker.failed'));
         requestAnimationFrame(() => inputRef.current?.focus());
         throw e;
       } finally {
@@ -352,7 +355,7 @@ export const CategoryPicker = forwardRef<
     <div
       className="chips"
       role="radiogroup"
-      aria-label={label}
+      aria-label={label ?? t('ui.categoryPicker.label')}
       onKeyDown={(e) => {
         // Strelice samo na čipovima kategorija (ne u polju za novu kategoriju).
         if (e.target instanceof HTMLElement && e.target.getAttribute('role') === 'radio') {
@@ -384,7 +387,7 @@ export const CategoryPicker = forwardRef<
           className={cx('chip', value === null && 'is-active')}
           onClick={() => onChange(null)}
         >
-          Bez kategorije
+          {t('common.noCategory')}
         </button>
       )}
       {onCreate &&
@@ -395,8 +398,8 @@ export const CategoryPicker = forwardRef<
               className={cx('input', 'chip-new-input')}
               value={name}
               maxLength={CATEGORY_NAME_MAX}
-              placeholder="Naziv kategorije"
-              aria-label="Naziv nove kategorije"
+              placeholder={t('ui.categoryPicker.namePlaceholder')}
+              aria-label={t('ui.categoryPicker.nameLabel')}
               aria-invalid={!!error || undefined}
               autoComplete="off"
               enterKeyHint="done"
@@ -412,8 +415,8 @@ export const CategoryPicker = forwardRef<
             <button
               type="button"
               className="icon-btn icon-btn-ghost icon-btn-sm"
-              aria-label="Dodaj kategoriju"
-              title="Dodaj kategoriju"
+              aria-label={t('ui.categoryPicker.create')}
+              title={t('ui.categoryPicker.create')}
               disabled={busy}
               onClick={create}
             >
@@ -422,8 +425,8 @@ export const CategoryPicker = forwardRef<
             <button
               type="button"
               className="icon-btn icon-btn-ghost icon-btn-sm"
-              aria-label="Odustani od nove kategorije"
-              title="Odustani"
+              aria-label={t('ui.categoryPicker.cancelLabel')}
+              title={t('ui.categoryPicker.cancel')}
               disabled={busy}
               onClick={cancel}
             >
@@ -434,14 +437,14 @@ export const CategoryPicker = forwardRef<
           <button
             type="button"
             className="chip chip-add"
-            aria-label="Nova kategorija"
+            aria-label={t('ui.categoryPicker.new')}
             onClick={() => {
               setError(null);
               setCreating(true);
             }}
           >
             <Icon name="plus" size={16} />
-            Nova
+            {t('ui.categoryPicker.newShort')}
           </button>
         ))}
     </div>
@@ -483,19 +486,27 @@ export function Toggle({
   );
 }
 
-const RATING_LABELS = ['Loš', 'Slab', 'Okej', 'Dobar', 'Odličan'];
+/** Nazivi ocena 1–5 (ključevi kataloga): "Bad" … "Great" / "Loš" … "Odličan". */
+const RATING_KEYS = [
+  'ui.rating.1',
+  'ui.rating.2',
+  'ui.rating.3',
+  'ui.rating.4',
+  'ui.rating.5',
+] as const satisfies readonly MessageKey[];
 
 /** Ocena dana 1–5; ponovni klik na istu ocenu je briše (null), pa su to prekidači, ne radio grupa. */
 export function RatingInput({ value, onChange }: { value: number | null; onChange: (v: number | null) => void }) {
+  const t = useT();
   return (
-    <div className="rating" role="group" aria-label="Ocena dana">
+    <div className="rating" role="group" aria-label={t('ui.rating.label')}>
       {[1, 2, 3, 4, 5].map((n) => (
         <button
           key={n}
           type="button"
           aria-pressed={value === n}
-          aria-label={`${n} — ${RATING_LABELS[n - 1]}`}
-          title={RATING_LABELS[n - 1]}
+          aria-label={`${n} — ${t(RATING_KEYS[n - 1])}`}
+          title={t(RATING_KEYS[n - 1])}
           className={cx('rating-btn', value === n && 'is-on', value != null && n < value && 'is-below')}
           onClick={() => onChange(value === n ? null : n)}
         >
@@ -508,9 +519,14 @@ export function RatingInput({ value, onChange }: { value: number | null; onChang
 
 /** Prikaz ocene (samo za čitanje), npr. u dnevniku. */
 export function RatingDots({ value }: { value: number | null }) {
+  const t = useT();
   if (value == null) return null;
   return (
-    <span className="rating-dots" aria-label={`Ocena ${value} od 5`} title={`${value}/5 — ${RATING_LABELS[value - 1]}`}>
+    <span
+      className="rating-dots"
+      aria-label={t('ui.rating.value', { value })}
+      title={`${value}/5 — ${t(RATING_KEYS[value - 1])}`}
+    >
       {[1, 2, 3, 4, 5].map((n) => (
         <span key={n} className={cx('rating-dot', n <= value && 'is-on')} />
       ))}
@@ -518,4 +534,4 @@ export function RatingDots({ value }: { value: number | null }) {
   );
 }
 
-export { RATING_LABELS };
+export { RATING_KEYS };

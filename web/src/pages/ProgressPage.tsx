@@ -25,6 +25,7 @@ import {
   type PeriodMode,
   type PeriodSel,
 } from '../components/progress/period.ts';
+import { useLang, useT } from '../i18n/index.ts';
 import { useLogicalNow } from '../lib/hooks.ts';
 import { Link, dayPath, navigate, paths } from '../lib/router.tsx';
 import { useAllCategoryMap, useScheduleData, useSettings } from '../lib/store.ts';
@@ -46,11 +47,6 @@ interface HeatData {
   stats: StatsPayload;
 }
 
-const MODE_OPTIONS: Array<{ value: PeriodMode; label: string }> = [
-  { value: 'week', label: 'Nedelja' },
-  { value: 'month', label: 'Mesec' },
-];
-
 /** Posle ovoliko vremena u pozadini podaci se tiho osveže pri povratku u aplikaciju. */
 const REFRESH_AFTER_MS = 60_000;
 
@@ -61,6 +57,8 @@ const memo: { data: PeriodData | null; heat: HeatData | null } = { data: null, h
 
 export default function ProgressPage() {
   const today = useLogicalNow().date;
+  const lang = useLang();
+  const t = useT();
   // Danas se otvara na "/", da bi se prikaz sam prebacio na novi dan.
   const openDay = (date: string) => navigate(dayPath(date, today));
   const { streakThreshold } = useSettings();
@@ -164,14 +162,19 @@ export default function ProgressPage() {
     });
   const reset = () => setSel((s) => ({ mode: s.mode, start: null }));
 
+  const modeOptions: Array<{ value: PeriodMode; label: string }> = [
+    { value: 'week', label: t('progress.mode.week') },
+    { value: 'month', label: t('progress.mode.month') },
+  ];
+
   const isWeek = period.mode === 'week';
-  const stale = data != null && data.key !== key;
+  const stale =data != null && data.key !== key;
   const errorNow = dataError != null && dataError.key === key && !(data && data.key === key);
   const totalDays = diffDays(period.start, fetchTo) + 1;
   const trackedNow = data && data.key === key ? data.stats.totals.daysTracked : null;
 
   const heatCard = (
-    <Card title="Poslednjih 12 nedelja" className="prog-hm-card prog-order-4">
+    <Card title={t('progress.heatmap.title')} className="prog-hm-card prog-order-4">
       {heat ? (
         <WeeksHeatmap
           from={heat.from}
@@ -183,9 +186,9 @@ export default function ProgressPage() {
         />
       ) : heatError ? (
         <div className="prog-note-row">
-          <p className="prog-note">Nije učitano. {heatError}</p>
+          <p className="prog-note">{t('progress.heatmap.loadError', { error: heatError })}</p>
           <Button size="sm" variant="ghost" onClick={retry}>
-            Pokušaj ponovo
+            {t('common.retry')}
           </Button>
         </div>
       ) : (
@@ -202,11 +205,11 @@ export default function ProgressPage() {
       <>
         <Card>
           <Empty
-            title="Statistika nije učitana."
+            title={t('progress.loadError')}
             text={dataError?.message}
             action={
               <Button variant="secondary" icon="refresh" onClick={retry}>
-                Pokušaj ponovo
+                {t('common.retry')}
               </Button>
             }
           />
@@ -231,18 +234,18 @@ export default function ProgressPage() {
         <Card className={cx('prog-fade', staleCls)}>
           {noSchedule ? (
             <Empty
-              title="Još nema praćenih dana."
-              text="Napravi raspored, pa oceni blokove na stranici Danas — napredak će se pojaviti ovde."
+              title={t('progress.empty.newTitle')}
+              text={t('progress.empty.newText')}
               action={
                 <Link to={paths.schedule} className="btn btn-secondary">
-                  Podesi raspored
+                  {t('progress.empty.setUpSchedule')}
                 </Link>
               }
             />
           ) : (
             <Empty
-              title={dataIsCurrent ? 'Još nema praćenih dana u ovom periodu.' : 'U ovom periodu nema praćenih dana.'}
-              text="Oceni blokove na stranici Danas i napredak će se pojaviti ovde."
+              title={t(dataIsCurrent ? 'progress.empty.periodTitleCurrent' : 'progress.empty.periodTitlePast')}
+              text={t('progress.empty.periodText')}
             />
           )}
         </Card>
@@ -262,7 +265,7 @@ export default function ProgressPage() {
             na uskom ekranu jedna kolona redom: grafik, kategorije, zadaci, 12 nedelja. */}
         <div className="prog-grid">
           <div className="prog-col">
-            <Card title="Ispunjenost po danu" className={cx('prog-fade', 'prog-order-1', staleCls)}>
+            <Card title={t('progress.byDay.title')} className={cx('prog-fade', 'prog-order-1', staleCls)}>
               {d.period.mode === 'week' ? (
                 <WeekChart
                   dates={eachDay(d.period.start, d.period.end)}
@@ -285,7 +288,7 @@ export default function ProgressPage() {
               )}
             </Card>
             <Card
-              title="Završeni zadaci"
+              title={t('progress.tasks.title')}
               actions={d.tasks.length > 0 ? <span className="prog-count">{d.tasks.length}</span> : undefined}
               className={cx('prog-fade', 'prog-order-3', staleCls)}
             >
@@ -293,7 +296,7 @@ export default function ProgressPage() {
             </Card>
           </div>
           <div className="prog-col">
-            <Card title="Po kategoriji" className={cx('prog-fade', 'prog-order-2', staleCls)}>
+            <Card title={t('progress.categories.title')} className={cx('prog-fade', 'prog-order-2', staleCls)}>
               <CategoryList items={d.stats.totals.categories} catMap={catMap} />
             </Card>
             {heatCard}
@@ -306,32 +309,44 @@ export default function ProgressPage() {
   return (
     <div className="page prog">
       <PageHeader
-        title="Napredak"
-        actions={<Segmented label="Period" size="sm" value={period.mode} options={MODE_OPTIONS} onChange={changeMode} />}
+        title={t('progress.title')}
+        actions={
+          <Segmented
+            label={t('progress.mode.label')}
+            size="sm"
+            value={period.mode}
+            options={modeOptions}
+            onChange={changeMode}
+          />
+        }
       />
 
       <div className="prog-body" aria-busy={stale || !data || undefined}>
         <div className="prog-bar">
           <div className="prog-nav">
-            <IconButton icon="chevron-left" label={isWeek ? 'Prethodna nedelja' : 'Prethodni mesec'} onClick={() => step(-1)} />
+            <IconButton
+              icon="chevron-left"
+              label={t(isWeek ? 'progress.nav.prevWeek' : 'progress.nav.prevMonth')}
+              onClick={() => step(-1)}
+            />
             <IconButton
               icon="chevron-right"
-              label={isWeek ? 'Sledeća nedelja' : 'Sledeći mesec'}
+              label={t(isWeek ? 'progress.nav.nextWeek' : 'progress.nav.nextMonth')}
               onClick={() => step(1)}
               disabled={period.end >= today}
             />
           </div>
           <div className="prog-period">
             <h2 className="prog-period-title" aria-live="polite">
-              {periodTitle(period, today)}
+              {periodTitle(period, today, lang)}
             </h2>
             <p className="prog-period-sub">
-              {trackedNow != null ? `Praćeno ${trackedNow} od ${totalDays} dana` : '\u00a0'}
+              {trackedNow != null ? t('progress.tracked', { tracked: trackedNow, n: totalDays }) : '\u00a0'}
             </p>
           </div>
           {!isCurrent && (
             <Button variant="ghost" size="sm" className="prog-reset" onClick={reset}>
-              {isWeek ? 'Ova nedelja' : 'Ovaj mesec'}
+              {t(isWeek ? 'progress.nav.thisWeek' : 'progress.nav.thisMonth')}
             </Button>
           )}
         </div>

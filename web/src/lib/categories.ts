@@ -2,6 +2,7 @@
 
 import type { Category, SchedulePayload } from '../../../shared/types.ts';
 import { ApiError, api, isCachedPayload } from '../api.ts';
+import { t } from '../i18n/index.ts';
 import { toast } from '../ui/index.ts';
 import { nextFreeColor } from './palette.ts';
 import { scheduleStore } from './store.ts';
@@ -64,10 +65,6 @@ export async function createCategory(
  */
 export async function createInlineCategory(name: string): Promise<number | null> {
   const { id, reused } = await createCategory(name, { reuseExisting: true });
-  toast(
-    reused
-      ? 'Kategorija sa tim nazivom već postoji — izabrana je ona.'
-      : 'Kategorija je dodata i računa se u ispunjenost (menja se u Rasporedu).',
-  );
+  toast(reused ? t('schedule.categoryInline.reused') : t('schedule.categoryInline.created'));
   return id;
 }

@@ -2,7 +2,8 @@
 
 import { useId, type KeyboardEvent } from 'react';
 import type { StatsDay } from '../../../../shared/types.ts';
-import { WEEKDAY_SHORT, fmtPercent, isoWeekday } from '../../../../shared/time.ts';
+import { fmtPercent, isoWeekday, weekdayShort } from '../../../../shared/time.ts';
+import { useLang, useT } from '../../i18n/index.ts';
 import { cx } from '../../ui/index.ts';
 import { dayTip, isLiveDay } from './period.ts';
 import { useElementWidth } from './useElementWidth.ts';
@@ -47,6 +48,8 @@ export function WeekChart({
   threshold: number;
   onOpen: (date: string) => void;
 }) {
+  const lang = useLang();
+  const t = useT();
   const [ref, measured] = useElementWidth<HTMLDivElement>(320);
   const descId = useId();
   const w = Math.max(240, measured);
@@ -62,13 +65,15 @@ export function WeekChart({
   let hasLive = false;
   const summary = dates
     .map((date) => {
-      const wd = WEEKDAY_SHORT[isoWeekday(date) - 1];
-      if (date > lastDate) return `${wd} predstoji`;
+      const wd = weekdayShort(isoWeekday(date), lang);
+      if (date > lastDate) return t('progress.week.upcoming', { day: wd });
       const day = days.get(date);
       const score = day?.summary?.score ?? null;
       const live = isLiveDay(date, day, today, threshold);
       if (live) hasLive = true;
-      return `${wd} ${score == null ? 'nije praćeno' : fmtPercent(score)}${live ? ' u toku' : ''}`;
+      const parts = [wd, score == null ? t('progress.notTracked') : fmtPercent(score)];
+      if (live) parts.push(t('progress.live'));
+      return parts.join(' ');
     })
     .join(', ');
 
@@ -85,7 +90,7 @@ export function WeekChart({
         <svg
           viewBox={`0 0 ${w} ${H}`}
           role="group"
-          aria-label="Ispunjenost po danu"
+          aria-label={t('progress.byDay.title')}
           aria-describedby={descId}
         >
           {/* osnova i linija praga za niz */}
@@ -100,9 +105,9 @@ export function WeekChart({
             const day = days.get(date);
             const score = day?.summary?.score ?? null;
             const live = isLiveDay(date, day, today, threshold);
-            const wd = WEEKDAY_SHORT[isoWeekday(date) - 1];
+            const wd = weekdayShort(isoWeekday(date), lang);
             const dayNum = Number(date.slice(8));
-            const tip = future ? '' : dayTip(date, day, today, live);
+            const tip = future ? '' : dayTip(date, day, today, live, lang);
 
             let mark = null;
             let value = null;
@@ -157,7 +162,7 @@ export function WeekChart({
         </svg>
       </div>
       <p id={descId} className="sr-only">
-        {summary}. Prag za niz je {thrPct}%.
+        {t('progress.week.summary', { days: summary, pct: thrPct })}
       </p>
 
       <div className="prog-legend" aria-hidden="true">
@@ -188,12 +193,13 @@ export function WeekChart({
         )}
         {hasLive && (
           <span className="prog-legend-item">
-            <span className="prog-swatch is-live" />u toku
+            <span className="prog-swatch is-live" />
+            {t('progress.live')}
           </span>
         )}
         <span className="prog-legend-item">
           <span className="prog-legend-line" />
-          prag za niz
+          {t('progress.legend.threshold')}
         </span>
       </div>
     </div>

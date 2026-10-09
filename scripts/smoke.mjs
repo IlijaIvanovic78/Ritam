@@ -24,11 +24,21 @@
 // Prvi nalog na serveru preuzima podatke iz verzije bez naloga: zato A pravi PRVI i odmah proverava da je
 // prazan; ako nije (server je imao podatke bez vlasnika), test staje pre ikakve izmene i kaže kako da se
 // podaci prebace u pravi nalog. Izlazni kod 1 ako bilo koja provera ne prođe.
+//
+// Jezik: svaki zahtev testa šalje `X-Ritam-Lang: sr` (kao klijent na srpskom), pa provere porede srpske poruke, a
+// nalozi testa (registracija bez `lang` u telu) dobijaju jezik zahteva — 'sr'. Sekcija "language" proverava iste
+// greške na engleskom (`X-Ritam-Lang: en` i bez headera), Accept-Language, jezik naloga (PATCH /api/settings,
+// registracija sa `lang`, izvoz/uvoz), kataloge poruka (isti ključevi i parametri u oba jezika) i formatere datuma.
 
 // Isti kod kojim stranica dana računa ispunjenost i klijent pretvara zidno vreme u minute dana
 // (Node 24 učitava .ts direktno).
 import { summarizeBlocks } from '../shared/summary.ts';
-import { normalizeRange, parseClock } from '../shared/time.ts';
+import { fmtDateRange, normalizeRange, parseClock, weekdayNameAcc } from '../shared/time.ts';
+// Katalozi poruka (server i web) i podešavanja sačuvana pre jezika — provere u sekciji "language".
+import { MESSAGES as SERVER_MESSAGES, langFromAcceptLanguage, msg as serverMsg } from '../server/i18n.ts';
+import { parseSettings } from '../server/repo.ts';
+import { en as WEB_EN } from '../web/src/i18n/en.ts';
+import { sr as WEB_SR } from '../web/src/i18n/sr.ts';
 
 if (!process.env.BASE_URL) {
   console.error('Postavi BASE_URL privremene instance (vidi uputstvo na vrhu fajla) — test menja podatke.');
@@ -106,10 +116,14 @@ function refreshCookieFrom(headers) {
   return undefined;
 }
 
-/** Jedan HTTP zahtev bez ikakve automatike. */
+/**
+ * Jedan HTTP zahtev bez ikakve automatike. `lang` = header X-Ritam-Lang (podrazumevano 'sr'; null = bez headera;
+ * X-Ritam-Lang u `headers` ima prednost).
+ */
 async function rawReq(method, path, opts = {}) {
-  const { body, headers = {}, csrf = true, rawBody, token, cookie, base = BASE } = opts;
+  const { body, headers = {}, csrf = true, rawBody, token, cookie, base = BASE, lang = 'sr' } = opts;
   const h = { ...headers };
+  if (lang && !Object.keys(h).some((k) => k.toLowerCase() === 'x-ritam-lang')) h['X-Ritam-Lang'] = lang;
   if (csrf && method !== 'GET' && method !== 'HEAD') h['X-Ritam'] = '1';
   if (token) h.Authorization = `Bearer ${token}`;
   if (cookie) h.Cookie = cookie;
@@ -180,9 +194,10 @@ const patch = (p, body, o = {}) => req('PATCH', p, { ...o, body });
 const put = (p, body, o = {}) => req('PUT', p, { ...o, body });
 const del = (p, o) => req('DELETE', p, o);
 
-/** Registracija (nova sesija); `code` podrazumevano kod iz env-a. */
-async function register(u, { code = CODE, email = u.email, password = u.password, ip = u.ip } = {}) {
-  const r = await rawReq('POST', '/api/auth/register', { body: { email, password, code }, headers: { 'X-Forwarded-For': ip } });
+/** Registracija (nova sesija); `code` podrazumevano kod iz env-a; `lang` (opciono) = jezik naloga u telu. */
+async function register(u, { code = CODE, email = u.email, password = u.password, ip = u.ip, lang, header = 'sr', headers = {} } = {}) {
+  const body = lang === undefined ? { email, password, code } : { email, password, code, lang };
+  const r = await rawReq('POST', '/api/auth/register', { body, lang: header, headers: { 'X-Forwarded-For': ip, ...headers } });
   if (r.status === 201) applyAuth(u, r);
   return r;
 }
@@ -360,7 +375,8 @@ function legacyBackup() {
 }
 
 /** Podešavanja nove baze (SPEC, sekcija 4). */
-const EMPTY_SETTINGS = { dayStart: 0, streakThreshold: 0.7 };
+/** Podešavanja novog naloga testa: jezik iz X-Ritam-Lang registracije (test uvek šalje 'sr'). */
+const EMPTY_SETTINGS = { dayStart: 0, streakThreshold: 0.7, lang: 'sr' };
 const NO_TEMPLATES = { 1: null, 2: null, 3: null, 4: null, 5: null, 6: null, 7: null };
 /** Početak dana sa kojim test pravi svoje šablone (zidno vreme → minuti dana, kao klijent). */
 const FX_DAY_START = 60;
@@ -665,6 +681,8 @@ async function authSections() {
     check('10 pogrešnih → 401', statuses.every((s) => s === 401), statuses);
     const r = await rawReq('POST', '/api/auth/login', { body: { email: R.email, password: R.password }, headers: { 'X-Forwarded-For': ip1 } });
     check('11. pokušaj (i tačna lozinka) → 429', r.status === 429 && r.json?.error === 'Previše pokušaja. Pokušaj ponovo za 15 minuta.' && r.json?.code === 'rate_limited', r.text);
+    const rEn = await rawReq('POST', '/api/auth/login', { lang: 'en', body: { email: R.email, password: R.password }, headers: { 'X-Forwarded-For': ip1 } });
+    check('429 na engleskom (isti kod)', rEn.status === 429 && rEn.json?.error === 'Too many attempts. Try again in 15 minutes.' && rEn.json?.code === 'rate_limited', rEn.text);
     const retry = Number(r.headers.get('retry-after'));
     check('429: Retry-After u sekundama (do 15 min)', Number.isInteger(retry) && retry > 840 && retry <= 900, r.headers.get('retry-after'));
     const byEmail = await rawReq('POST', '/api/auth/login', { body: { email: R.email, password: R.password }, headers: { 'X-Forwarded-For': fakeIp() } });
@@ -747,6 +765,7 @@ async function authSections() {
     const reg = (body) => rawReq('POST', '/api/auth/register', { base: url, body, headers: { 'X-Forwarded-For': K.ip } });
     await expectError('uz kod: registracija bez koda → 403 bad_code', reg({ email: K.email, password: K.password }), 403, 'Pogrešan kod za registraciju.', 'bad_code');
     await expectError('uz kod: pogrešan kod → 403 bad_code', reg({ email: K.email, password: K.password, code: `${CODE}x` }), 403, 'Pogrešan kod za registraciju.', 'bad_code');
+    await expectError('uz kod: pogrešan kod na engleskom → 403 bad_code', rawReq('POST', '/api/auth/register', { base: url, lang: 'en', body: { email: K.email, password: K.password, code: `${CODE}x` }, headers: { 'X-Forwarded-For': K.ip } }), 403, 'Wrong sign-up code.', 'bad_code');
     const ok = await reg({ email: K.email, password: K.password, code: ` ${CODE} ` });
     check('uz kod: tačan kod (razmaci na krajevima se ne računaju) → 201', ok.status === 201 && ok.json?.user?.email === K.email, ok.text);
     if (ok.status === 201) {
@@ -766,6 +785,7 @@ async function authSections() {
     check('zatvorena: config { signup: "closed" }', same(cfg.json, { signup: 'closed' }), cfg.text);
     await expectError('zatvorena: registracija → 403 signup_closed', rawReq('POST', '/api/auth/register', { base: url, body: { email: `z-${RUN}@example.test`, password: 'lozinka-123', code: CODE } }), 403, 'Registracija nije otvorena.', 'signup_closed');
     await expectError('zatvorena: i neispravno telo → 403', rawReq('POST', '/api/auth/register', { base: url, body: {} }), 403, undefined, 'signup_closed');
+    await expectError('zatvorena: na engleskom (bez headera) → 403 signup_closed', rawReq('POST', '/api/auth/register', { base: url, lang: null, body: { email: `z-${RUN}@example.test`, password: 'lozinka-123' } }), 403, 'Sign-up is closed.', 'signup_closed');
     await expectError('zatvorena: prijava radi (nepostojeći nalog → 401)', rawReq('POST', '/api/auth/login', { base: url, body: { email: `z-${RUN}@example.test`, password: 'lozinka-123' }, headers: { 'X-Forwarded-For': fakeIp() } }), 401, 'Pogrešan email ili lozinka.');
   });
 }
@@ -912,8 +932,8 @@ async function main() {
     await expectOk('prazno: uvoz kopije bez dana u nedelji', post('/api/import', { ...snapshot, weekday_templates: [], settings: { dayStart: 120, streakThreshold: 0.5 } }));
     sc = await expectOk('prazno: raspored posle te kopije', get('/api/schedule'));
     check(
-      'prazno: bez redova = svi dani bez šablona, podešavanja iz kopije',
-      same(sc.weekdays, NO_TEMPLATES) && same(sc.settings, { dayStart: 120, streakThreshold: 0.5 }) && sc.categories.length === 0 && sc.templates.length === 0,
+      'prazno: bez redova = svi dani bez šablona, podešavanja iz kopije (kopija bez jezika: jezik naloga ostaje)',
+      same(sc.weekdays, NO_TEMPLATES) && same(sc.settings, { dayStart: 120, streakThreshold: 0.5, lang: 'sr' }) && sc.categories.length === 0 && sc.templates.length === 0,
       sc,
     );
     d = await expectOk('prazno: ensure bez redova za dane u nedelji', get(`/api/days/${E1}?ensure=1`));
@@ -1688,7 +1708,7 @@ async function main() {
       check('reset: pregled je prazan dan', p4.initialized === false && p4.blocks.length === 0 && p4.templateId === null && p4.templateName === null, p4);
 
       sc = await expectOk('reset ponovo, i dan od 00:00', post('/api/schedule/reset', { dayStart: true }));
-      check('reset: dayStart → 00:00, prag ostaje', same(sc.settings, { dayStart: 0, streakThreshold: exp0.settings.streakThreshold }), sc.settings);
+      check('reset: dayStart → 00:00, prag ostaje', same(sc.settings, { dayStart: 0, streakThreshold: exp0.settings.streakThreshold, lang: exp0.settings.lang }), sc.settings);
       check('reset: ponovljen reset ne menja ostalo', sc.categories.length === 0 && sc.templates.length === 0 && same(sc.weekdays, NO_TEMPLATES) && sc.archivedCategories.length === archived.length, sc);
       const st2 = await expectOk('reset: statistika posle dayStart', get(statsUrl));
       check('reset: dayStart ne menja ranije dane', same(st2.days, st0.days) && same(st2.totals, st0.totals));
@@ -1828,7 +1848,7 @@ async function isolationSection() {
     const disjoint = (e) => ['categories', 'templates', 'template_blocks', 'blocks', 'tasks'].every((k) => e[k].every((r) => !aIds(k).has(r.id)));
     check(
       'B: izvoz samo sa njegovim redovima',
-      eb1.days.length === 1 && eb1.days[0].note === 'B beleška' && eb1.blocks.length === 1 && eb1.blocks[0].title === 'B blok' && eb1.tasks.length === 1 && eb1.tasks[0].title === 'B zadatak' && eb1.categories.length === 1 && eb1.categories[0].archived === 1 && eb1.templates.length === 0 && eb1.template_blocks.length === 0 && same(eb1.settings, { dayStart: 0, streakThreshold: 0.5 }) && disjoint(eb1),
+      eb1.days.length === 1 && eb1.days[0].note === 'B beleška' && eb1.blocks.length === 1 && eb1.blocks[0].title === 'B blok' && eb1.tasks.length === 1 && eb1.tasks[0].title === 'B zadatak' && eb1.categories.length === 1 && eb1.categories[0].archived === 1 && eb1.templates.length === 0 && eb1.template_blocks.length === 0 && same(eb1.settings, { dayStart: 0, streakThreshold: 0.5, lang: 'sr' }) && disjoint(eb1),
       eb1,
     );
 
@@ -1864,6 +1884,192 @@ async function isolationSection() {
   });
 }
 
+// ---------------------------------------------------------------- jezik
+
+/** Imena {parametara} u poruci kataloga (sortirano, bez ponavljanja). */
+const placeholdersOf = (s) => [...new Set([...String(s).matchAll(/\{(\w+)\}/g)].map((m) => m[1]))].sort();
+/** Broj oblika množine ("a|b" = 2). */
+const formsOf = (s) => String(s).split('|').length;
+
+/** Isti katalog na oba jezika: isti ključevi, isti parametri, oblici množine (en 2, sr 3), bez srpskog u engleskom. */
+function checkCatalog(name, en, sr) {
+  const ek = Object.keys(en).sort();
+  const sk = Object.keys(sr).sort();
+  check(`${name}: en i sr imaju iste ključeve`, same(ek, sk), { samoEn: ek.filter((k) => !(k in sr)), samoSr: sk.filter((k) => !(k in en)) });
+  const badParams = ek.filter((k) => k in sr && !same(placeholdersOf(en[k]), placeholdersOf(sr[k])));
+  check(`${name}: isti {parametri} u oba jezika`, badParams.length === 0, badParams);
+  const badForms = ek.filter((k) => k in sr && !(formsOf(en[k]) === 1 ? formsOf(sr[k]) === 1 : formsOf(en[k]) === 2 && formsOf(sr[k]) === 3));
+  check(`${name}: množina en "one|other", sr "one|few|other"`, badForms.length === 0, badForms);
+  const pluralNoN = ek.filter((k) => formsOf(en[k]) > 1 && !placeholdersOf(en[k]).includes('n'));
+  check(`${name}: poruke sa množinom imaju {n}`, pluralNoN.length === 0, pluralNoN);
+  const srInEn = ek.filter((k) => /[čćšžđČĆŠŽĐ]/.test(en[k]));
+  check(`${name}: engleski tekst bez srpskih slova`, srInEn.length === 0, srInEn);
+  const cubes = [...ek.filter((k) => /\bcubes?\b/i.test(en[k])), ...sk.filter((k) => /kock/i.test(sr[k]))];
+  check(`${name}: "Block"/"Blok", nikad "cube"/"kocka"`, cubes.length === 0, cubes);
+}
+
+async function languageSection() {
+  await section('language', async () => {
+    // ---- Katalozi ----
+    checkCatalog('server katalog', SERVER_MESSAGES.en, SERVER_MESSAGES.sr);
+    checkCatalog('web katalog', WEB_EN, WEB_SR);
+    check(
+      'server: 429 en "1 minute" / "15 minutes"',
+      serverMsg('en', 'auth.rateLimited', { n: 1 }) === 'Too many attempts. Try again in 1 minute.' &&
+        serverMsg('en', 'auth.rateLimited', { n: 15 }) === 'Too many attempts. Try again in 15 minutes.',
+    );
+    check(
+      'server: 429 sr "1 minut", "2 minuta", "11 minuta", "21 minut"',
+      [1, 2, 11, 21].map((n) => serverMsg('sr', 'auth.rateLimited', { n })).join('|') ===
+        'Previše pokušaja. Pokušaj ponovo za 1 minut.|Previše pokušaja. Pokušaj ponovo za 2 minuta.|' +
+          'Previše pokušaja. Pokušaj ponovo za 11 minuta.|Previše pokušaja. Pokušaj ponovo za 21 minut.',
+    );
+    check(
+      'Accept-Language: najbolji podržan jezik',
+      langFromAcceptLanguage('sr-Latn-RS,sr;q=0.9,en;q=0.8') === 'sr' &&
+        langFromAcceptLanguage('de-DE,de;q=0.9,sr;q=0.5') === 'sr' &&
+        langFromAcceptLanguage('en-US,sr;q=0.9') === 'en' &&
+        langFromAcceptLanguage('sr;q=0.2,en;q=0.7') === 'en' &&
+        langFromAcceptLanguage('de') === null &&
+        langFromAcceptLanguage(undefined) === null,
+    );
+    // ---- Formateri (shared/time.ts) ----
+    const NB = '\u00a0';
+    check(
+      'datumi: opseg nedelje se prelama samo oko " – " (nerazdvojivi razmaci unutar datuma)',
+      fmtDateRange('2025-12-29', '2026-01-04', 'en', true) === `Dec${NB}29,${NB}2025 – Jan${NB}4,${NB}2026` &&
+        fmtDateRange('2025-12-29', '2026-01-04', 'sr', true) === `29.${NB}dec${NB}2025. – 4.${NB}jan${NB}2026.` &&
+        fmtDateRange('2026-09-28', '2026-10-04', 'en') === `Sep${NB}28 – Oct${NB}4` &&
+        fmtDateRange('2026-10-05', '2026-10-11', 'sr', true) === `5–11.${NB}okt${NB}2026.`,
+    );
+    check(
+      'datumi: dan u nedelji posle "za" — sr akuzativ (sredu, subotu, nedelju), en isto kao naziv',
+      [1, 3, 6, 7].map((d) => weekdayNameAcc(d, 'sr')).join(',') === 'ponedeljak,sredu,subotu,nedelju' &&
+        weekdayNameAcc(6, 'en') === 'Saturday' &&
+        weekdayNameAcc(6) === 'Saturday',
+    );
+    check(
+      'nalog sačuvan pre jezika (settings bez lang) → "en"',
+      parseSettings('{"dayStart":60,"streakThreshold":0.8}').lang === 'en' &&
+        parseSettings('{"dayStart":0,"streakThreshold":0.7,"lang":"sr"}').lang === 'sr' &&
+        parseSettings('{"lang":"de"}').lang === 'en',
+    );
+
+    // ---- Ista greška na oba jezika (X-Ritam-Lang: sr / en / bez headera → en); kod ne zavisi od jezika ----
+    const both = async (name, make, status, sr, en, code) => {
+      await expectError(`${name} (sr)`, make('sr'), status, sr, code);
+      await expectError(`${name} (en)`, make('en'), status, en, code);
+      await expectError(`${name} (bez headera → en)`, make(null), status, en, code);
+    };
+    const noAuth = (lang, headers = {}) => rawReq('GET', '/api/schedule', { lang, headers });
+    await both('jezik: bez tokena → 401', (lang) => noAuth(lang), 401, 'Nisi prijavljen.', 'You’re not signed in.', 'unauthorized');
+    await expectError('jezik: bez headera, Accept-Language sr → srpski', noAuth(null, { 'Accept-Language': 'sr-Latn-RS,sr;q=0.9,en;q=0.8' }), 401, 'Nisi prijavljen.', 'unauthorized');
+    await expectError('jezik: Accept-Language de, sr;q=0.5 → srpski (najbolji podržan)', noAuth(null, { 'Accept-Language': 'de-DE,de;q=0.9,sr;q=0.5' }), 401, 'Nisi prijavljen.');
+    await expectError('jezik: Accept-Language samo de → engleski', noAuth(null, { 'Accept-Language': 'de-DE,de;q=0.9' }), 401, 'You’re not signed in.');
+    await expectError('jezik: X-Ritam-Lang ima prednost nad Accept-Language', noAuth('en', { 'Accept-Language': 'sr' }), 401, 'You’re not signed in.');
+    await expectError('jezik: nepoznat X-Ritam-Lang → Accept-Language', noAuth('de', { 'Accept-Language': 'sr' }), 401, 'Nisi prijavljen.');
+    await expectError('jezik: X-Ritam-Lang velikim slovima (SR)', noAuth('SR'), 401, 'Nisi prijavljen.');
+
+    const ipL = fakeIp();
+    const loginAs = (lang) =>
+      rawReq('POST', '/api/auth/login', { lang, body: { email: `nema-lang-${RUN}@example.test`, password: 'pogresna-lozinka' }, headers: { 'X-Forwarded-For': ipL } });
+    await both('jezik: pogrešna prijava → 401', loginAs, 401, 'Pogrešan email ili lozinka.', 'Wrong email or password.');
+    await both(
+      'jezik: prijava bez emaila → 400 client_outdated',
+      (lang) => rawReq('POST', '/api/auth/login', { lang, body: { password: 'x' }, headers: { 'X-Forwarded-For': ipL } }),
+      400,
+      'Ritam je ažuriran. Osveži stranicu (ili zatvori i ponovo otvori aplikaciju), pa se prijavi email-om.',
+      'Ritam has been updated. Reload the page (or close and reopen the app), then sign in with your email.',
+      'client_outdated',
+    );
+    const regAs = (body) => (lang) => rawReq('POST', '/api/auth/register', { lang, body: { code: CODE, ...body }, headers: { 'X-Forwarded-For': fakeIp() } });
+    await both('jezik: registracija, neispravan email → 400', regAs({ email: 'nije-email', password: 'lozinka-123' }), 400, 'Unesi ispravnu email adresu.', 'Enter a valid email address.');
+    await both('jezik: registracija, kratka lozinka → 400', regAs({ email: `kratka-${RUN}@example.test`, password: 'kratka7' }), 400, 'Lozinka mora imati bar 8 znakova.', 'Password must be at least 8 characters.');
+    await both('jezik: registracija, postojeći email → 409', regAs({ email: A.email, password: 'lozinka-123' }), 409, 'Nalog sa tom email adresom već postoji.', 'An account with that email address already exists.');
+    await both('jezik: registracija, neispravan jezik → 400', regAs({ email: `jezik-${RUN}@example.test`, password: 'lozinka-123', lang: 'de' }), 400, 'Jezik mora biti "en" ili "sr".', 'Language must be "en" or "sr".');
+
+    // Sa tokenom (nalog A): validacija (poruka iz šeme i opšta), 404, 409, parametri, CSRF, nepoznata putanja.
+    current = A;
+    const as = (fn) => (lang) => fn({ lang });
+    await both('jezik: neispravan datum u telu → 400', as((o) => post('/api/tasks', { date: 'x', title: 'Zadatak' }, o)), 400, 'Datum nije ispravan.', 'Date is invalid.');
+    await both('jezik: opšta greška tipa → 400 (polje)', as((o) => patch('/api/tasks/999999999', { sort: 'x' }, o)), 400, 'Pogrešan tip vrednosti (sort).', 'Wrong value type (sort).');
+    await both('jezik: nepoznato polje → 400', as((o) => put('/api/weekdays', { 8: null }, o)), 400, 'Nepoznato polje: 8.', 'Unknown field: 8.');
+    await both('jezik: blok ne postoji → 404', as((o) => patch('/api/blocks/999999999', { status: 'done' }, o)), 404, 'Blok ne postoji.', 'Block doesn’t exist.');
+    await both('jezik: datum u putanji → 400', as((o) => get('/api/days/2095-13-45', o)), 400, 'Datum nije ispravan.', 'Date is invalid.');
+    await both('jezik: opseg statistike → 400', as((o) => get('/api/stats?from=2090-01-01&to=2099-01-01', o)), 400, 'Opseg može imati najviše 400 dana.', 'The range can be at most 400 days.');
+    await both('jezik: bez X-Ritam → 403', as((o) => patch('/api/settings', { dayStart: 0 }, { ...o, csrf: false })), 403, 'Zahtev je odbijen.', 'Request rejected.');
+    await both('jezik: nepoznata API putanja → 404', as((o) => get('/api/nepostoji', o)), 404, 'Ne postoji.', 'Not found.');
+    await both('jezik: neispravan JSON → 400', as((o) => req('POST', '/api/tasks', { ...o, rawBody: '{"date": ' })), 400, 'Neispravan JSON u zahtevu.', 'Invalid JSON in the request.');
+    await both('jezik: neispravna kopija → 400 (polje)', as((o) => post('/api/import', { app: 'ritam' }, o)), 400, 'Kopija nije ispravna (version).', 'The backup is invalid (version).');
+    const DL = '2096-05-05';
+    await expectOk('jezik: init dana', post(`/api/days/${DL}/init`, {}));
+    await both('jezik: dan već ima plan → 409', as((o) => post(`/api/days/${DL}/init`, {}, o)), 409, 'Plan za ovaj dan već postoji.', 'A plan for this day already exists.');
+    await both(
+      'jezik: beleška promenjena na drugom uređaju → 409',
+      as((o) => patch(`/api/days/${DL}`, { note: 'nova', baseNote: 'stara' }, o)),
+      409,
+      'Beleška je u međuvremenu promenjena na drugom uređaju.',
+      'The note was changed on another device in the meantime.',
+    );
+    const missing = await rawReq('GET', '/assets/nepostoji-123.js', { lang: 'en' });
+    check('jezik: nepostojeći fajl iz /assets/ → 404 tekst na jeziku zahteva', missing.status === 404 && missing.text === 'Not found.', missing.text);
+
+    // ---- Jezik naloga ----
+    const L = newUser('lang');
+    const lr = await expectOk('jezik: registracija sa lang "en" u telu (header sr)', register(L, { lang: 'en' }), 201);
+    check('jezik: AuthResponse bez jezika (korisnik = id + email)', same(Object.keys(lr.user ?? {}).sort(), ['email', 'id']), lr.user);
+    const asL = { as: L };
+    let sc = await expectOk('jezik: raspored naloga L', get('/api/schedule', asL));
+    check('jezik: lang iz tela registracije ima prednost nad headerom → "en"', sc.settings.lang === 'en', sc.settings);
+    const L2 = newUser('lang2');
+    await expectOk('jezik: registracija sa lang "sr" (header en)', register(L2, { lang: 'sr', header: 'en' }), 201);
+    sc = await expectOk('jezik: raspored naloga L2', get('/api/schedule', { as: L2 }));
+    check('jezik: nalog L2 → "sr"', sc.settings.lang === 'sr', sc.settings);
+    const L3 = newUser('lang3');
+    await expectOk('jezik: registracija bez lang i bez headera', register(L3, { header: null }), 201);
+    sc = await expectOk('jezik: raspored naloga L3', get('/api/schedule', { as: L3 }));
+    check('jezik: bez lang i headera → "en" (podrazumevano)', same(sc.settings, { dayStart: 0, streakThreshold: 0.7, lang: 'en' }), sc.settings);
+    const L4 = newUser('lang4');
+    await expectOk('jezik: registracija bez lang, Accept-Language sr', register(L4, { header: null, headers: { 'Accept-Language': 'sr-RS,sr;q=0.9' } }), 201);
+    sc = await expectOk('jezik: raspored naloga L4', get('/api/schedule', { as: L4 }));
+    check('jezik: bez lang → jezik zahteva (Accept-Language sr)', sc.settings.lang === 'sr', sc.settings);
+    sc = await expectOk('jezik: raspored A', get('/api/schedule'));
+    check('jezik: A (registracija uz X-Ritam-Lang: sr, bez lang) → "sr"', sc.settings.lang === 'sr', sc.settings);
+
+    sc = await expectOk('jezik: PATCH settings { lang: "sr" }', patch('/api/settings', { lang: 'sr' }, asL));
+    check('jezik: lang "sr" sačuvan, ostala podešavanja ista', same(sc.settings, { dayStart: 0, streakThreshold: 0.7, lang: 'sr' }), sc.settings);
+    sc = await expectOk('jezik: raspored ponovo', get('/api/schedule', { ...asL, lang: 'en' }));
+    check('jezik: lang ostaje "sr" (nalog, ne jezik zahteva)', sc.settings.lang === 'sr', sc.settings);
+    sc = await expectOk('jezik: PATCH dayStart i prag', patch('/api/settings', { dayStart: 60, streakThreshold: 0.8 }, asL));
+    check('jezik: posle dayStart/prag jezik isti', same(sc.settings, { dayStart: 60, streakThreshold: 0.8, lang: 'sr' }), sc.settings);
+    sc = await expectOk('jezik: PATCH settings { lang: "en" }', patch('/api/settings', { lang: 'en' }, asL));
+    check('jezik: nazad na "en"', sc.settings.lang === 'en', sc.settings);
+    await expectError('jezik: PATCH lang "de" → 400 (sr)', patch('/api/settings', { lang: 'de' }, asL), 400, 'Jezik mora biti "en" ili "sr".');
+    await expectError('jezik: PATCH lang "de" → 400 (en)', patch('/api/settings', { lang: 'de' }, { ...asL, lang: 'en' }), 400, 'Language must be "en" or "sr".');
+    await expectError('jezik: PATCH lang null → 400', patch('/api/settings', { lang: null }, asL), 400, 'Jezik mora biti "en" ili "sr".');
+    sc = await expectOk('jezik: raspored ispočetka (i dayStart)', post('/api/schedule/reset', { dayStart: true }, asL));
+    check('jezik: raspored ispočetka ne menja jezik', same(sc.settings, { dayStart: 0, streakThreshold: 0.8, lang: 'en' }), sc.settings);
+
+    const ex = await expectOk('jezik: izvoz', get('/api/export', asL));
+    check('jezik: izvoz ima settings.lang', same(ex.settings, { dayStart: 0, streakThreshold: 0.8, lang: 'en' }), ex.settings);
+    await expectOk('jezik: uvoz kopije sa lang "sr"', post('/api/import', { ...ex, settings: { ...ex.settings, lang: 'sr' } }, asL));
+    sc = await expectOk('jezik: raspored posle uvoza', get('/api/schedule', asL));
+    check('jezik: uvoz postavlja jezik iz kopije', sc.settings.lang === 'sr', sc.settings);
+    await expectOk('jezik: uvoz kopije bez jezika (ranija verzija)', post('/api/import', { ...ex, settings: { dayStart: 30, streakThreshold: 0.9 } }, asL));
+    sc = await expectOk('jezik: raspored posle uvoza bez jezika', get('/api/schedule', asL));
+    check('jezik: kopija bez jezika zadržava jezik naloga', same(sc.settings, { dayStart: 30, streakThreshold: 0.9, lang: 'sr' }), sc.settings);
+    await expectOk('jezik: uvoz kopije sa nepoznatim jezikom', post('/api/import', { ...ex, settings: { ...ex.settings, lang: 'de' } }, asL));
+    sc = await expectOk('jezik: raspored posle nepoznatog jezika', get('/api/schedule', asL));
+    check('jezik: nepoznat jezik iz kopije se ne uvozi (nalog zadržava svoj)', sc.settings.lang === 'sr' && sc.settings.dayStart === 0, sc.settings);
+    sc = await expectOk('jezik: A nije diran', get('/api/schedule'));
+    check('jezik: A i dalje "sr"', sc.settings.lang === 'sr', sc.settings);
+
+    for (const u of [L, L2, L3, L4]) {
+      if (u.cookie) await rawReq('POST', '/api/auth/logout', { cookie: u.cookie });
+    }
+  });
+}
+
 async function restore() {
   if (!snapshot) return;
   current = A;
@@ -1889,6 +2095,7 @@ async function finish() {
 try {
   await main();
   await isolationSection();
+  await languageSection();
 } catch (err) {
   check('smoke test se izvršio do kraja', false, err?.stack || String(err));
 } finally {

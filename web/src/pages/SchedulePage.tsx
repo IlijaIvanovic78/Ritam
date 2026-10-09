@@ -5,12 +5,14 @@ import { WeekdaysCard } from '../components/schedule/WeekdaysCard.tsx';
 import { WeeklyPlanCard } from '../components/schedule/WeeklyPlanCard.tsx';
 import { TemplatesCard } from '../components/schedule/TemplatesCard.tsx';
 import { CategoriesCard } from '../components/schedule/CategoriesCard.tsx';
+import { useT } from '../i18n/index.ts';
 import { Link, paths } from '../lib/router.tsx';
 import { useScheduleData } from '../lib/store.ts';
 import { Icon, PageHeader } from '../ui/index.ts';
 import './schedule.css';
 
 export default function SchedulePage() {
+  const t = useT();
   const { templates } = useScheduleData();
   // Šablon otvoren u editoru (kartica Šabloni menja mesto kad nastane prvi šablon, pa stanje drži stranica).
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -23,14 +25,14 @@ export default function SchedulePage() {
   return (
     <div className="page sched-page">
       <PageHeader
-        title="Raspored"
+        title={t('shell.page.schedule')}
         actions={
           // Telefon: jedini put do Podešavanja. Na desktopu su u bočnoj traci, pa se ovde ne prikazuju.
           <Link
             to={paths.settings}
             className="icon-btn icon-btn-ghost sched-settings-link"
-            aria-label="Podešavanja"
-            title="Podešavanja"
+            aria-label={t('shell.page.settings')}
+            title={t('shell.page.settings')}
           >
             <Icon name="settings" size={20} />
           </Link>

@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import type { Block, BlockStatus, Category, DayPayload } from '../../../../shared/types.ts';
 import { fmtDuration } from '../../../../shared/time.ts';
+import { useT } from '../../i18n/index.ts';
 import { Button, Card, Empty, Icon, IconButton, Spinner, cx } from '../../ui/index.ts';
 import { BlockRow } from './BlockRow.tsx';
 import { isDue, timelineItems } from './dayUtils.ts';
@@ -41,16 +42,17 @@ export function Timeline({
   onAdd: () => void;
   onPickTemplate: () => void;
 }) {
+  const t = useT();
   const items = useMemo(() => timelineItems(day.blocks), [day.blocks]);
   const preview = !day.initialized;
   const empty = day.blocks.length === 0;
 
   return (
     <Card
-      title="Blokovi"
+      title={t('day.timeline.title')}
       flush
       className="day-timeline"
-      actions={<IconButton icon="plus" size="sm" label="Dodaj blok" onClick={onAdd} disabled={initializing} />}
+      actions={<IconButton icon="plus" size="sm" label={t('day.addBlock')} onClick={onAdd} disabled={initializing} />}
     >
       {/* Prazan dan bez šablona: dovoljno je prazno stanje ispod (bez trake "nema šablona"). */}
       {preview && (initializing || !empty) && (
@@ -58,14 +60,14 @@ export function Timeline({
           {initializing ? <Spinner small /> : <Icon name="info" size={16} />}
           <span>
             {initializing
-              ? 'Pripremam dan…'
+              ? t('day.timeline.preparing')
               : past
                 ? day.templateName
-                  ? `Dan nije praćen. Plan iz šablona „${day.templateName}“ — oceni neki blok i dan počinje da se prati.`
-                  : 'Dan nije praćen. Za ovaj dan u nedelji nema šablona.'
+                  ? t('day.timeline.untrackedTemplate', { name: day.templateName })
+                  : t('day.timeline.untrackedNoTemplate')
                 : day.templateName
-                  ? `Plan iz šablona „${day.templateName}“ — izmene važe samo za ovaj dan.`
-                  : 'Za ovaj dan u nedelji nema šablona. Dodaj blokove po želji.'}
+                  ? t('day.timeline.previewTemplate', { name: day.templateName })
+                  : t('day.timeline.previewNoTemplate')}
           </span>
         </div>
       )}
@@ -74,25 +76,25 @@ export function Timeline({
         <div className="day-banner" role="note">
           <Icon name="info" size={16} />
           <span className="day-banner-text">
-            Za {weekdayOffer.day} važi šablon „{weekdayOffer.name}“, a ovaj dan je napravljen bez šablona.
+            {t('day.timeline.weekdayOffer', { day: weekdayOffer.day, name: weekdayOffer.name })}
           </span>
           <Button size="sm" variant="ghost" className="day-banner-action" onClick={onApplyWeekday} disabled={initializing}>
-            Primeni
+            {t('day.template.apply')}
           </Button>
         </div>
       )}
 
       {empty ? (
         <Empty
-          title="Nema plana za ovaj dan."
+          title={t('day.timeline.empty')}
           action={
             <span className="day-empty-actions">
               <Button size="sm" icon="plus" onClick={onAdd} disabled={initializing}>
-                Dodaj blok
+                {t('day.addBlock')}
               </Button>
               {hasTemplates && (
                 <Button size="sm" variant="ghost" onClick={onPickTemplate} disabled={initializing}>
-                  Primeni šablon…
+                  {t('day.timeline.applyTemplate')}
                 </Button>
               )}
             </span>
@@ -105,8 +107,8 @@ export function Timeline({
               const now = minute != null && minute >= it.start && minute < it.end;
               return (
                 <li key={`gap-${it.start}`} className={cx('day-gap', now && 'is-now')}>
-                  slobodno · {fmtDuration(it.end - it.start)}
-                  {now && <span className="day-gap-now"> · sada</span>}
+                  {t('day.timeline.gap', { time: fmtDuration(it.end - it.start) })}
+                  {now && <span className="day-gap-now"> · {t('day.nowTag')}</span>}
                 </li>
               );
             }
@@ -135,7 +137,7 @@ export function Timeline({
           <span className="day-add-icon">
             <Icon name="plus" size={18} />
           </span>
-          Dodaj blok
+          {t('day.addBlock')}
         </button>
       )}
     </Card>

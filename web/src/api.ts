@@ -28,6 +28,7 @@ import type {
   TemplateBlockInput,
   WeekdayMap,
 } from '../../shared/types.ts';
+import { getLang, t } from './i18n/index.ts';
 
 export class ApiError extends Error {
   status: number;
@@ -52,7 +53,7 @@ function errorCode(data: unknown): string | null {
 export function errorMessage(e: unknown): string {
   if (e instanceof ApiError) return e.message;
   if (e instanceof Error && e.message) return e.message;
-  return 'Nešto nije u redu. Pokušaj ponovo.';
+  return t('error.generic');
 }
 
 /**
@@ -185,7 +186,8 @@ function ownerMismatch(): boolean {
 }
 
 function userChangedError(): ApiError {
-  return new ApiError(401, 'Nisi prijavljen.', { error: 'Nisi prijavljen.', code: USER_CHANGED_CODE });
+  const message = t('error.notSignedIn');
+  return new ApiError(401, message, { error: message, code: USER_CHANGED_CODE });
 }
 
 /**
@@ -306,14 +308,15 @@ async function send(
   uid: number | null,
   timeoutMs: number,
 ): Promise<Sent> {
-  const headers: Record<string, string> = { 'X-Ritam': '1' };
+  // X-Ritam-Lang: server vraća poruke grešaka na jeziku interfejsa (server/i18n.ts).
+  const headers: Record<string, string> = { 'X-Ritam': '1', 'X-Ritam-Lang': getLang() };
   if (payload !== undefined) headers['Content-Type'] = 'application/json';
   if (token) headers.Authorization = `Bearer ${token}`;
   if (uid != null) headers['X-Ritam-User'] = String(uid);
   const ctrl = timeoutMs > 0 ? new AbortController() : null;
   const timer = ctrl ? window.setTimeout(() => ctrl.abort(), timeoutMs) : undefined;
   const networkError = () =>
-    new ApiError(0, ctrl?.signal.aborted ? 'Server ne odgovara. Pokušaj ponovo.' : 'Nema konekcije sa serverom.');
+    new ApiError(0, ctrl?.signal.aborted ? t('error.timeout') : t('error.network'));
 
   try {
     let res: Response;
@@ -356,9 +359,7 @@ async function send(
 
 function toApiError(res: Response, data: unknown): ApiError {
   const msg = (data as { error?: unknown } | null)?.error;
-  const fallback = isGatewayStatus(res.status)
-    ? 'Server nije dostupan. Pokušaj ponovo.'
-    : `Greška na serveru (${res.status}).`;
+  const fallback = isGatewayStatus(res.status) ? t('error.unavailable') : t('error.server', { status: res.status });
   return new ApiError(res.status, typeof msg === 'string' && msg ? msg : fallback, data);
 }
 
@@ -463,7 +464,7 @@ async function withRefreshLock<T>(fn: () => Promise<T>): Promise<T> {
     });
   } catch (e) {
     if (ran || e instanceof ApiError) throw e;
-    if (ctrl.signal.aborted) throw new ApiError(0, 'Server ne odgovara. Pokušaj ponovo.');
+    if (ctrl.signal.aborted) throw new ApiError(0, t('error.timeout'));
     // Web Locks nisu upotrebljivi (npr. dokument bez pristupa) — osveži bez njih.
     return fn();
   } finally {
@@ -484,7 +485,7 @@ async function postRefresh(): Promise<AuthResponse> {
       // Drugi tab (ili ranija stranica ovog taba) je upravo zamenio refresh token: sesija važi, a nov
       // token stiže u kolačić. To nikad nije odjava — samo ovaj zahtev ne uspeva ako trka ne prestane.
       if (errorCode(r.data) === 'refresh_race') {
-        if (Date.now() - started >= RACE_RETRY_TOTAL_MS) throw new ApiError(0, 'Server ne odgovara. Pokušaj ponovo.');
+        if (Date.now() - started >= RACE_RETRY_TOTAL_MS) throw new ApiError(0, t('error.timeout'));
         await delay(RACE_RETRY_MIN_MS + Math.random() * (RACE_RETRY_MAX_MS - RACE_RETRY_MIN_MS));
         continue;
       }
@@ -527,8 +528,9 @@ export const api = {
   // Nalog
   /** Da li je registracija otvorena, traži kod ili je zatvorena. */
   authConfig: () => get<AuthConfig>('/api/auth/config'),
+  /** Jezik interfejsa (izbor na ekranu prijave) postaje jezik novog naloga. */
   register: (email: string, password: string, code?: string) =>
-    startSession('/api/auth/register', code ? { email, password, code } : { email, password }),
+    startSession('/api/auth/register', { email, password, ...(code ? { code } : {}), lang: getLang() }),
   login: (email: string, password: string) => startSession('/api/auth/login', { email, password }),
   /** Obnovi sesiju preko kolačića (pokretanje aplikacije). 401 = nije prijavljen. */
   refresh: () => refreshSession(),

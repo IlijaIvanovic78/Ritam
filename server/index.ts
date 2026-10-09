@@ -115,7 +115,8 @@ if (unclaimed) {
   if (signup === 'open') {
     console.warn(
       'Ritam: PAŽNJA — registracija je otvorena, pa SVE te podatke dobija PRVI ko napravi nalog. Odmah otvori ' +
-        'aplikaciju i napravi svoj nalog ("Napravi nalog": email + lozinka); posle po želji SIGNUP=closed.',
+        'aplikaciju i napravi svoj nalog ("Create account" / "Napravi nalog": email + lozinka); posle po želji ' +
+        'SIGNUP=closed.',
     );
   } else if (signup === 'closed') {
     console.warn(

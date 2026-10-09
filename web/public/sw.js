@@ -3,7 +3,8 @@
  * Strategije:
  *   /api/*        mreža prvo; uspešan GET odgovor se čuva u API kešu, bez mreže (ili kad
  *                 proksi javi 502–504) vraća se keširana kopija (sa headerom X-Ritam-Cached: 1,
- *                 da aplikacija zna da podaci možda nisu sveži) ili 503 JSON. Ako postoji kopija,
+ *                 da aplikacija zna da podaci možda nisu sveži) ili 503 JSON (poruka na jeziku zahteva,
+ *                 header X-Ritam-Lang; engleski podrazumevano). Ako postoji kopija,
  *                 a mreža ne odgovori za API_TIMEOUT_MS (slab signal), odmah kopija; odgovor mreže
  *                 kad stigne samo osveži keš.
  *                 /api/auth/*, /api/export i /api/health se nikad ne keširaju (health je provera
@@ -13,7 +14,8 @@
  *                 naloga. Ključ u kešu je samo URL — Authorization (Bearer token) se nikad ne upisuje.
  *                 Aplikacija briše ceo API keš pri odjavi i kad se na uređaju prijavi drugi nalog;
  *                 odgovor GET zahteva koji je tada još bio u toku se više ne upisuje.
- *   navigacija    mreža prvo (svaka stranica je index.html), bez mreže keširani '/'. Ako mreža
+ *   navigacija    mreža prvo (svaka stranica je index.html), bez mreže keširani '/' (bez njega
+ *                 dvojezična stranica "nema konekcije": engleski, pa srpski). Ako mreža
  *                 ne odgovori za NAV_TIMEOUT_MS (slab signal), odmah keširani '/', a odgovor
  *                 mreže kad stigne samo osveži keš.
  *                 'Osveži' (nova verzija) pre ponovnog učitavanja šalje poruku 'refresh-shell':
@@ -28,7 +30,7 @@
  * isto ime koristi i aplikacija (web/src/lib/pwa.ts), koja u njega upisuje odgovore izmena.
  */
 
-const VERSION = 'v10';
+const VERSION = 'v11';
 const STATIC_CACHE = `ritam-static-${VERSION}`;
 const ASSET_CACHE = `ritam-assets-${VERSION}`;
 const API_CACHE = 'ritam-api';
@@ -276,21 +278,31 @@ function markStale(res) {
   return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
 }
 
-function offlineJson() {
-  return new Response(JSON.stringify({ error: 'Nema konekcije sa serverom.' }), {
+/** Poruka "nema konekcije" na jeziku zahteva (aplikacija šalje X-Ritam-Lang uz svaki zahtev). */
+const OFFLINE_MESSAGE = { en: 'No connection to the server.', sr: 'Nema konekcije sa serverom.' };
+
+function offlineJson(req) {
+  const lang = (req.headers.get('X-Ritam-Lang') || '').toLowerCase() === 'sr' ? 'sr' : 'en';
+  return new Response(JSON.stringify({ error: OFFLINE_MESSAGE[lang] }), {
     status: 503,
     headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' },
   });
 }
 
+/**
+ * Stranica bez mreže kad ni keširani '/' ne postoji (prvo otvaranje). SW ne zna jezik aplikacije (localStorage
+ * mu nije dostupan), pa je dvojezična: engleski (podrazumevani jezik), pa srpski.
+ */
 function offlineHtml() {
   const html =
-    '<!doctype html><html lang="sr-Latn"><head><meta charset="utf-8">' +
+    '<!doctype html><html lang="en"><head><meta charset="utf-8">' +
     '<meta name="viewport" content="width=device-width, initial-scale=1">' +
     '<meta name="color-scheme" content="dark">' +
     '<title>Ritam</title></head>' +
     '<body style="font-family:system-ui,sans-serif;padding:48px 16px;text-align:center;color:#a3a3a0;background:#0a0a0a">' +
-    '<p>Nema konekcije sa serverom.</p><p>Otvori Ritam ponovo kad budeš na mreži.</p></body></html>';
+    '<p>No connection to the server.</p><p>Open Ritam again when you’re online.</p>' +
+    '<div lang="sr-Latn" style="margin-top:28px;color:#6f6f6b">' +
+    '<p>Nema konekcije sa serverom.</p><p>Otvori Ritam ponovo kad budeš na mreži.</p></div></body></html>';
   return new Response(html, {
     status: 503,
     headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' },
@@ -392,7 +404,7 @@ async function apiNetworkFirst(req, event) {
   } else {
     res = await network;
   }
-  if (!res) return hit ? markStale(hit) : offlineJson(); // nema mreže
+  if (!res) return hit ? markStale(hit) : offlineJson(req); // nema mreže
   if (isGatewayError(res) && hit) return markStale(hit);
   return res;
 }

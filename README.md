@@ -16,9 +16,9 @@ Pre prvog pokretanja napravi fajl `.env` po uzoru na `.env.example`. Obavezan je
 (`openssl rand -hex 32`); vrednosti piši u jednostrukim navodnicima (`SESSION_SECRET='…'`), jer bez njih Docker
 Compose menja znak `$`.
 
-Otvori http://localhost:3001 i izaberi **Napravi nalog**: samo email i lozinka (bar 8 znakova). Posle toga se
-prijavljuješ istim email-om i lozinkom. Posebne lozinke ili koda aplikacije nema (nekadašnji `APP_PASSWORD` se više ne
-koristi, pa ga možeš obrisati iz `.env`).
+Otvori http://localhost:3001 i izaberi **Create account** / **Napravi nalog**: samo email i lozinka (bar 8 znakova).
+Posle toga se prijavljuješ istim email-om i lozinkom. Posebne lozinke ili koda aplikacije nema (nekadašnji
+`APP_PASSWORD` se više ne koristi, pa ga možeš obrisati iz `.env`).
 
 `docker-compose.yml` vezuje aplikaciju samo na `127.0.0.1:3001`, pa je na serveru dostupna samo preko
 Nginx-a na istoj mašini. Gotov config je u `deploy/nginx/ritamorg.com.conf`, a koraci su u Opciji B ispod.
@@ -29,8 +29,8 @@ Zaustavljanje: `docker compose down`. Podaci ostaju u Docker volumenu `<ime fold
 ## Nalozi
 
 - **Prijava**: email i lozinka. Nema dvostepene provere ni resetovanja lozinke — zapamti lozinku (menadžer lozinki) i
-  povremeno preuzmi rezervnu kopiju. Lozinku menjaš u **Podešavanjima → Nalog → Promeni lozinku**; to odjavljuje sve
-  ostale uređaje.
+  povremeno preuzmi rezervnu kopiju. Lozinku menjaš u **Settings → Account → Change password** / **Podešavanja →
+  Nalog → Promeni lozinku**; to odjavljuje sve ostale uređaje.
 - **Registracija** (env `SIGNUP`, u Docker-u iz `.env`):
   - `open` (podrazumevano) — nalog pravi svako ko otvori aplikaciju, samo email-om i lozinkom. Svaki nalog vidi
     samo svoje podatke. Na javnom serveru to znači da svako ko nađe sajt može da napravi nalog i čuva podatke na
@@ -60,6 +60,16 @@ Zaustavljanje: `docker compose down`. Podaci ostaju u Docker volumenu `<ime fold
   razmaku između svojih id-jeva nalog može da proceni koliko i kada su drugi nalozi nešto pravili (ne i šta). Za
   server koji deli porodica to je prihvatljivo.
 
+## Jezik
+
+Aplikacija je podrazumevano na engleskom; srpski (latinica) je dodatni jezik. Biraš ga u **Settings → Language ·
+Jezik** (**English | Srpski**) ili tihim prekidačem **English · Srpski** ispod forme za prijavu i registraciju (jezik
+izabran pri registraciji dobija i novi nalog). Izbor se čuva na nalogu i posle prijave važi na svakom uređaju, a na
+uređaju se pamti i lokalno (`localStorage 'ritam.lang'`), pa je i ekran prijave na tom jeziku. Nalozi napravljeni pre
+ove verzije nemaju sačuvan jezik: posle nadogradnje se otvaraju na engleskom, dok jednom ne izabereš **Srpski**.
+Poruke grešaka sa servera prate jezik aplikacije (header `X-Ritam-Lang`; bez njega `Accept-Language` browsera, inače
+engleski). U ovom uputstvu su nazivi iz aplikacije dati na oba jezika: engleski / srpski.
+
 ## Razvoj bez Dockera
 
 ```bash
@@ -67,9 +77,10 @@ npm install
 npm run dev
 ```
 
-Server radi na :3000, a Vite sa hot reload-om na http://localhost:5173. Napravi nalog na ekranu prijave (email +
-lozinka; registracija je podrazumevano otvorena). Bez `HOST` server sluša samo na ovoj mašini (127.0.0.1); za
-pristup sa telefona u istoj mreži pokreni produkcijski server sa `HOST=0.0.0.0 npm start` (posle `npm run build`).
+Server radi na :3000, a Vite sa hot reload-om na http://localhost:5173. Napravi nalog na ekranu prijave (**Create
+account** / **Napravi nalog**: email + lozinka; registracija je podrazumevano otvorena). Bez `HOST` server sluša samo
+na ovoj mašini (127.0.0.1); za pristup sa telefona u istoj mreži pokreni produkcijski server sa
+`HOST=0.0.0.0 npm start` (posle `npm run build`).
 Ako postojeća baza (`./data`) ima podatke iz verzije bez naloga, prvi nalog ih preuzima.
 
 Ostale komande: `npm run typecheck`, `npm run build`, `npm start` (produkcijski server, servira `dist/web`).
@@ -99,37 +110,42 @@ nastaju uz kod.
 ## Prvi koraci
 
 Novi nalog počinje prazan: nema unapred napravljenih kategorija, šablona ni rasporeda. Sve unosiš sam, onako kako
-ti odgovara. Posle prve prijave otvori **Raspored**:
+ti odgovara. Posle prve prijave otvori **Schedule** / **Raspored**:
 
-1. **Kategorije**: napravi kategorije za ono što radiš tokom dana (bilo koji naziv i boja). Za svaku biraš da li se
-   računa u ispunjenost dana.
-2. **Šabloni**: napravi šablon dana i dodaj mu blokove (od–do, naslov, kategorija). Šablona može biti koliko hoćeš,
-   a novi možeš da napraviš i kao kopiju postojećeg.
-3. **Dani u nedelji**: za svaki dan izaberi šablon ili ga ostavi bez šablona.
-4. Po želji u **Podešavanjima** promeni "Dan počinje u" (podrazumevano 00:00, vidi ispod).
+1. **Categories** / **Kategorije**: napravi kategorije za ono što radiš tokom dana (bilo koji naziv i boja). Za svaku
+   biraš da li se računa u ispunjenost dana.
+2. **Templates** / **Šabloni**: napravi šablon dana i dodaj mu blokove (od–do, naslov, kategorija). Šablona može biti
+   koliko hoćeš, a novi možeš da napraviš i kao kopiju postojećeg.
+3. **Days of the week** / **Dani u nedelji**: za svaki dan izaberi šablon ili ga ostavi bez šablona.
+4. Po želji u **Settings** / **Podešavanjima** promeni "Day starts at" / "Dan počinje u" (podrazumevano 00:00, vidi
+   ispod).
 
 Dan bez šablona je prazan dan, a blokove mu možeš dodati i ručno. Ako si danas otvorio pre nego što si napravio
 šablon, dan se sam popuni čim šablon dodeliš tom danu u nedelji — osim ako si mu već ručno dodao blok; tada ti traka
-na stranici Danas ponudi „Primeni“ (ili ⋯ → Primeni drugi šablon…).
+na stranici Today / Danas ponudi **Apply** / **Primeni** (ili ⋯ → Apply another template… / Primeni drugi
+šablon…).
 
 **Ako aplikaciju koristiš od ranije verzije**: ranija verzija je novu bazu punila primerom rasporeda (kategorije,
 tri šablona, šablon za svaki dan u nedelji i početak dana u 01:00). Taj primer ostaje i posle ažuriranja (prvi nalog
-ga preuzima sa ostalim podacima), jer aplikacija nikad sama ne briše tvoje podatke. Ukloniš ga u **Podešavanjima** →
-**Raspored ispočetka**: brišu se sve kategorije, šabloni i dodela šablona danima u nedelji, a po želji se i "Dan
-počinje u" vraća na 00:00. Sačuvani dani, ocene blokova, zadaci i beleške ostaju, pa se ni napredak ranijih dana ne
-menja. Zatim napravi svoj raspored po koracima iznad. Ako želiš da sačuvaš i stari raspored, pre toga preuzmi kopiju (JSON).
+ga preuzima sa ostalim podacima), jer aplikacija nikad sama ne briše tvoje podatke. Ukloniš ga u **Settings → Reset
+schedule** / **Podešavanja → Raspored ispočetka**: brišu se sve kategorije, šabloni i dodela šablona danima u nedelji,
+a po želji se i "Day starts at" / "Dan počinje u" vraća na 00:00. Sačuvani dani, ocene blokova, zadaci i beleške
+ostaju, pa se ni napredak ranijih dana ne menja. Zatim napravi svoj raspored po koracima iznad. Ako želiš da sačuvaš i
+stari raspored, pre toga preuzmi kopiju (**Download backup** / **Preuzmi kopiju**, JSON fajl).
 
 ## Kako radi
 
-- **Raspored**: tvoji šabloni dana i koji šablon važi za koji dan u nedelji. Kategorije imaju boju i podešavanje da
-  li se računaju u procenat ispunjenosti. Nijedan naziv nema posebno značenje: sve se ponaša isto, kako god ga nazoveš.
-- **Danas**: kad otvoriš dan, blokovi se kopiraju iz šablona. Posle toga dan možeš da menjaš: dvema aktivnostima
-  zameniš termine, promeniš kategoriju, blok podeliš na dva dela ili dodaš novi. Izmene šablona važe samo za dane
-  koje još nisi otvorio.
-- **Dan počinje u 00:00** (podešava se do 06:00): ako ti dan traje i posle ponoći, postavi npr. 01:00. Tada ono što
-  radiš posle ponoći a pre 01:00 pripada prethodnom danu, a blok koji počinje u 01:00 je na početku novog dana.
+- **Schedule** / **Raspored**: tvoji šabloni dana i koji šablon važi za koji dan u nedelji. Kategorije imaju boju i
+  podešavanje da li se računaju u procenat ispunjenosti. Nijedan naziv nema posebno značenje: sve se ponaša isto, kako
+  god ga nazoveš.
+- **Today** / **Danas**: kad otvoriš dan, blokovi se kopiraju iz šablona. Posle toga dan možeš da menjaš: dvema
+  aktivnostima zameniš termine, promeniš kategoriju, blok podeliš na dva dela ili dodaš novi. Izmene šablona važe samo
+  za dane koje još nisi otvorio.
+- **Day starts at** / **Dan počinje u** 00:00 (podešava se do 06:00): ako ti dan traje i posle ponoći, postavi npr.
+  01:00. Tada ono što radiš posle ponoći a pre 01:00 pripada prethodnom danu, a blok koji počinje u 01:00 je na
+  početku novog dana.
 - **Ispunjenost dana**: urađen blok vredi 1, delimičan 0,5. Zbir se deli brojem blokova koji se računaju.
-  Na stranici Napredak vidiš nedelju, mesec, niz uzastopnih dana i vreme po kategorijama.
+  Na stranici Progress / Napredak vidiš nedelju, mesec, niz uzastopnih dana i vreme po kategorijama.
 
 ## Postavljanje na internet
 
@@ -149,8 +165,9 @@ da napravi nalog i puni disk servera. PWA na telefonu traži HTTPS.
    bazu. Dodaj i `TRUST_PROXY=1`: zahtevi stižu preko Railway proxy-ja, pa se adresa klijenta (za ograničenje
    pokušaja prijave) čita iz `X-Forwarded-For`. `APP_PASSWORD` više ne treba (ako postoji, obriši ga).
 5. U **Networking** klikni "Generate Domain". Dobijaš `https://<ime>.up.railway.app`. Otvori ga i odmah napravi svoj
-   nalog (**Napravi nalog**: email + lozinka). **Preporučeno:** zatim dodaj `SIGNUP=closed` u Variables (nove naloge
-   tada niko ne može da napravi), jer inače svako ko nađe adresu može da napravi nalog i čuva podatke na servisu.
+   nalog (**Create account** / **Napravi nalog**: email + lozinka). **Preporučeno:** zatim dodaj `SIGNUP=closed` u
+   Variables (nove naloge tada niko ne može da napravi), jer inače svako ko nađe adresu može da napravi nalog i čuva
+   podatke na servisu.
 6. Proveri adresu klijenta: na stranici prijave namerno unesi pogrešnu lozinku, pa u logu servisa
    (Deployments → View Logs) nađi red `Ritam: neuspela prijava (adresa …)`. Tu treba da piše tvoja javna IP adresa
    (vidi je npr. na https://ifconfig.me). Ako piše neka druga (adresa Railway-a), postavi `TRUST_PROXY=2` i proveri
@@ -194,8 +211,8 @@ Primer je za domen `ritamorg.com`; ako koristiš drugi, zameni ga u komandama i 
    Certbot dopiše HTTPS deo u Nginx config, preusmeri HTTP na HTTPS i sam obnavlja sertifikat.
 5. **Firewall:** otvori samo 22, 80 i 443 (`sudo ufw allow OpenSSH && sudo ufw allow 'Nginx Full' && sudo ufw enable`,
    ili isto u Hetzner Cloud Firewall-u). Port 3001 ne otvaraj, jer je vezan samo za 127.0.0.1.
-6. Otvori `https://ritamorg.com`, izaberi **Napravi nalog** i unesi email i lozinku. To je sve — prijava je od tada
-   tim email-om i lozinkom, na svakom uređaju.
+6. Otvori `https://ritamorg.com`, izaberi **Create account** / **Napravi nalog** i unesi email i lozinku. To je sve —
+   prijava je od tada tim email-om i lozinkom, na svakom uređaju.
 7. **Preporučeno za javni server:** kad napraviš svoje naloge, zatvori registraciju (inače svako ko nađe sajt može
    da napravi nalog i puni disk servera):
 
@@ -207,17 +224,20 @@ Primer je za domen `ritamorg.com`; ako koristiš drugi, zameni ga u komandama i 
 
    Za nov nalog kasnije obriši tu liniju iz `.env` i ponovo pokreni `docker compose up -d`.
 
-**Nadogradnja:** pre nadogradnje u aplikaciji preuzmi kopiju (**Podešavanja → Preuzmi kopiju (JSON)**) ili sačuvaj
-ceo volumen (vidi "Rezervna kopija"), pa `git pull && docker compose up -d --build`. `APP_PASSWORD` u `.env` iz
-ranije verzije više ne treba (docker-compose.yml ga ne prosleđuje), pa ga možeš obrisati. Posle nadogradnje sa
-verzije bez naloga **odmah** otvori sajt i napravi svoj nalog — prvi nalog preuzima sve postojeće podatke, a
-registracija je otvorena (vidi "Nalozi"; `docker compose logs ritam` tada pokazuje upozorenje `PAŽNJA`). Aplikacija koja je ostala
-otvorena (npr. PWA na telefonu) može još jednom da pokaže staru prijavu samo sa lozinkom i poruku "Ritam je ažuriran.
-Osveži stranicu…": osveži je (ili zatvori i ponovo otvori aplikaciju) i prijavi se email-om.
+**Nadogradnja:** pre nadogradnje u aplikaciji preuzmi kopiju (**Settings → Download backup** / **Podešavanja →
+Preuzmi kopiju**) ili sačuvaj ceo volumen (vidi "Rezervna kopija"), pa `git pull && docker compose up -d --build`.
+`APP_PASSWORD` u `.env` iz ranije verzije više ne treba (docker-compose.yml ga ne prosleđuje), pa ga možeš obrisati.
+Posle nadogradnje sa verzije bez naloga **odmah** otvori sajt i napravi svoj nalog — prvi nalog preuzima sve postojeće
+podatke, a registracija je otvorena (vidi "Nalozi"; `docker compose logs ritam` tada pokazuje upozorenje `PAŽNJA`).
+Aplikacija koja je ostala otvorena (npr. PWA na telefonu) može još jednom da pokaže staru prijavu samo sa lozinkom i poruku "Ritam has been
+updated. Reload the page…" (ili "Ritam je ažuriran. Osveži stranicu…", ako je browser podešen na srpski — stara
+verzija ne šalje jezik aplikacije): osveži je (ili zatvori i ponovo otvori aplikaciju) i prijavi se email-om. Posle
+nadogradnje na verziju sa jezicima aplikacija je na engleskom dok jednom ne izabereš srpski (vidi "Jezik").
 
 Aplikacija koja je otvorena tokom nadogradnje (PWA na telefonu, tab na laptopu) se ne učitava sama: pri povratku u nju
-(ili najkasnije za 30 min) na dnu se pojavi traka "Dostupna je nova verzija." — dodir na **Osveži** prvo sačuva belešku
-u kucanju, pa učita novu verziju. Proverava se i ručno: **Podešavanja → Verzija → Proveri ažuriranje**.
+(ili najkasnije za 30 min) na dnu se pojavi traka "A new version is available." / "Dostupna je nova verzija." — dodir
+na **Refresh** / **Osveži** prvo sačuva belešku u kucanju, pa učita novu verziju. Proverava se i ručno: **Settings →
+Version → Check for updates** / **Podešavanja → Verzija → Proveri ažuriranje**.
 
 Kad nova verzija menja šemu baze, server pri prvom pokretanju u `/data` (`DATA_DIR`) napravi i kopiju baze pre
 promene, `ritam.db.pre-v<N>-<datum-vreme>.bak` (u logu: `Ritam: kopija baze pre nadogradnje šeme …`). Prethodna verzija
@@ -227,20 +247,22 @@ i baza; obriši je kad nova verzija proradi.
 
 ### Instalacija na telefon
 
-- **iPhone**: otvori adresu u Safariju, pa Podeli → Dodaj na početni ekran.
-- **Android**: otvori adresu u Chrome-u, pa meni (⋮) → Instaliraj aplikaciju.
+- **iPhone**: otvori adresu u Safariju, pa Share → Add to Home Screen (na srpskom: Podeli → Dodaj na početni ekran).
+- **Android**: otvori adresu u Chrome-u, pa meni (⋮) → Install app (Instaliraj aplikaciju).
 - **Laptop**: u Chrome-u ili Edge-u klikni ikonicu za instalaciju u adresnoj traci, ili samo koristi stranicu kao sajt.
 
 ### Izgubljen telefon
 
-Na drugom uređaju se prijavi i promeni lozinku (**Podešavanja → Nalog → Promeni lozinku**): svi ostali uređaji se
+Na drugom uređaju se prijavi i promeni lozinku (**Settings → Account → Change password** / **Podešavanja → Nalog →
+Promeni lozinku**): svi ostali uređaji se
 odjavljuju odmah (access token koji je telefon već imao važi još najviše 15 minuta). Promena `SESSION_SECRET` samo
 traži nove access tokene i ne odjavljuje uređaje.
 
 ### Rezervna kopija
 
-Glavni način: u Podešavanjima "Preuzmi kopiju (JSON)". Kopija sadrži podatke prijavljenog naloga i vraća se sa
-"Vrati iz kopije…", koje zamenjuje samo podatke tog naloga (i kopiju iz verzije bez naloga ili sa drugog naloga).
+Glavni način: **Settings → Download backup** / **Podešavanja → Preuzmi kopiju** (JSON fajl). Kopija sadrži podatke
+prijavljenog naloga i vraća se sa **Restore from backup** / **Vrati iz kopije** (dugme "Choose file…" / "Izaberi
+fajl…"), koje zamenjuje samo podatke tog naloga (i kopiju iz verzije bez naloga ili sa drugog naloga).
 
 Na VPS-u možeš da sačuvaš i ceo volumen (svi nalozi), ali samo dok aplikacija ne radi: dok radi, najnovije izmene
 stoje u `ritam.db-wal`, pa bi sama kopija `ritam.db` bila nepotpuna ili prazna. Uredno zaustavljanje ih upiše u `ritam.db`:

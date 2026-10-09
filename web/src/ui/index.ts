@@ -18,7 +18,7 @@ export {
   Toggle,
   RatingInput,
   RatingDots,
-  RATING_LABELS,
+  RATING_KEYS,
 } from './misc.tsx';
 export { CategoryStroke } from './CategoryStroke.tsx';
 export { toast, Toaster } from './toast.tsx';

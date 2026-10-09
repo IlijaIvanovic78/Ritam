@@ -1,9 +1,12 @@
-// Podešavanja: tema, početak dana, prag za niz, instalacija, rezervna kopija, raspored ispočetka, nalog,
+// Podešavanja: jezik, tema, početak dana, prag za niz, instalacija, rezervna kopija, raspored ispočetka, nalog,
 // verzija aplikacije.
 
 import { useEffect, useId, useRef, useState, type ChangeEvent, type FormEvent, type ReactNode } from 'react';
+import { htmlLang } from '../../../shared/i18n.ts';
+import type { Lang } from '../../../shared/types.ts';
 import { fmtClock, fmtDateMedium, fmtDateShort, localISODate, parseClock } from '../../../shared/time.ts';
 import { ApiError, api, errorMessage } from '../api.ts';
+import { LANGS, joinAnd, setLang, tIn, useLang, useT, type TFunction } from '../i18n/index.ts';
 import { logout, settlePendingWrites } from '../lib/account.ts';
 import { useSession } from '../lib/hooks.ts';
 import { clearNoteDrafts, listNoteDraftDates } from '../lib/noteDrafts.ts';
@@ -30,19 +33,17 @@ const APP_VERSION = '1.0.0';
 const MAX_DAY_START = 360; // 06:00
 const MAX_IMPORT_BYTES = 20 * 1024 * 1024;
 
-const THEME_OPTIONS: Array<{ value: ThemePref; label: string }> = [
-  { value: 'dark', label: 'Tamna' },
-  { value: 'light', label: 'Svetla' },
-  { value: 'system', label: 'Sistem' },
-];
+const THEMES: ThemePref[] = ['dark', 'light', 'system'];
 
 const THRESHOLD_OPTIONS = [50, 60, 70, 80, 90].map((v) => ({ value: v, label: `${v}%` }));
 
 export default function SettingsPage() {
+  const t = useT();
   return (
     <div className="page">
-      <PageHeader title="Podešavanja" />
+      <PageHeader title={t('shell.page.settings')} />
       <div className="set-body">
+        <LanguageSection />
         <AppearanceSection />
         <DaySection />
         <InstallSection />
@@ -88,15 +89,72 @@ function Row({
   );
 }
 
+// ---- Jezik ----
+
+/**
+ * Jezik interfejsa: menja se odmah na ovom uređaju, pa se upisuje u nalog (važi na svim uređajima naloga). Ako
+ * čuvanje ne uspe, jezik se vraća, a poruka je na vraćenom jeziku (greška sa servera / iz SW-a je već stigla na
+ * novom jeziku, jer je zahtev otišao sa njim u X-Ritam-Lang). Naziv kartice i jezika su čitljivi na oba jezika
+ * ("Language · Jezik").
+ */
+function LanguageSection() {
+  const t = useT();
+  const lang = useLang();
+  const [saving, setSaving] = useState(false);
+  const options = LANGS.map((l) => ({
+    value: l,
+    label: <span lang={htmlLang(l)}>{t(`lang.${l}` as const)}</span>,
+  }));
+
+  const change = async (next: Lang) => {
+    if (next === lang || saving) return;
+    const prev = lang;
+    setLang(next);
+    setSaving(true);
+    try {
+      scheduleStore.set(await api.patchSettings({ lang: next }));
+    } catch {
+      setLang(prev);
+      toast.error(tIn(prev, 'settings.language.saveFailed'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Card title={t('lang.label')}>
+      <Row hint={t('settings.language.hint')}>
+        <div className={cx('set-seg-wrap', saving && 'set-busy')} aria-busy={saving || undefined}>
+          <Segmented
+            label={t('lang.label')}
+            value={lang}
+            options={options}
+            onChange={(v) => void change(v)}
+            className="set-seg"
+          />
+        </div>
+      </Row>
+    </Card>
+  );
+}
+
 // ---- Izgled ----
 
 function AppearanceSection() {
+  const t = useT();
   const theme = useTheme();
+  const options = THEMES.map((v) => ({ value: v, label: t(`settings.theme.${v}` as const) }));
   return (
-    <Card title="Izgled">
-      <Row hint="Sistem prati podešavanje telefona ili računara.">
+    <Card title={t('settings.appearance.title')}>
+      <Row hint={t('settings.appearance.hint')}>
         <div className="set-seg-wrap">
-          <Segmented label="Tema" value={theme} options={THEME_OPTIONS} onChange={setTheme} className="set-seg" />
+          <Segmented
+            label={t('settings.theme.label')}
+            value={theme}
+            options={options}
+            onChange={setTheme}
+            className="set-seg"
+          />
         </div>
       </Row>
     </Card>
@@ -106,6 +164,7 @@ function AppearanceSection() {
 // ---- Dan i niz ----
 
 function DaySection() {
+  const t = useT();
   const settings = useSettings();
   const [draft, setDraft] = useState(() => fmtClock(settings.dayStart));
   const [savingStart, setSavingStart] = useState(false);
@@ -127,7 +186,7 @@ function DaySection() {
       const payload = await api.patchSettings({ dayStart: parsed });
       scheduleStore.set(payload);
       setDraft(fmtClock(payload.settings.dayStart));
-      toast.success('Početak dana je sačuvan.');
+      toast.success(t('settings.day.startSaved'));
     } catch (e) {
       toast.error(errorMessage(e));
     } finally {
@@ -149,11 +208,8 @@ function DaySection() {
   };
 
   return (
-    <Card title="Dan">
-      <Row
-        label="Dan počinje u"
-        hint="Sve između ponoći i ovog vremena računa se u prethodni dan — korisno ako ležeš posle ponoći."
-      >
+    <Card title={t('settings.day.title')}>
+      <Row label={t('settings.day.start')} hint={t('settings.day.startHint')}>
         <form
           className="set-inline"
           onSubmit={(e) => {
@@ -162,7 +218,7 @@ function DaySection() {
           }}
         >
           <TimeInput
-            aria-label="Dan počinje u"
+            aria-label={t('settings.day.start')}
             className="set-time"
             min="00:00"
             max="06:00"
@@ -172,19 +228,19 @@ function DaySection() {
             aria-describedby={invalid ? 'set-day-start-error' : undefined}
           />
           <Button type="submit" disabled={!dirty} loading={savingStart}>
-            Sačuvaj
+            {t('common.save')}
           </Button>
         </form>
         {invalid && (
           <p className="set-error" id="set-day-start-error">
-            Izaberi vreme od 00:00 do 06:00.
+            {t('settings.day.startInvalid')}
           </p>
         )}
       </Row>
-      <Row label="Prag za niz dana" hint="Dan ulazi u niz kad je ispunjen bar ovoliko.">
+      <Row label={t('settings.day.threshold')} hint={t('settings.day.thresholdHint')}>
         <div className={cx('set-seg-wrap', savingThreshold && 'set-busy')} aria-busy={savingThreshold || undefined}>
           <Segmented
-            label="Prag za niz dana"
+            label={t('settings.day.threshold')}
             value={threshold}
             options={THRESHOLD_OPTIONS}
             onChange={(v) => void saveThreshold(v)}
@@ -199,12 +255,13 @@ function DaySection() {
 // ---- Instalacija ----
 
 function InstallSection() {
+  const t = useT();
   const { canInstall, installed, promptInstall } = useInstallPrompt();
   const standalone = installed || isStandalone();
 
   const install = async () => {
     try {
-      if (await promptInstall()) toast.success('Ritam je instaliran.');
+      if (await promptInstall()) toast.success(t('settings.install.done'));
     } catch (e) {
       toast.error(errorMessage(e));
     }
@@ -214,33 +271,31 @@ function InstallSection() {
   if (standalone) return null;
 
   return (
-    <Card title="Instalacija">
+    <Card title={t('settings.install.title')}>
       {canInstall ? (
-        <Row hint="Otvara se kao zasebna aplikacija, bez adresne trake.">
+        <Row hint={t('settings.install.hint')}>
           <Button variant="secondary" icon="download" onClick={() => void install()}>
-            Instaliraj aplikaciju
+            {t('settings.install.button')}
           </Button>
         </Row>
       ) : (
         <div className="set-install">
-          <p className="set-row-hint">Otvara se kao zasebna aplikacija, bez adresne trake.</p>
+          <p className="set-row-hint">{t('settings.install.hint')}</p>
           <dl className="set-steps">
             <div>
               <dt>iPhone</dt>
-              <dd>U Safariju otvori Podeli, pa izaberi Dodaj na početni ekran.</dd>
+              <dd>{t('settings.install.iphone')}</dd>
             </div>
             <div>
               <dt>Android</dt>
-              <dd>U Chrome meniju izaberi Instaliraj aplikaciju.</dd>
+              <dd>{t('settings.install.android')}</dd>
             </div>
             <div>
-              <dt>Laptop</dt>
-              <dd>U Chrome-u ili Edge-u klikni ikonicu za instalaciju u adresnoj traci.</dd>
+              <dt>{t('settings.install.laptop')}</dt>
+              <dd>{t('settings.install.laptopSteps')}</dd>
             </div>
           </dl>
-          {!window.isSecureContext && (
-            <p className="set-row-hint">Instalacija i rad bez interneta rade samo preko HTTPS adrese.</p>
-          )}
+          {!window.isSecureContext && <p className="set-row-hint">{t('settings.install.httpsOnly')}</p>}
         </div>
       )}
     </Card>
@@ -258,16 +313,21 @@ function isBackup(data: unknown): data is BackupHeader {
   return typeof data === 'object' && data !== null && (data as { app?: unknown }).app === 'ritam';
 }
 
-/** "7. okt 2026. u 21:14" iz ISO vremena; null ako nije ispravno. */
-function fmtExportedAt(v: unknown): string | null {
+/** en "Oct 7, 2026 at 21:14", sr "7. okt 2026. u 21:14" iz ISO vremena; null ako nije ispravno. */
+function fmtExportedAt(v: unknown, lang: Lang, t: TFunction): string | null {
   if (typeof v !== 'string') return null;
   const d = new Date(v);
   if (Number.isNaN(d.getTime())) return null;
-  const iso = localISODate(d);
-  return `${fmtDateShort(iso)} ${d.getFullYear()}. u ${fmtClock(d.getHours() * 60 + d.getMinutes())}`;
+  return t('settings.backup.when', {
+    date: fmtDateShort(localISODate(d), lang),
+    year: d.getFullYear(),
+    time: fmtClock(d.getHours() * 60 + d.getMinutes()),
+  });
 }
 
 function BackupSection() {
+  const t = useT();
+  const lang = useLang();
   const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -298,7 +358,7 @@ function BackupSection() {
     e.target.value = ''; // isti fajl može ponovo da se izabere
     if (!file) return;
     if (file.size > MAX_IMPORT_BYTES) {
-      toast.error('Fajl je prevelik. Najviše 20 MB.');
+      toast.error(t('settings.backup.tooLarge'));
       return;
     }
 
@@ -306,24 +366,24 @@ function BackupSection() {
     try {
       data = JSON.parse(await file.text());
     } catch {
-      toast.error('Fajl nije ispravan JSON.');
+      toast.error(t('settings.backup.notJson'));
       return;
     }
     if (!isBackup(data)) {
-      toast.error('Ovo nije Ritam rezervna kopija.');
+      toast.error(t('settings.backup.notBackup'));
       return;
     }
 
-    const when = fmtExportedAt(data.exportedAt);
+    const when = fmtExportedAt(data.exportedAt, lang, t);
     const ok = await confirmDialog({
-      title: 'Vratiti podatke iz kopije?',
+      title: t('settings.backup.confirmTitle'),
       body: (
         <>
-          <p>Svi podaci ovog naloga biće zamenjeni podacima iz kopije. Ovo ne može da se poništi.</p>
-          {when && <p className="set-confirm-meta">Kopija je napravljena {when}.</p>}
+          <p>{t('settings.backup.confirmBody')}</p>
+          {when && <p className="set-confirm-meta">{t('settings.backup.createdAt', { when })}</p>}
         </>
       ),
-      confirmText: 'Vrati kopiju',
+      confirmText: t('settings.backup.confirm'),
       danger: true,
     });
     if (!ok) return;
@@ -342,15 +402,15 @@ function BackupSection() {
   };
 
   return (
-    <Card title="Rezervna kopija">
-      <Row label="Preuzmi kopiju" hint="Raspored, dani, zadaci i beleške ovog naloga u jednom JSON fajlu.">
+    <Card title={t('settings.backup.title')}>
+      <Row label={t('settings.backup.download')} hint={t('settings.backup.downloadHint')}>
         <Button icon="download" loading={exporting} onClick={() => void download()}>
-          Preuzmi
+          {t('settings.backup.downloadButton')}
         </Button>
       </Row>
-      <Row label="Vrati iz kopije" hint="Zamenjuje sve podatke ovog naloga podacima iz fajla.">
+      <Row label={t('settings.backup.restore')} hint={t('settings.backup.restoreHint')}>
         <Button icon="upload" loading={importing} onClick={() => fileRef.current?.click()}>
-          Izaberi fajl…
+          {t('settings.backup.chooseFile')}
         </Button>
         <input
           ref={fileRef}
@@ -368,14 +428,13 @@ function BackupSection() {
 
 // ---- Raspored ispočetka ----
 
-const RESET_KEEPS = 'Sačuvani dani, zadaci i beleške ostaju, a napredak ranijih dana se ne menja.';
-
 /**
  * Briše ceo raspored (kategorije, šablone, dodelu šablona danima u nedelji) jednom potvrđenom akcijom —
  * npr. primer koji je ranija verzija upisivala u novu bazu. Ništa se ne briše bez potvrde. Kad nema
  * nijedne kategorije, šablona ni dodele (nova, prazna instalacija), kartica se ne prikazuje.
  */
 function ResetSection() {
+  const t = useT();
   const { categories, templates, weekdays, settings } = useScheduleData();
   const [resetDayStart, setResetDayStart] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -386,27 +445,28 @@ function ResetSection() {
   if (categories.length === 0 && templates.length === 0 && !mapped) return null;
 
   const withDayStart = dayStartSet && resetDayStart;
+  const keeps = t('settings.reset.keeps');
 
   const reset = async () => {
+    const counts = { categories: categories.length, templates: templates.length, keeps };
     const ok = await confirmDialog({
-      title: 'Raspored ispočetka?',
+      title: t('settings.reset.confirmTitle'),
       body: (
         <>
           <p>
-            Brišu se sve kategorije ({categories.length}), šabloni ({templates.length}) i dodela šablona danima u
-            nedelji{withDayStart ? ', a dan ponovo počinje u 00:00' : ''}. {RESET_KEEPS}
+            {withDayStart ? t('settings.reset.confirmBodyDayStart', counts) : t('settings.reset.confirmBody', counts)}
           </p>
-          <p className="set-confirm-meta">Ako želiš da sačuvaš i ovaj raspored, prvo preuzmi kopiju.</p>
+          <p className="set-confirm-meta">{t('settings.reset.confirmMeta')}</p>
         </>
       ),
-      confirmText: 'Obriši raspored',
+      confirmText: t('settings.reset.confirm'),
       danger: true,
     });
     if (!ok) return;
     setBusy(true);
     try {
       scheduleStore.set(await api.resetSchedule(withDayStart ? { dayStart: true } : {}));
-      toast.success('Raspored je obrisan. Napravi svoj na stranici Raspored.');
+      toast.success(t('settings.reset.done'));
     } catch (e) {
       toast.error(errorMessage(e));
     } finally {
@@ -415,21 +475,19 @@ function ResetSection() {
   };
 
   return (
-    <Card title="Raspored ispočetka">
+    <Card title={t('settings.reset.title')}>
       <div className="set-reset">
-        <p className="set-row-hint">
-          Briše sve kategorije, šablone i dodelu šablona danima u nedelji, da raspored napraviš od nule. {RESET_KEEPS}
-        </p>
+        <p className="set-row-hint">{t('settings.reset.hint', { keeps })}</p>
         {dayStartSet && (
           <Toggle
             checked={resetDayStart}
             onChange={setResetDayStart}
             disabled={busy}
-            label={`Vrati i početak dana na 00:00 (sada ${fmtClock(settings.dayStart)})`}
+            label={t('settings.reset.dayStartToo', { time: fmtClock(settings.dayStart) })}
           />
         )}
         <Button icon="trash" loading={busy} onClick={() => void reset()}>
-          Obriši raspored…
+          {t('settings.reset.button')}
         </Button>
       </div>
     </Card>
@@ -455,6 +513,8 @@ const PASSWORD_MIN = 8;
 const PASSWORD_MAX = 200;
 
 function AccountSection() {
+  const t = useT();
+  const lang = useLang();
   const { user } = useSession();
   const [busy, setBusy] = useState(false);
   const [pwOpen, setPwOpen] = useState(false);
@@ -468,13 +528,14 @@ function AccountSection() {
     // Nesačuvane beleške su samo na ovom uređaju; odjava ih briše (lični tekst ne ostaje posle odjave).
     const drafts = listNoteDraftDates();
     if (drafts.length > 0) {
+      const one = drafts.length === 1;
       const ok = await confirmDialog({
-        title: 'Imaš nesačuvanu belešku',
-        body:
-          drafts.length === 1
-            ? `Beleška za ${fmtDateMedium(drafts[0])} nije sačuvana na serveru. Odjavom se briše sa ovog uređaja.`
-            : `Beleške za ${drafts.map(fmtDateMedium).join(', ')} nisu sačuvane na serveru. Odjavom se brišu sa ovog uređaja.`,
-        confirmText: 'Odjavi se',
+        title: t(one ? 'settings.account.draftTitle' : 'settings.account.draftTitleMany'),
+        body: one
+          ? t('settings.account.draftOne', { date: fmtDateMedium(drafts[0], lang) })
+          : // Kratki datumi bez zareza ("Oct 6 and Oct 8"): "Thu, Oct 8" u nabrajanju bi se slio u jedan niz.
+            t('settings.account.draftMany', { dates: joinAnd(drafts.map((d) => fmtDateShort(d, lang)), lang) }),
+        confirmText: t('settings.account.signOut'),
         danger: true,
       });
       if (!ok) return;
@@ -490,19 +551,21 @@ function AccountSection() {
   };
 
   return (
-    <Card title="Nalog">
+    <Card title={t('settings.account.title')}>
       <Row
-        label={<span className="set-email">{user ? <EmailText email={user.email} /> : 'Nalog'}</span>}
-        hint="Prijavljen si ovim nalogom."
+        label={
+          <span className="set-email">{user ? <EmailText email={user.email} /> : t('settings.account.title')}</span>
+        }
+        hint={t('settings.account.signedIn')}
       />
-      <Row label="Lozinka" hint="Posle promene, ostali uređaji moraju ponovo da se prijave.">
+      <Row label={t('settings.account.password')} hint={t('settings.account.passwordHint')}>
         <Button icon="lock" onClick={() => setPwOpen(true)}>
-          Promeni lozinku
+          {t('settings.account.changePassword')}
         </Button>
       </Row>
-      <Row label="Odjava" hint="Za ponovni ulaz na ovom uređaju trebaju email i lozinka.">
+      <Row label={t('settings.account.signOutLabel')} hint={t('settings.account.signOutHint')}>
         <Button icon="logout" loading={busy} onClick={() => void signOut()}>
-          Odjavi se
+          {t('settings.account.signOut')}
         </Button>
       </Row>
       {pwOpen && <PasswordSheet email={user?.email ?? ''} onClose={() => setPwOpen(false)} />}
@@ -517,6 +580,7 @@ function AccountSection() {
  * ručna provera nove verzije. Nova verzija se prikazuje trakom na dnu ekrana (App.tsx).
  */
 function VersionSection() {
+  const t = useT();
   const [checking, setChecking] = useState(false);
   const build = buildLabel();
 
@@ -525,25 +589,25 @@ function VersionSection() {
     setChecking(true);
     const result = await checkForUpdate(true);
     setChecking(false);
-    if (result === 'latest') toast('Imaš najnoviju verziju.');
-    else if (result === 'offline') toast('Nema konekcije.');
-    else if (result === 'unavailable') toast.error('Server nije dostupan. Pokušaj ponovo.');
-    else if (result === 'unknown') toast('Server ne javlja verziju, pa provera nije moguća.');
-    // 'update': pojavi se traka "Dostupna je nova verzija." sa dugmetom Osveži.
+    if (result === 'latest') toast(t('settings.version.latest'));
+    else if (result === 'offline') toast(t('error.offline'));
+    else if (result === 'unavailable') toast.error(t('error.unavailable'));
+    else if (result === 'unknown') toast(t('settings.version.unknown'));
+    // 'update': pojavi se traka nove verzije (update.available) sa dugmetom Osveži.
   };
 
   return (
-    <Card title="Verzija">
+    <Card title={t('settings.version.title')}>
       <Row
         label={
           <span className="tabular">
-            Ritam {APP_VERSION} · {build ?? 'razvoj'}
+            Ritam {APP_VERSION} · {build ?? t('settings.version.dev')}
           </span>
         }
-        hint="Nova verzija se proverava sama i nudi se trakom na dnu ekrana."
+        hint={t('settings.version.hint')}
       >
         <Button icon="refresh" loading={checking} onClick={() => void check()}>
-          Proveri ažuriranje
+          {t('settings.version.check')}
         </Button>
       </Row>
     </Card>
@@ -552,6 +616,7 @@ function VersionSection() {
 
 /** Promena lozinke: trenutna + nova. Ostale sesije naloga se opozivaju, ovaj uređaj ostaje prijavljen. */
 function PasswordSheet({ email, onClose }: { email: string; onClose: () => void }) {
+  const t = useT();
   const formId = useId();
   const [current, setCurrent] = useState('');
   const [next, setNext] = useState('');
@@ -570,9 +635,9 @@ function PasswordSheet({ email, onClose }: { email: string; onClose: () => void 
     e.preventDefault();
     if (busy) return;
     const invalid: typeof errors = {};
-    if (!current) invalid.current = 'Unesi trenutnu lozinku.';
-    if (next.length < PASSWORD_MIN) invalid.next = `Lozinka mora imati bar ${PASSWORD_MIN} znakova.`;
-    else if (next.length > PASSWORD_MAX) invalid.next = `Lozinka može imati najviše ${PASSWORD_MAX} znakova.`;
+    if (!current) invalid.current = t('settings.password.currentRequired');
+    if (next.length < PASSWORD_MIN) invalid.next = t('login.passwordMin', { min: PASSWORD_MIN });
+    else if (next.length > PASSWORD_MAX) invalid.next = t('login.passwordMax', { max: PASSWORD_MAX });
     if (invalid.current || invalid.next) {
       setErrors(invalid);
       focus(invalid.current ? currentRef.current : nextRef.current);
@@ -582,14 +647,15 @@ function PasswordSheet({ email, onClose }: { email: string; onClose: () => void 
     setErrors({});
     try {
       await api.changePassword(current, next);
-      toast.success('Lozinka je promenjena.');
+      toast.success(t('settings.password.changed'));
       onClose();
     } catch (err) {
       const msg = errorMessage(err);
       if (err instanceof ApiError && err.code === 'bad_password') {
         setErrors({ current: msg });
         focus(currentRef.current);
-      } else if (err instanceof ApiError && err.status === 400 && /trenutn/i.test(msg)) {
+      } else if (err instanceof ApiError && err.status === 400 && /trenutn|current/i.test(msg)) {
+        // Poruka servera je na jeziku interfejsa (X-Ritam-Lang).
         setErrors({ current: msg });
         focus(currentRef.current);
       } else if (err instanceof ApiError && err.status === 400) {
@@ -606,7 +672,7 @@ function PasswordSheet({ email, onClose }: { email: string; onClose: () => void 
     <Sheet
       open
       onClose={onClose}
-      title="Promeni lozinku"
+      title={t('settings.account.changePassword')}
       size="sm"
       footer={
         <>
@@ -616,10 +682,10 @@ function PasswordSheet({ email, onClose }: { email: string; onClose: () => void 
             </p>
           )}
           <Button variant="ghost" onClick={onClose} disabled={busy}>
-            Otkaži
+            {t('common.cancel')}
           </Button>
           <Button variant="primary" type="submit" form={formId} loading={busy}>
-            Sačuvaj
+            {t('common.save')}
           </Button>
         </>
       }
@@ -627,7 +693,7 @@ function PasswordSheet({ email, onClose }: { email: string; onClose: () => void 
       <form id={formId} className="stack" onSubmit={submit} noValidate>
         {/* Menadžer lozinki tako zna za koji nalog čuva novu lozinku. */}
         <input type="email" name="email" autoComplete="username" value={email} readOnly hidden />
-        <Field label="Trenutna lozinka" error={errors.current}>
+        <Field label={t('settings.password.current')} error={errors.current}>
           <TextInput
             ref={currentRef}
             type="password"
@@ -644,7 +710,11 @@ function PasswordSheet({ email, onClose }: { email: string; onClose: () => void 
             enterKeyHint="next"
           />
         </Field>
-        <Field label="Nova lozinka" error={errors.next} hint={`Bar ${PASSWORD_MIN} znakova.`}>
+        <Field
+          label={t('settings.password.new')}
+          error={errors.next}
+          hint={t('login.passwordHint', { min: PASSWORD_MIN })}
+        >
           <TextInput
             ref={nextRef}
             type="password"

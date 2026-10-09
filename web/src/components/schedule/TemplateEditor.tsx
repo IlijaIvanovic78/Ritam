@@ -5,15 +5,16 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Category, Template, TemplateBlockInput } from '../../../../shared/types.ts';
 import {
   DAY_MIN,
-  WEEKDAY_SHORT,
   fmtClock,
   fmtDuration,
   isValidRange,
   normalizeRange,
   parseClock,
   toClock,
+  weekdayShort,
 } from '../../../../shared/time.ts';
 import { ApiError, api, errorMessage, isCachedPayload } from '../../api.ts';
+import { useLang, useT, type TFunction } from '../../i18n/index.ts';
 import { categoryColor, scheduleStore, useCategoryMap, useScheduleData } from '../../lib/store.ts';
 import { jumpHint, normalizeNear } from '../../lib/timeRange.ts';
 import { useUnsavedGuard } from '../../lib/useUnsavedGuard.ts';
@@ -40,7 +41,6 @@ import {
   BLOCK_TITLE_MAX,
   MAX_TEMPLATE_BLOCKS,
   TEMPLATE_NAME_MAX,
-  blocksLabel,
   copyName,
   maxId,
   weekdayList,
@@ -100,25 +100,32 @@ function serverPrint(t: Template): string {
   return JSON.stringify([t.name, blocks]);
 }
 
-const CHANGED_ELSEWHERE = 'Šablon je u međuvremenu promenjen na drugom uređaju.';
-
 /** Raspored stariji od ovoga se pri otvaranju editora tiho osveži. */
 const STALE_MS = 5_000;
 
-function checkRow(r: Row, dayStart: number): RowCheck {
+/** Provera reda; poruke su na jeziku `t` (jumpHint na trenutnom jeziku — `t` se menja sa njim). */
+function checkRow(r: Row, dayStart: number, t: TFunction): RowCheck {
   const title = r.title.trim();
-  const titleError = !title ? 'Upiši naslov.' : title.length > BLOCK_TITLE_MAX ? 'Naslov je predugačak.' : null;
+  const titleError = !title
+    ? t('schedule.editor.titleRequired')
+    : title.length > BLOCK_TITLE_MAX
+      ? t('schedule.editor.titleTooLong')
+      : null;
   const s = parseClock(r.start);
   const e = parseClock(r.end);
-  if (s == null || e == null) return { range: null, timeError: 'Unesi početak i kraj.', titleError, jump: null };
+  if (s == null || e == null) {
+    return { range: null, timeError: t('schedule.editor.timeRequired'), titleError, jump: null };
+  }
   // normalizeRange bi isti početak i kraj pretvorio u blok od 24h — to je skoro uvek greška.
-  if (s === e) return { range: null, timeError: 'Početak i kraj ne mogu biti isti.', titleError, jump: null };
+  if (s === e) return { range: null, timeError: t('schedule.editor.timeSame'), titleError, jump: null };
   // Postojeći blok ostaje na svom kraju dana (npr. 01:00–09:00 pomeren na 00:30 ostaje ujutru),
   // ali samo dok se preklapa sa logičkim danom; nepromenjen red zadržava tačno sačuvani opseg.
   // Novi red ide po pravilu dana. Tako isto vreme nikad ne završi van dana (skriveno na traci).
   const range =
     r.origStart != null ? normalizeNear(s, e, r.origStart, dayStart) : normalizeRange(s, e, dayStart);
-  if (!isValidRange(range.start, range.end)) return { range: null, timeError: 'Neispravno vreme.', titleError, jump: null };
+  if (!isValidRange(range.start, range.end)) {
+    return { range: null, timeError: t('schedule.editor.timeInvalid'), titleError, jump: null };
+  }
   const jump = r.origStart != null ? jumpHint(range, r.origStart, dayStart) : null;
   return { range, timeError: null, titleError, jump };
 }
@@ -165,7 +172,8 @@ function suggestNewBlock(rows: Row[], checks: RowCheck[], dayStart: number): { s
   return preferred;
 }
 
-const placedLabel = (p: Placed) => `${p.row.title.trim() || 'Bez naslova'} ${fmtClock(p.start)}–${fmtClock(p.end)}`;
+const placedLabel = (p: Placed, t: TFunction) =>
+  `${p.row.title.trim() || t('schedule.editor.untitled')} ${fmtClock(p.start)}–${fmtClock(p.end)}`;
 
 export function TemplateEditor({
   template,
@@ -177,6 +185,8 @@ export function TemplateEditor({
   /** Otvori drugi šablon u editoru (posle dupliranja). */
   onOpenTemplate: (id: number) => void;
 }) {
+  const t = useT();
+  const lang = useLang();
   const { categories, weekdays, settings } = useScheduleData();
   const catMap = useCategoryMap();
   const dayStart = settings.dayStart;
@@ -198,7 +208,7 @@ export function TemplateEditor({
   const [newCatRow, setNewCatRow] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
 
-  const checks = useMemo(() => rows.map((r) => checkRow(r, dayStart)), [rows, dayStart]);
+  const checks = useMemo(() => rows.map((r) => checkRow(r, dayStart, t)), [rows, dayStart, t]);
   const overlaps = useMemo(() => findOverlaps(rows, checks), [rows, checks]);
   const preview: TimelineSegment[] = rows.flatMap((r, i) => {
     const rg = checks[i].range;
@@ -207,7 +217,7 @@ export function TemplateEditor({
   const totalMin = preview.reduce((sum, b) => sum + (b.end - b.start), 0);
   const usedBy = weekdaysUsing(weekdays, template.id);
 
-  const nameError = !name.trim() ? 'Upiši naziv šablona.' : null;
+  const nameError = !name.trim() ? t('schedule.editor.nameRequired') : null;
   const dirty = snapshot(name, rows) !== initial;
 
   /** Forma kreće ispočetka od verzije `t` (izmena sa drugog uređaja dok ovde ništa nije menjano). */
@@ -255,7 +265,7 @@ export function TemplateEditor({
   /** true ako je editor zatvoren. */
   async function requestClose(): Promise<boolean> {
     if (busy) return false;
-    if (dirty && !(await confirmDiscard('Izmene u ovom šablonu nisu sačuvane.'))) return false;
+    if (dirty && !(await confirmDiscard(t('schedule.editor.discardBody')))) return false;
     onClose();
     return true;
   }
@@ -289,11 +299,11 @@ export function TemplateEditor({
       // Čuvanje zamenjuje ceo šablon: ako ga je drugi uređaj u međuvremenu promenio, ne gazi tu
       // izmenu naslepo. Ova verzija postaje osnova, pa ponovni klik na Sačuvaj svesno zamenjuje tu.
       const fresh = await api.schedule();
-      const current = isCachedPayload(fresh) ? null : fresh.templates.find((t) => t.id === template.id);
+      const current = isCachedPayload(fresh) ? null : fresh.templates.find((tpl) => tpl.id === template.id);
       if (current && serverPrint(current) !== serverPrint(base)) {
         scheduleStore.set(fresh);
         setBase(current);
-        fail(new Error(`${CHANGED_ELSEWHERE} Sačuvaj ponovo da ga zameniš ovom verzijom, ili zatvori bez čuvanja.`));
+        fail(new Error(t('schedule.editor.changedElsewhere')));
         return;
       }
       let payload = await api.putTemplateBlocks(template.id, blocks);
@@ -303,7 +313,7 @@ export function TemplateEditor({
         payload = await api.patchTemplate(template.id, { name: trimmedName });
         scheduleStore.set(payload);
       }
-      toast.success('Šablon je sačuvan.');
+      toast.success(t('schedule.editor.saved'));
       onClose();
     } catch (e) {
       // Server koji i sam proverava verziju šablona javlja sukob sa 409.
@@ -316,9 +326,9 @@ export function TemplateEditor({
     if (busy) return;
     if (dirty) {
       const ok = await confirmDialog({
-        title: 'Dupliraj sačuvanu verziju?',
-        body: 'Kopija se pravi od poslednje sačuvane verzije. Nesačuvane izmene ovde se odbacuju.',
-        confirmText: 'Dupliraj',
+        title: t('schedule.editor.duplicateTitle'),
+        body: t('schedule.editor.duplicateBody'),
+        confirmText: t('schedule.editor.duplicate'),
       });
       if (!ok) return;
     }
@@ -326,7 +336,7 @@ export function TemplateEditor({
     try {
       const payload = await api.addTemplate({ name: copyName(template.name), copyFrom: template.id });
       scheduleStore.set(payload);
-      toast.success('Kopija je napravljena.');
+      toast.success(t('schedule.editor.duplicated'));
       const id = maxId(payload.templates);
       if (id != null) onOpenTemplate(id);
       else onClose();
@@ -338,11 +348,11 @@ export function TemplateEditor({
   async function remove() {
     if (busy) return;
     const ok = await confirmDialog({
-      title: `Obriši šablon „${template.name}“?`,
+      title: t('schedule.editor.deleteTitle', { name: template.name }),
       body: usedBy.length
-        ? `Dodeljen je danima: ${weekdayList(usedBy)}. Ti dani ostaju bez šablona. Već započeti dani se ne menjaju.`
-        : 'Nije dodeljen nijednom danu. Već započeti dani se ne menjaju.',
-      confirmText: 'Obriši',
+        ? t('schedule.editor.deleteBodyUsed', { days: weekdayList(usedBy, lang) })
+        : t('schedule.editor.deleteBodyUnused'),
+      confirmText: t('common.delete'),
       danger: true,
     });
     if (!ok) return;
@@ -350,7 +360,7 @@ export function TemplateEditor({
     try {
       const payload = await api.deleteTemplate(template.id);
       scheduleStore.set(payload);
-      toast.success('Šablon je obrisan.');
+      toast.success(t('schedule.editor.deleted'));
       onClose();
     } catch (e) {
       fail(e);
@@ -362,7 +372,7 @@ export function TemplateEditor({
       <Sheet
         open
         onClose={requestClose}
-        title="Izmeni šablon"
+        title={t('schedule.editor.title')}
         size="lg"
         footer={
           <>
@@ -372,16 +382,16 @@ export function TemplateEditor({
               </p>
             )}
             <Button variant="ghost" onClick={requestClose} disabled={busy != null}>
-              Otkaži
+              {t('common.cancel')}
             </Button>
             <Button variant="primary" onClick={save} loading={busy === 'save'} disabled={busy != null}>
-              Sačuvaj
+              {t('common.save')}
             </Button>
           </>
         }
       >
         <div className="sched-ed" ref={rootRef}>
-          <Field label="Naziv" error={submitted ? nameError : null}>
+          <Field label={t('schedule.nameLabel')} error={submitted ? nameError : null}>
             <TextInput
               value={name}
               maxLength={TEMPLATE_NAME_MAX}
@@ -393,19 +403,19 @@ export function TemplateEditor({
           <div className="sched-ed-preview">
             <MiniTimeline blocks={preview} dayStart={dayStart} catMap={catMap} large />
             <p className="sched-ed-sum">
-              {blocksLabel(preview.length)} · {fmtDuration(totalMin)}
+              {t('common.blocks', { n: preview.length })} · {fmtDuration(totalMin)}
               {' · '}
-              {usedBy.length ? usedBy.map((d) => WEEKDAY_SHORT[d - 1]).join(', ') : 'nije dodeljen danima'}
+              {usedBy.length ? usedBy.map((d) => weekdayShort(d, lang)).join(', ') : t('schedule.editor.unassigned')}
             </p>
           </div>
 
-          <section className="sched-ed-blocks" aria-label="Blokovi">
-            <h3 className="sched-ed-h">Blokovi</h3>
+          <section className="sched-ed-blocks" aria-label={t('schedule.editor.blocks')}>
+            <h3 className="sched-ed-h">{t('schedule.editor.blocks')}</h3>
             {rows.length > 0 && (
               <div className="sched-ed-head" aria-hidden="true">
-                <span>Od – do</span>
-                <span>Naslov</span>
-                <span>Kategorija</span>
+                <span>{t('schedule.editor.colTime')}</span>
+                <span>{t('schedule.editor.colTitle')}</span>
+                <span>{t('schedule.editor.colCategory')}</span>
               </div>
             )}
             <ul className="sched-ed-list">
@@ -426,7 +436,7 @@ export function TemplateEditor({
                 />
               ))}
             </ul>
-            {rows.length === 0 && <p className="sched-muted">Šablon još nema blokova.</p>}
+            {rows.length === 0 && <p className="sched-muted">{t('schedule.editor.noBlocks')}</p>}
             <div className="sched-ed-addrow">
               <Button
                 variant="secondary"
@@ -435,10 +445,10 @@ export function TemplateEditor({
                 onClick={addRow}
                 disabled={busy != null || rows.length >= MAX_TEMPLATE_BLOCKS}
               >
-                Dodaj blok
+                {t('schedule.editor.addBlock')}
               </Button>
               {rows.length >= MAX_TEMPLATE_BLOCKS && (
-                <span className="sched-muted">Najviše {MAX_TEMPLATE_BLOCKS} blokova.</span>
+                <span className="sched-muted">{t('schedule.editor.maxBlocks', { max: MAX_TEMPLATE_BLOCKS })}</span>
               )}
             </div>
           </section>
@@ -447,22 +457,22 @@ export function TemplateEditor({
             <div className="sched-ed-warn" role="status">
               <Icon name="info" size={18} />
               <div>
-                <p>Neki blokovi se preklapaju. Možeš da sačuvaš i ovako.</p>
+                <p>{t('schedule.editor.overlap')}</p>
                 <ul>
                   {overlaps.slice(0, 3).map(([a, b]) => (
                     <li key={`${a.row.key}-${b.row.key}`}>
-                      {placedLabel(a)} i {placedLabel(b)}
+                      {t('schedule.editor.overlapPair', { a: placedLabel(a, t), b: placedLabel(b, t) })}
                     </li>
                   ))}
                 </ul>
-                {overlaps.length > 3 && <p>i još {overlaps.length - 3}</p>}
+                {overlaps.length > 3 && <p>{t('schedule.editor.overlapMore', { count: overlaps.length - 3 })}</p>}
               </div>
             </div>
           )}
 
           <div className="sched-ed-more">
             <Button variant="ghost" size="sm" icon="copy" onClick={duplicate} loading={busy === 'dup'} disabled={busy != null}>
-              Dupliraj
+              {t('schedule.editor.duplicate')}
             </Button>
             <Button
               variant="ghost"
@@ -473,7 +483,7 @@ export function TemplateEditor({
               loading={busy === 'del'}
               disabled={busy != null}
             >
-              Obriši šablon
+              {t('schedule.editor.delete')}
             </Button>
           </div>
         </div>
@@ -516,6 +526,7 @@ function EditorRow({
   onNewCategory: () => void;
   onRemove: () => void;
 }) {
+  const t = useT();
   const n = index + 1;
   const timeError = showErrors ? check.timeError : null;
   const titleError = showErrors ? check.titleError : null;
@@ -527,8 +538,8 @@ function EditorRow({
   const night =
     rg && rg.end > DAY_MIN
       ? rg.start >= DAY_MIN
-        ? 'Posle ponoći, na kraju ovog dana.'
-        : `Preko ponoći, do ${fmtClock(rg.end)} sutra.`
+        ? t('schedule.editor.afterMidnight')
+        : t('schedule.editor.overMidnight', { time: fmtClock(rg.end) })
       : null;
 
   return (
@@ -536,7 +547,7 @@ function EditorRow({
       <CategoryStroke className="sched-ed-bar" color={color} />
       <div className="sched-ed-time">
         <TimeInput
-          aria-label={`Početak, blok ${n}`}
+          aria-label={t('schedule.editor.rowStart', { n })}
           value={row.start}
           onChange={(e) => onChange({ start: e.target.value })}
           aria-invalid={!!timeError}
@@ -546,7 +557,7 @@ function EditorRow({
           –
         </span>
         <TimeInput
-          aria-label={`Kraj, blok ${n}`}
+          aria-label={t('schedule.editor.rowEnd', { n })}
           value={row.end}
           onChange={(e) => onChange({ end: e.target.value })}
           aria-invalid={!!timeError}
@@ -555,8 +566,8 @@ function EditorRow({
       </div>
       <TextInput
         className="sched-ed-title"
-        aria-label={`Naslov, blok ${n}`}
-        placeholder="Naslov"
+        aria-label={t('schedule.editor.rowTitle', { n })}
+        placeholder={t('schedule.editor.colTitle')}
         value={row.title}
         maxLength={BLOCK_TITLE_MAX}
         onChange={(e) => onChange({ title: e.target.value })}
@@ -567,9 +578,9 @@ function EditorRow({
       <div className="sched-ed-cat">
         <CategoryDot color={color} />
         <Select
-          aria-label={`Kategorija, blok ${n}`}
+          aria-label={t('schedule.editor.rowCategory', { n })}
           // Ceo naziv i kad je kolona uska (slični nazivi se inače ne razlikuju).
-          title={catKnown ? catMap.get(row.categoryId as number)?.name : 'Bez kategorije'}
+          title={catKnown ? catMap.get(row.categoryId as number)?.name : t('common.noCategory')}
           value={catKnown ? String(row.categoryId) : ''}
           // "+ Nova kategorija…" otvara sheet: strelice na zatvorenom izboru ne smeju da ga otvore same.
           onKeyDown={(e) => guardSelectKeys(e, NEW_CATEGORY)}
@@ -581,19 +592,19 @@ function EditorRow({
           }}
           disabled={disabled}
         >
-          <option value="">Bez kategorije</option>
+          <option value="">{t('common.noCategory')}</option>
           {categories.map((c) => (
             <option key={c.id} value={c.id}>
               {c.name}
             </option>
           ))}
-          <option value={NEW_CATEGORY}>+ Nova kategorija…</option>
+          <option value={NEW_CATEGORY}>{t('schedule.editor.newCategory')}</option>
         </Select>
       </div>
       <IconButton
         className="sched-ed-del"
         icon="trash"
-        label={`Ukloni blok ${n}`}
+        label={t('schedule.editor.rowRemove', { n })}
         onClick={onRemove}
         disabled={disabled}
       />

@@ -1,8 +1,8 @@
 import type { Category, Template, Weekday, WeekdayMap } from '../../../../shared/types.ts';
-import { DAY_MIN, WEEKDAY_SHORT } from '../../../../shared/time.ts';
+import { DAY_MIN, weekdayShort } from '../../../../shared/time.ts';
+import { useLang, useT } from '../../i18n/index.ts';
 import { categoryColor } from '../../lib/store.ts';
 import { Sheet, cx } from '../../ui/index.ts';
-import { blocksWord } from './plural.ts';
 
 /** Mala 24h traka šablona (od "dan počinje u" do istog vremena sutra). */
 function MiniBar({ template, dayStart, catMap }: { template: Template; dayStart: number; catMap: Map<number, Category> }) {
@@ -46,26 +46,28 @@ export function TemplatePickerSheet({
   onPick: (templateId: number | null) => void;
   onClose: () => void;
 }) {
+  const lang = useLang();
+  const t = useT();
   const usedOn = (id: number) =>
-    ([1, 2, 3, 4, 5, 6, 7] as Weekday[]).filter((wd) => weekdays[wd] === id).map((wd) => WEEKDAY_SHORT[wd - 1]);
+    ([1, 2, 3, 4, 5, 6, 7] as Weekday[]).filter((wd) => weekdays[wd] === id).map((wd) => weekdayShort(wd, lang));
 
   return (
-    <Sheet open onClose={onClose} title="Primeni šablon" size="sm">
-      <p className="day-sheet-lead">Izabrani šablon zamenjuje blokove samo za ovaj dan. Raspored ostaje isti.</p>
+    <Sheet open onClose={onClose} title={t('day.picker.title')} size="sm">
+      <p className="day-sheet-lead">{t('day.picker.lead')}</p>
       <ul className="day-tpl-list">
-        {templates.map((t) => {
-          const current = t.id === currentTemplateId;
-          const days = usedOn(t.id);
+        {templates.map((tpl) => {
+          const current = tpl.id === currentTemplateId;
+          const days = usedOn(tpl.id);
           return (
-            <li key={t.id}>
-              <button type="button" className={cx('day-tpl', current && 'is-current')} onClick={() => onPick(t.id)}>
+            <li key={tpl.id}>
+              <button type="button" className={cx('day-tpl', current && 'is-current')} onClick={() => onPick(tpl.id)}>
                 <span className="day-tpl-top">
-                  <span className="day-tpl-name">{t.name}</span>
-                  {current && <span className="day-tpl-current">trenutni</span>}
+                  <span className="day-tpl-name">{tpl.name}</span>
+                  {current && <span className="day-tpl-current">{t('day.picker.current')}</span>}
                 </span>
-                <MiniBar template={t} dayStart={dayStart} catMap={catMap} />
+                <MiniBar template={tpl} dayStart={dayStart} catMap={catMap} />
                 <span className="day-tpl-meta">
-                  {t.blocks.length} {blocksWord(t.blocks.length)}
+                  {t('common.blocks', { n: tpl.blocks.length })}
                   {days.length > 0 && <> · {days.join(', ')}</>}
                 </span>
               </button>
@@ -75,9 +77,9 @@ export function TemplatePickerSheet({
         <li>
           <button type="button" className="day-tpl" onClick={() => onPick(null)}>
             <span className="day-tpl-top">
-              <span className="day-tpl-name">Prazan dan</span>
+              <span className="day-tpl-name">{t('day.picker.empty')}</span>
             </span>
-            <span className="day-tpl-meta">Bez blokova — dodaješ ih sam.</span>
+            <span className="day-tpl-meta">{t('day.picker.emptyHint')}</span>
           </button>
         </li>
       </ul>

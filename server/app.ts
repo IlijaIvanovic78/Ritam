@@ -8,6 +8,7 @@ import { HTTPException } from 'hono/http-exception';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { createApi } from './api.ts';
 import type { ApiDeps } from './api.ts';
+import { msg, requestLang } from './i18n.ts';
 import { HttpError, isHttps } from './util.ts';
 
 export interface AppOptions extends Omit<ApiDeps, 'build'> {
@@ -88,36 +89,35 @@ export function createApp(opts: AppOptions): Hono {
     // SPA fallback: svaka GET putanja koja nije fajl dobija index.html (ruter je na klijentu).
     app.get('*', async (c) => {
       // Nedostajući heširani fajl (stara verzija) ne sme da postane HTML.
-      if (c.req.path.startsWith('/assets/')) return c.text('Ne postoji.', 404);
+      if (c.req.path.startsWith('/assets/')) return c.text(msg(requestLang(c), 'request.notFound'), 404);
       try {
         return c.html(await readFile(join(root, 'index.html'), 'utf8'));
       } catch {
-        return c.text('Ne postoji.', 404);
+        return c.text(msg(requestLang(c), 'request.notFound'), 404);
       }
     });
   } else {
-    app.get('/', (c) =>
-      c.text(
-        'Ritam API radi. Web build (dist/web) ne postoji — za razvoj pokreni "npm run dev" i otvori http://localhost:5173, ' +
-          'ili napravi build sa "npm run build".\n',
-      ),
-    );
+    app.get('/', (c) => c.text(`${msg(requestLang(c), 'request.devRoot')}\n`));
   }
 
-  app.notFound((c) =>
-    c.req.path.startsWith('/api/') ? c.json({ error: 'Ne postoji.' }, 404) : c.text('Ne postoji.', 404),
-  );
+  app.notFound((c) => {
+    const text = msg(requestLang(c), 'request.notFound');
+    return c.req.path.startsWith('/api/') ? c.json({ error: text }, 404) : c.text(text, 404);
+  });
 
+  // Poruka za korisnika na jeziku zahteva (X-Ritam-Lang, pa Accept-Language; server/i18n.ts); kod ne zavisi od jezika.
   app.onError((err, c) => {
+    const lang = requestLang(c);
     if (err instanceof HttpError) {
-      return c.json(err.code ? { error: err.message, code: err.code } : { error: err.message }, err.status, err.headers);
+      const error = msg(lang, err.key, err.params);
+      return c.json(err.code ? { error, code: err.code } : { error }, err.status, err.headers);
     }
     if (err instanceof HTTPException) {
-      if (err.status === 413) return c.json({ error: 'Zahtev je prevelik.' }, 413);
-      return c.json({ error: err.message || 'Zahtev nije uspeo.' }, err.status);
+      if (err.status === 413) return c.json({ error: msg(lang, 'request.tooLarge') }, 413);
+      return c.json({ error: msg(lang, 'request.failed') }, err.status);
     }
     console.error('Greška u zahtevu', c.req.method, c.req.path, err);
-    return c.json({ error: 'Greška na serveru. Pokušaj ponovo.' }, 500);
+    return c.json({ error: msg(lang, 'request.serverError') }, 500);
   });
 
   return app;

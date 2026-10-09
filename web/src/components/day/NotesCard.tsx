@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { fmtDateMedium } from '../../../../shared/time.ts';
 import { sessionUserId } from '../../api.ts';
+import { useLang, useT } from '../../i18n/index.ts';
 import { useDebouncedCallback } from '../../lib/hooks.ts';
 import {
   NOTES_FLUSH_EVENT,
@@ -63,6 +64,8 @@ export function NotesCard({
   onNeedFresh: (urgent: boolean) => void;
   onOpenDay: (date: string) => void;
 }) {
+  const lang = useLang();
+  const t = useT();
   const [draft, setDraft] = useState(note);
   const [saved, setSaved] = useState(note);
   const [inflight, setInflight] = useState(0);
@@ -391,7 +394,7 @@ export function NotesCard({
 
   return (
     <Card
-      title="Beleške i misli"
+      title={t('notes.title')}
       className="day-notes"
       actions={
         <span
@@ -399,14 +402,14 @@ export function NotesCard({
           role="status"
           aria-live="polite"
         >
-          {status === 'saving' && 'Čuva se…'}
-          {status === 'saved' && 'Sačuvano'}
-          {status === 'conflict' && 'Nije sačuvano'}
+          {status === 'saving' && t('common.saving')}
+          {status === 'saved' && t('common.saved')}
+          {status === 'conflict' && t('notes.notSaved')}
           {status === 'error' && (
             <>
-              Nije sačuvano{' '}
+              {t('notes.notSaved')}{' '}
               <button type="button" className="day-link-btn" onClick={retry}>
-                Pokušaj ponovo
+                {t('common.retry')}
               </button>
             </>
           )}
@@ -415,34 +418,34 @@ export function NotesCard({
     >
       {others.length > 0 && (
         <p className="day-notes-restore">
-          <span>Nesačuvana beleška za</span>
+          <span>{t(others.length === 1 ? 'notes.otherDrafts' : 'notes.otherDraftsMany')}</span>
           {others.slice(0, 3).map((d) => (
             <button key={d} type="button" className="day-link-btn" onClick={() => onOpenDay(d)}>
-              {fmtDateMedium(d)}
+              {fmtDateMedium(d, lang)}
             </button>
           ))}
         </p>
       )}
       {conflict ? (
         <p className="day-notes-restore" role="alert">
-          <span>Beleška je u međuvremenu promenjena na drugom uređaju.</span>
+          <span>{t('notes.conflict')}</span>
           <button type="button" className="day-link-btn" onClick={keepMine}>
-            Sačuvaj ovu
+            {t('notes.keepMine')}
           </button>
           <button type="button" className="day-link-btn" onClick={takeTheirs}>
-            Uzmi tu verziju
+            {t('notes.takeTheirs')}
           </button>
         </p>
       ) : (
         stored &&
         (fresh || settled) && (
           <p className="day-notes-restore">
-            <span>Na ovom uređaju je ostala nesačuvana verzija beleške.</span>
+            <span>{t('notes.stored')}</span>
             <button type="button" className="day-link-btn" onClick={() => applyStored(stored.text, savedRef.current)}>
-              Vrati je
+              {t('notes.restore')}
             </button>
             <button type="button" className="day-link-btn" onClick={discardStored}>
-              Odbaci
+              {t('notes.discard')}
             </button>
           </p>
         )
@@ -452,14 +455,14 @@ export function NotesCard({
         onChange={(e) => onChange(e.target.value)}
         onFocus={onFocusNotes}
         onBlur={saveIfDirty}
-        placeholder="Kako je prošao dan, šta ti je na umu…"
-        aria-label="Beleške i misli"
+        placeholder={t('notes.placeholder')}
+        aria-label={t('notes.title')}
         minRows={4}
         maxLength={20000}
         className="day-notes-input"
       />
       <div className="day-rating">
-        <span className="day-rating-label">Kakav je bio dan?</span>
+        <span className="day-rating-label">{t('notes.rating')}</span>
         <RatingInput value={rating} onChange={onRate} />
       </div>
     </Card>

@@ -4,7 +4,9 @@
 
 import { useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import type { StatsDay } from '../../../../shared/types.ts';
-import { MONTH_SHORT, WEEKDAY_SHORT, addDays } from '../../../../shared/time.ts';
+import type { Lang } from '../../../../shared/types.ts';
+import { addDays, monthShort as monthShortName, weekdayShortNames } from '../../../../shared/time.ts';
+import { useLang, useT } from '../../i18n/index.ts';
 import { cx } from '../../ui/index.ts';
 import { HeatLegend } from './HeatLegend.tsx';
 import { cellHeatClass, dayTip, isLiveDay } from './period.ts';
@@ -15,7 +17,7 @@ const ARROWS: Record<string, number> = { ArrowLeft: -7, ArrowRight: 7, ArrowUp: 
 
 const weekDates = (monday: string) => Array.from({ length: 7 }, (_, k) => addDays(monday, k));
 const startsMonth = (monday: string) => weekDates(monday).find((d) => d.endsWith('-01'));
-const monthShort = (iso: string) => MONTH_SHORT[Number(iso.slice(5, 7)) - 1];
+const monthShort = (iso: string, lang: Lang) => monthShortName(Number(iso.slice(5, 7)), lang);
 
 export function WeeksHeatmap({
   from,
@@ -35,6 +37,8 @@ export function WeeksHeatmap({
   threshold: number;
   onOpen: (date: string) => void;
 }) {
+  const lang = useLang();
+  const t = useT();
   const gridRef = useRef<HTMLDivElement>(null);
   const [focusDate, setFocusDate] = useState(lastDate);
   const active = focusDate >= from && focusDate <= lastDate ? focusDate : lastDate;
@@ -46,8 +50,8 @@ export function WeeksHeatmap({
   // svog meseca samo ako novi mesec ne počinje odmah u sledeće dve kolone (da se ne preklapaju).
   const monthLabels = weeks.map((monday, i) => {
     const first = startsMonth(monday);
-    if (first) return monthShort(first);
-    if (i === 0 && !weeks.slice(1, 3).some((m) => startsMonth(m))) return monthShort(monday);
+    if (first) return monthShort(first, lang);
+    if (i === 0 && !weeks.slice(1, 3).some((m) => startsMonth(m))) return monthShort(monday, lang);
     return '';
   });
 
@@ -68,7 +72,7 @@ export function WeeksHeatmap({
         ref={gridRef}
         className="prog-hm-grid"
         role="group"
-        aria-label="Ispunjenost u poslednjih 12 nedelja"
+        aria-label={t('progress.heatmap.label')}
         onKeyDown={onKeyDown}
       >
         <span aria-hidden="true" />
@@ -78,7 +82,7 @@ export function WeeksHeatmap({
           </span>
         ))}
 
-        {WEEKDAY_SHORT.map((wd, r) => (
+        {weekdayShortNames(lang).map((wd, r) => (
           <Row key={wd} wd={wd}>
             {weeks.map((monday) => {
               const date = addDays(monday, r);
@@ -88,7 +92,7 @@ export function WeeksHeatmap({
               const day = days.get(date);
               const live = isLiveDay(date, day, today, threshold);
               if (live) hasLive = true;
-              const tip = dayTip(date, day, today, live);
+              const tip = dayTip(date, day, today, live, lang);
               return (
                 <button
                   key={date}

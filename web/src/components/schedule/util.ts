@@ -1,7 +1,8 @@
 // Pomoćne funkcije za stranicu Raspored (bez React-a).
 
 import type { Category, SchedulePayload, Weekday, WeekdayMap } from '../../../../shared/types.ts';
-import { WEEKDAY_NAMES } from '../../../../shared/time.ts';
+import { weekdayName } from '../../../../shared/time.ts';
+import { joinAnd, t, type Lang } from '../../i18n/index.ts';
 
 export const WEEKDAYS: Weekday[] = [1, 2, 3, 4, 5, 6, 7];
 
@@ -14,33 +15,14 @@ export const BLOCK_TITLE_MAX = 120;
 // Paleta je zajednička (i izbor kategorije u sheet-u bloka/zadatka pravi kategoriju u hodu).
 export { PALETTE, nextFreeColor, sameColor } from '../../lib/palette.ts';
 
-/** Srpska množina: 1 blok, 2 bloka, 5 blokova, 11 blokova, 21 blok. */
-export function plural(n: number, one: string, few: string, many: string): string {
-  const n10 = Math.abs(n) % 10;
-  const n100 = Math.abs(n) % 100;
-  if (n10 === 1 && n100 !== 11) return one;
-  if (n10 >= 2 && n10 <= 4 && (n100 < 12 || n100 > 14)) return few;
-  return many;
-}
-
-export function blocksLabel(n: number): string {
-  return `${n} ${plural(n, 'blok', 'bloka', 'blokova')}`;
-}
-
 /** Dani u nedelji kojima je dodeljen šablon. */
 export function weekdaysUsing(weekdays: WeekdayMap, templateId: number): Weekday[] {
   return WEEKDAYS.filter((w) => weekdays[w] === templateId);
 }
 
-/** ["a", "b", "c"] → "a, b i c" */
-export function joinAnd(items: string[]): string {
-  if (items.length <= 1) return items.join('');
-  return `${items.slice(0, -1).join(', ')} i ${items[items.length - 1]}`;
-}
-
-/** "ponedeljak, utorak i petak" */
-export function weekdayList(days: Weekday[]): string {
-  return joinAnd(days.map((d) => WEEKDAY_NAMES[d - 1]));
+/** en "Monday, Tuesday and Friday", sr "ponedeljak, utorak i petak". */
+export function weekdayList(days: Weekday[], lang: Lang): string {
+  return joinAnd(days.map((d) => weekdayName(d, lang)), lang);
 }
 
 /** Najveći id u listi (novi šablon je onaj sa najvećim id-jem). */
@@ -50,10 +32,10 @@ export function maxId(list: Array<{ id: number }>): number | null {
   return max;
 }
 
-/** Naziv kopije: "X (kopija)", skraćen da stane u ograničenje dužine. */
+/** Naziv kopije na trenutnom jeziku: "X (copy)" / "X (kopija)", skraćen da stane u ograničenje dužine. */
 export function copyName(name: string): string {
-  const suffix = ' (kopija)';
-  return `${name.slice(0, TEMPLATE_NAME_MAX - suffix.length).trimEnd()}${suffix}`;
+  const suffixLen = t('schedule.copyName', { name: '' }).length;
+  return t('schedule.copyName', { name: name.slice(0, TEMPLATE_NAME_MAX - suffixLen).trimEnd() });
 }
 
 export function roundTo5(min: number): number {

@@ -1,7 +1,7 @@
 // Rad sa vremenom i datumima. Datumi su uvek ISO stringovi 'YYYY-MM-DD' i
 // računaju se preko UTC-a da letnje/zimsko računanje vremena ne pomera dane.
 
-import type { Weekday } from './types.ts';
+import type { Lang, Weekday } from './types.ts';
 
 export const DAY_MIN = 1440;
 
@@ -141,47 +141,152 @@ export function logicalNow(dayStart: number, now: Date = new Date()): { date: st
   return { date: today, minute: mins };
 }
 
-// ---- Formatiranje (srpski, latinica) ----
+// ---- Formatiranje (engleski podrazumevano; srpski latinica) ----
+//
+// Svaki formater datuma prima jezik (podrazumevano 'en'). Vreme je u oba jezika 24h "09:15" (fmtClock),
+// trajanje "4h 45m" (fmtDuration), procenat "73%" (fmtPercent).
 
-export const WEEKDAY_NAMES = ['ponedeljak', 'utorak', 'sreda', 'četvrtak', 'petak', 'subota', 'nedelja'];
-export const WEEKDAY_SHORT = ['pon', 'uto', 'sre', 'čet', 'pet', 'sub', 'ned'];
-export const MONTH_NAMES = [
-  'januar', 'februar', 'mart', 'april', 'maj', 'jun',
-  'jul', 'avgust', 'septembar', 'oktobar', 'novembar', 'decembar',
-];
-export const MONTH_SHORT = ['jan', 'feb', 'mar', 'apr', 'maj', 'jun', 'jul', 'avg', 'sep', 'okt', 'nov', 'dec'];
+const WEEKDAYS: Record<Lang, readonly string[]> = {
+  en: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'],
+  sr: ['ponedeljak', 'utorak', 'sreda', 'četvrtak', 'petak', 'subota', 'nedelja'],
+};
+const WEEKDAYS_SHORT: Record<Lang, readonly string[]> = {
+  en: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+  sr: ['pon', 'uto', 'sre', 'čet', 'pet', 'sub', 'ned'],
+};
+const MONTHS: Record<Lang, readonly string[]> = {
+  en: [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December',
+  ],
+  sr: [
+    'januar', 'februar', 'mart', 'april', 'maj', 'jun',
+    'jul', 'avgust', 'septembar', 'oktobar', 'novembar', 'decembar',
+  ],
+};
+const MONTHS_SHORT: Record<Lang, readonly string[]> = {
+  en: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
+  sr: ['jan', 'feb', 'mar', 'apr', 'maj', 'jun', 'jul', 'avg', 'sep', 'okt', 'nov', 'dec'],
+};
+
+/** Nerazdvojiv razmak: "8. oktobar" / "October 8" se ne prelama između dana i meseca. */
+const NBSP = ' ';
+
+/**
+ * Dan u nedelji (1 = ponedeljak … 7 = nedelja): "Monday" / "ponedeljak". Srpski je malim slovom, kao u
+ * rečenici ("ponedeljak, utorak i petak"); na početku rečenice `capitalize`. Posle predloga "za" — `weekdayNameAcc`.
+ */
+export function weekdayName(wd: number, lang: Lang = 'en'): string {
+  return WEEKDAYS[lang][wd - 1];
+}
+
+/** Srpski akuzativ (posle "za"): "za sredu", "za subotu", "za nedelju". */
+const WEEKDAYS_ACC_SR = ['ponedeljak', 'utorak', 'sredu', 'četvrtak', 'petak', 'subotu', 'nedelju'] as const;
+
+/**
+ * Dan u nedelji posle predloga "za" (akuzativ, malim slovom): sr "Za subotu važi šablon…"; en isto kao
+ * `weekdayName` ("Saturday").
+ */
+export function weekdayNameAcc(wd: number, lang: Lang = 'en'): string {
+  return lang === 'sr' ? WEEKDAYS_ACC_SR[wd - 1] : weekdayName(wd, lang);
+}
+
+/** "Mon" / "pon" (1 = ponedeljak … 7 = nedelja). */
+export function weekdayShort(wd: number, lang: Lang = 'en'): string {
+  return WEEKDAYS_SHORT[lang][wd - 1];
+}
+
+/** Kratki nazivi svih dana redom od ponedeljka (zaglavlja kalendara i heatmape). */
+export function weekdayShortNames(lang: Lang = 'en'): string[] {
+  return [...WEEKDAYS_SHORT[lang]];
+}
+
+/** Mesec 1..12: "October" / "oktobar". */
+export function monthName(m: number, lang: Lang = 'en'): string {
+  return MONTHS[lang][m - 1];
+}
+
+/** Mesec 1..12: "Oct" / "okt". */
+export function monthShort(m: number, lang: Lang = 'en'): string {
+  return MONTHS_SHORT[lang][m - 1];
+}
 
 export function capitalize(s: string): string {
   return s ? s[0].toUpperCase() + s.slice(1) : s;
 }
 
-/** "Utorak, 7. oktobar" (sa godinom ako withYear: "Utorak, 7. oktobar 2026.") */
-export function fmtDateLong(iso: string, withYear = false): string {
+/**
+ * en "Thursday, October 8" (withYear: "Thursday, October 8, 2026");
+ * sr "Četvrtak, 8. oktobar" (withYear: "Četvrtak, 8. oktobar 2026.").
+ */
+export function fmtDateLong(iso: string, lang: Lang = 'en', withYear = false): string {
   const [y, m, d] = iso.split('-').map(Number);
-  const wd = WEEKDAY_NAMES[isoWeekday(iso) - 1];
-  return `${capitalize(wd)}, ${d}. ${MONTH_NAMES[m - 1]}${withYear ? ` ${y}.` : ''}`;
+  const wd = capitalize(weekdayName(isoWeekday(iso), lang));
+  if (lang === 'sr') return `${wd}, ${d}. ${MONTHS.sr[m - 1]}${withYear ? ` ${y}.` : ''}`;
+  return `${wd}, ${MONTHS.en[m - 1]} ${d}${withYear ? `, ${y}` : ''}`;
 }
 
-/** "uto, 7. okt" */
-export function fmtDateMedium(iso: string): string {
+/** en "Thu, Oct 8"; sr "čet, 8. okt" (malim slovom; na početku rečenice `capitalize`). */
+export function fmtDateMedium(iso: string, lang: Lang = 'en'): string {
   const [, m, d] = iso.split('-').map(Number);
-  return `${WEEKDAY_SHORT[isoWeekday(iso) - 1]}, ${d}. ${MONTH_SHORT[m - 1]}`;
+  const wd = weekdayShort(isoWeekday(iso), lang);
+  if (lang === 'sr') return `${wd}, ${d}. ${MONTHS_SHORT.sr[m - 1]}`;
+  return `${wd}, ${MONTHS_SHORT.en[m - 1]} ${d}`;
 }
 
-/** "7. okt" */
-export function fmtDateShort(iso: string): string {
+/** en "Oct 8"; sr "8. okt". */
+export function fmtDateShort(iso: string, lang: Lang = 'en'): string {
   const [, m, d] = iso.split('-').map(Number);
-  return `${d}. ${MONTH_SHORT[m - 1]}`;
+  if (lang === 'sr') return `${d}. ${MONTHS_SHORT.sr[m - 1]}`;
+  return `${MONTHS_SHORT.en[m - 1]} ${d}`;
 }
 
-/** "Oktobar 2026." */
-export function fmtMonthYear(iso: string): string {
+/** en "October 2026"; sr "Oktobar 2026.". */
+export function fmtMonthYear(iso: string, lang: Lang = 'en'): string {
   const [y, m] = iso.split('-').map(Number);
-  return `${capitalize(MONTH_NAMES[m - 1])} ${y}.`;
+  if (lang === 'sr') return `${capitalize(MONTHS.sr[m - 1])} ${y}.`;
+  return `${MONTHS.en[m - 1]} ${y}`;
 }
 
-/** 0.734 → "73%" */
+/**
+ * Dan i mesec bez dana u nedelji, bez prelamanja između njih (naslov dana na telefonu):
+ * en "October 8" (withYear: "October 8, 2026"); sr "8. oktobar" (withYear: "8. oktobar 2026.").
+ */
+export function fmtDayMonth(iso: string, lang: Lang = 'en', withYear = false): string {
+  const [y, m, d] = iso.split('-').map(Number);
+  if (lang === 'sr') return `${d}.${NBSP}${MONTHS.sr[m - 1]}${withYear ? ` ${y}.` : ''}`;
+  return `${MONTHS.en[m - 1]}${NBSP}${d}${withYear ? `, ${y}` : ''}`;
+}
+
+/**
+ * Opseg datuma (naslov nedelje u Napretku), kratki meseci; `showYear` dodaje godinu:
+ * en "Oct 6–12", "Sep 29 – Oct 5", "Dec 29, 2025 – Jan 4, 2026";
+ * sr "6–12. okt", "29. sep – 5. okt", "29. dec 2025. – 4. jan 2026.".
+ * Godina levo samo kad se godine razlikuju. Unutar svakog datuma su nerazdvojivi razmaci, pa se red prelama
+ * samo oko " – " (ne "Dec 29, 2025 – Jan / 4, 2026").
+ */
+export function fmtDateRange(from: string, to: string, lang: Lang = 'en', showYear = false): string {
+  const [sy, sm, sd] = from.split('-').map(Number);
+  const [ey, em, ed] = to.split('-').map(Number);
+  const ms = MONTHS_SHORT[lang];
+  if (lang === 'sr') {
+    if (sy === ey && sm === em) return `${sd}–${ed}.${NBSP}${ms[sm - 1]}${showYear ? `${NBSP}${sy}.` : ''}`;
+    const left = `${sd}.${NBSP}${ms[sm - 1]}${showYear && sy !== ey ? `${NBSP}${sy}.` : ''}`;
+    return `${left} – ${ed}.${NBSP}${ms[em - 1]}${showYear ? `${NBSP}${ey}.` : ''}`;
+  }
+  if (sy === ey && sm === em) return `${ms[sm - 1]}${NBSP}${sd}–${ed}${showYear ? `,${NBSP}${sy}` : ''}`;
+  const left = `${ms[sm - 1]}${NBSP}${sd}${showYear && sy !== ey ? `,${NBSP}${sy}` : ''}`;
+  return `${left} – ${ms[em - 1]}${NBSP}${ed}${showYear ? `,${NBSP}${ey}` : ''}`;
+}
+
+/** 0.734 → "73%" (isto u oba jezika). */
 export function fmtPercent(v: number | null | undefined): string {
   if (v == null || Number.isNaN(v)) return '—';
   return `${Math.round(v * 100)}%`;
+}
+
+/** Decimalni broj: en 4.25 → "4.3", sr → "4,3". */
+export function fmtDecimal(n: number, lang: Lang = 'en', digits = 1): string {
+  const s = n.toFixed(digits);
+  return lang === 'sr' ? s.replace('.', ',') : s;
 }

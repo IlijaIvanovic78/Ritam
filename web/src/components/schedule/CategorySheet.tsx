@@ -5,11 +5,12 @@
 import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import type { Category, CategoryInput } from '../../../../shared/types.ts';
 import { ApiError, api, errorMessage } from '../../api.ts';
+import { useT } from '../../i18n/index.ts';
 import { createCategory } from '../../lib/categories.ts';
 import { scheduleStore, useScheduleData } from '../../lib/store.ts';
 import { useUnsavedGuard } from '../../lib/useUnsavedGuard.ts';
 import { Button, Field, Icon, Sheet, TextInput, Toggle, confirmDialog, confirmDiscard, toast } from '../../ui/index.ts';
-import { CATEGORY_NAME_MAX, PALETTE, blocksLabel, nextFreeColor, sameColor } from './util.ts';
+import { CATEGORY_NAME_MAX, PALETTE, nextFreeColor, sameColor } from './util.ts';
 
 /** Raspored stariji od ovoga se pri otvaranju sheet-a tiho osveži. */
 const STALE_MS = 5_000;
@@ -27,6 +28,7 @@ export function CategorySheet({
   /** Nova kategorija iz izbora u editoru šablona (postojeća sa istim nazivom se samo izabere). */
   quick?: boolean;
 }) {
+  const t = useT();
   const { categories, archivedCategories, templates } = useScheduleData();
   const isNew = category == null;
   const formId = useId();
@@ -56,12 +58,14 @@ export function CategorySheet({
     setBusy(null);
   }
 
-  // Ako postojeća kategorija ima boju van palete, zadrži je kao dodatnu opciju.
-  const [swatches] = useState(() =>
-    category && !PALETTE.some((p) => sameColor(p.color, category.color))
-      ? [...PALETTE, { color: category.color, name: 'Trenutna boja' }]
-      : PALETTE,
+  // Ako postojeća kategorija ima boju van palete, zadrži je kao dodatnu opciju. Nazivi boja se čitaju pri
+  // svakom renderu (prate jezik).
+  const [extraColor] = useState(() =>
+    category && !PALETTE.some((p) => sameColor(p.color, category.color)) ? category.color : null,
   );
+  const swatches = extraColor
+    ? [...PALETTE, { color: extraColor, name: t('schedule.category.currentColor') }]
+    : PALETTE;
 
   useEffect(() => {
     if (isNew) inputRef.current?.focus();
@@ -89,7 +93,7 @@ export function CategorySheet({
     if (busy) return;
     const trimmed = name.trim();
     if (!trimmed) {
-      setError('Upiši naziv.');
+      setError(t('schedule.nameRequired'));
       inputRef.current?.focus();
       return;
     }
@@ -112,9 +116,9 @@ export function CategorySheet({
         if (patch.counts === true) {
           setBusy(null);
           const ok = await confirmDialog({
-            title: 'Uključi u ispunjenost?',
-            body: 'Važi i za ranije dane: dani u kojima blokovi ove kategorije nisu ocenjeni dobiće niži procenat, a niz dana može da se prekine.',
-            confirmText: 'Sačuvaj',
+            title: t('schedule.category.countOnTitle'),
+            body: t('schedule.category.countOnBody'),
+            confirmText: t('common.save'),
           });
           if (!ok) return;
           setBusy('save');
@@ -122,13 +126,13 @@ export function CategorySheet({
         payload = await api.patchCategory(category.id, patch);
       } else {
         const { id, reused } = await createCategory(trimmed, { color, counts, reuseExisting: quick });
-        toast.success(reused ? 'Kategorija sa tim nazivom već postoji — izabrana je ona.' : 'Kategorija je dodata.');
+        toast.success(reused ? t('schedule.categoryInline.reused') : t('schedule.category.added'));
         if (id != null) onCreated?.(id);
         onClose();
         return;
       }
       scheduleStore.set(payload);
-      toast.success('Kategorija je sačuvana.');
+      toast.success(t('schedule.category.saved'));
       onClose();
     } catch (err) {
       fail(err);
@@ -137,18 +141,19 @@ export function CategorySheet({
 
   async function remove() {
     if (!category || busy) return;
-    const used = templates.reduce((n, t) => n + t.blocks.filter((b) => b.categoryId === category.id).length, 0);
+    const used = templates.reduce((n, tpl) => n + tpl.blocks.filter((b) => b.categoryId === category.id).length, 0);
+    const blocks = t('common.blocks', { n: used });
     // Blok bez kategorije se računa u ispunjenost: brisanje kategorije koja se ne računa menja budući procenat.
-    const inTemplates =
+    const body =
       used === 0
-        ? ''
+        ? t('schedule.category.deleteBody')
         : category.counts
-          ? ` Blokovi u šablonima sa njom (${blocksLabel(used)}) ostaju bez kategorije.`
-          : ` Blokovi u šablonima sa njom (${blocksLabel(used)}) ostaju bez kategorije i od sada se računaju u ispunjenost budućih dana. Ako to ne želiš, prvo im promeni kategoriju.`;
+          ? t('schedule.category.deleteBodyBlocks', { blocks })
+          : t('schedule.category.deleteBodyBlocksStartCounting', { blocks });
     const ok = await confirmDialog({
-      title: `Obriši kategoriju „${category.name}“?`,
-      body: `Kategorija nestaje iz izbora.${inTemplates} Sačuvani dani je zadržavaju, pa se njihova ispunjenost ne menja.`,
-      confirmText: 'Obriši',
+      title: t('schedule.category.deleteTitle', { name: category.name }),
+      body,
+      confirmText: t('common.delete'),
       danger: true,
     });
     if (!ok) return;
@@ -157,7 +162,7 @@ export function CategorySheet({
     try {
       const payload = await api.deleteCategory(category.id);
       scheduleStore.set(payload);
-      toast.success('Kategorija je obrisana.');
+      toast.success(t('schedule.category.deleted'));
       onClose();
     } catch (err) {
       fail(err);
@@ -181,7 +186,7 @@ export function CategorySheet({
     <Sheet
       open
       onClose={() => void requestClose()}
-      title={isNew ? 'Nova kategorija' : 'Izmeni kategoriju'}
+      title={isNew ? t('schedule.categories.new') : t('schedule.category.edit')}
       size="sm"
       footer={
         <>
@@ -198,26 +203,26 @@ export function CategorySheet({
               loading={busy === 'delete'}
               disabled={busy != null}
             >
-              Obriši
+              {t('common.delete')}
             </Button>
           )}
           <span className="sched-foot-spacer" />
           <Button variant="ghost" onClick={() => void requestClose()} disabled={busy != null}>
-            Otkaži
+            {t('common.cancel')}
           </Button>
           <Button variant="primary" type="submit" form={formId} loading={busy === 'save'} disabled={busy != null}>
-            {isNew ? 'Dodaj' : 'Sačuvaj'}
+            {isNew ? t('common.add') : t('common.save')}
           </Button>
         </>
       }
     >
       <form id={formId} className="stack" onSubmit={submit} noValidate>
-        <Field label="Naziv" error={error}>
+        <Field label={t('schedule.nameLabel')} error={error}>
           <TextInput
             ref={inputRef}
             value={name}
             maxLength={CATEGORY_NAME_MAX}
-            placeholder="Naziv kategorije"
+            placeholder={t('schedule.category.namePlaceholder')}
             onChange={(e) => {
               setName(e.target.value);
               if (error) setError(null);
@@ -228,7 +233,7 @@ export function CategorySheet({
 
         <div className="field">
           <span className="field-label" id={labelId}>
-            Boja
+            {t('schedule.category.color')}
           </span>
           <div className="sched-swatches" role="radiogroup" aria-labelledby={labelId} onKeyDown={onSwatchKey}>
             {swatches.map((s, i) => {
@@ -255,10 +260,8 @@ export function CategorySheet({
         </div>
 
         <div className="stack-sm">
-          <Toggle checked={counts} onChange={setCounts} label="Računa se u ispunjenost dana" />
-          <p className="sched-muted">
-            Isključi za ono što ne želiš da ocenjuješ. Važi i za ranije dane: procenat i niz se preračunavaju.
-          </p>
+          <Toggle checked={counts} onChange={setCounts} label={t('schedule.category.counts')} />
+          <p className="sched-muted">{t('schedule.category.countsHint')}</p>
         </div>
       </form>
     </Sheet>

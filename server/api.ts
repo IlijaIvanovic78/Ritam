@@ -8,6 +8,7 @@ import { bodyLimit } from 'hono/body-limit';
 import type { DatabaseSync } from 'node:sqlite';
 import { z } from 'zod';
 import type { HealthPayload } from '../shared/types.ts';
+import { LANGS } from '../shared/i18n.ts';
 import { diffDays, isValidISODate, isValidRange, localISODate } from '../shared/time.ts';
 import type { Accounts } from './accounts.ts';
 import type { AccessTokens, SignupPolicy } from './auth.ts';
@@ -15,9 +16,10 @@ import { bearerAuth, registerAuthRoutes } from './authRoutes.ts';
 import type { ApiEnv } from './authRoutes.ts';
 import { exportData, importData } from './backup.ts';
 import { tx } from './db.ts';
+import { msg, requestLang } from './i18n.ts';
 import type { Repo } from './repo.ts';
 import { HttpError, badRequest, parseDateParam, parseIdParam } from './util.ts';
-import { body, readJson } from './validate.ts';
+import { E, body, readJson } from './validate.ts';
 
 export interface ApiDeps {
   db: DatabaseSync;
@@ -43,16 +45,16 @@ const MAX_STATS_DAYS = 400;
 
 // ---- Validacija ----
 
-const isoDate = z.string({ error: 'Datum nije ispravan.' }).refine(isValidISODate, { error: 'Datum nije ispravan.' });
-const categoryRef = z.int({ error: 'Neispravna kategorija.' }).positive({ error: 'Neispravna kategorija.' }).nullable();
-const templateRef = z.int({ error: 'Neispravan šablon.' }).positive({ error: 'Neispravan šablon.' }).nullable();
-const minute = z.int({ error: 'Vreme mora biti ceo broj minuta.' });
+const isoDate = z.string(E('param.dateInvalid')).refine(isValidISODate, E('param.dateInvalid'));
+const categoryRef = z.int(E('category.invalid')).positive(E('category.invalid')).nullable();
+const templateRef = z.int(E('template.invalid')).positive(E('template.invalid')).nullable();
+const minute = z.int(E('block.minuteInt'));
 
 const blockTitle = z
-  .string({ error: 'Naslov bloka je obavezan.' })
+  .string(E('block.titleRequired'))
   .trim()
-  .min(1, { error: 'Naslov bloka je obavezan.' })
-  .max(120, { error: 'Naslov bloka može imati najviše 120 znakova.' });
+  .min(1, E('block.titleRequired'))
+  .max(120, E('block.titleTooLong'));
 
 const blockInput = z
   .object({
@@ -61,33 +63,33 @@ const blockInput = z
     title: blockTitle,
     categoryId: categoryRef.optional().transform((v) => v ?? null),
   })
-  .refine((b) => isValidRange(b.start, b.end), { error: 'Neispravno vreme bloka.' });
+  .refine((b) => isValidRange(b.start, b.end), E('block.timeInvalid'));
 
 const blockPatch = z.object({
   start: minute.optional(),
   end: minute.optional(),
   title: blockTitle.optional(),
   categoryId: categoryRef.optional(),
-  status: z.enum(['pending', 'done', 'partial', 'skipped'], { error: 'Neispravan status.' }).optional(),
+  status: z.enum(['pending', 'done', 'partial', 'skipped'], E('block.statusInvalid')).optional(),
   actualMin: z
-    .int({ error: 'Stvarno vreme mora biti ceo broj minuta.' })
-    .min(0, { error: 'Stvarno vreme mora biti između 0 i 1440 minuta.' })
-    .max(1440, { error: 'Stvarno vreme mora biti između 0 i 1440 minuta.' })
+    .int(E('block.actualInt'))
+    .min(0, E('block.actualRange'))
+    .max(1440, E('block.actualRange'))
     .nullable()
     .optional(),
-  note: z.string().max(5000, { error: 'Beleška bloka može imati najviše 5000 znakova.' }).optional(),
+  note: z.string().max(5000, E('block.noteTooLong')).optional(),
 });
 
 const dayPatch = z.object({
-  note: z.string().max(20000, { error: 'Beleška može imati najviše 20000 znakova.' }).optional(),
+  note: z.string().max(20000, E('day.noteTooLong')).optional(),
   // Beleška na koju se izmena oslanja; ako je na serveru u međuvremenu drugačija → 409.
   // Samo se poredi (bez ograničenja dužine, telo je ionako do 1 MB): i duža beleška iz uvezene
   // kopije mora moći da se izmeni.
   baseNote: z.string().optional(),
   rating: z
-    .int({ error: 'Ocena mora biti od 1 do 5.' })
-    .min(1, { error: 'Ocena mora biti od 1 do 5.' })
-    .max(5, { error: 'Ocena mora biti od 1 do 5.' })
+    .int(E('day.ratingRange'))
+    .min(1, E('day.ratingRange'))
+    .max(5, E('day.ratingRange'))
     .nullable()
     .optional(),
 });
@@ -100,14 +102,14 @@ const dayInit = z.object({
 const splitInput = z.object({ at: minute });
 
 const swapInput = z.object({
-  with: z.int({ error: 'Izaberi blok za zamenu.' }).positive({ error: 'Izaberi blok za zamenu.' }),
+  with: z.int(E('block.swapPick')).positive(E('block.swapPick')),
 });
 
 const taskTitle = z
-  .string({ error: 'Naziv zadatka je obavezan.' })
+  .string(E('task.titleRequired'))
   .trim()
-  .min(1, { error: 'Naziv zadatka je obavezan.' })
-  .max(300, { error: 'Naziv zadatka može imati najviše 300 znakova.' });
+  .min(1, E('task.titleRequired'))
+  .max(300, E('task.titleTooLong'));
 
 const taskInput = z.object({
   date: isoDate,
@@ -117,7 +119,7 @@ const taskInput = z.object({
 
 const taskPatch = z.object({
   title: taskTitle.optional(),
-  done: z.boolean({ error: 'Neispravna vrednost za "urađeno".' }).optional(),
+  done: z.boolean(E('task.doneInvalid')).optional(),
   categoryId: categoryRef.optional(),
   date: isoDate.optional(),
   sort: z.int().optional(),
@@ -126,13 +128,13 @@ const taskPatch = z.object({
 const carryInput = z.object({ to: isoDate });
 
 const categoryName = z
-  .string({ error: 'Naziv kategorije je obavezan.' })
+  .string(E('category.nameRequired'))
   .trim()
-  .min(1, { error: 'Naziv kategorije je obavezan.' })
-  .max(40, { error: 'Naziv kategorije može imati najviše 40 znakova.' });
+  .min(1, E('category.nameRequired'))
+  .max(40, E('category.nameTooLong'));
 const categoryColor = z
-  .string({ error: 'Boja je obavezna.' })
-  .regex(/^#[0-9a-fA-F]{6}$/, { error: 'Boja mora biti u obliku #rrggbb.' })
+  .string(E('category.colorRequired'))
+  .regex(/^#[0-9a-fA-F]{6}$/, E('category.colorFormat'))
   .transform((s) => s.toLowerCase());
 
 const categoryInput = z.object({
@@ -149,15 +151,15 @@ const categoryPatch = z.object({
 });
 
 const templateName = z
-  .string({ error: 'Naziv šablona je obavezan.' })
+  .string(E('template.nameRequired'))
   .trim()
-  .min(1, { error: 'Naziv šablona je obavezan.' })
-  .max(60, { error: 'Naziv šablona može imati najviše 60 znakova.' });
+  .min(1, E('template.nameRequired'))
+  .max(60, E('template.nameTooLong'));
 
 const templateInput = z.object({ name: templateName, copyFrom: templateRef.optional() });
 const templatePatch = z.object({ name: templateName.optional(), sort: z.int().optional() });
 const templateBlocks = z.object({
-  blocks: z.array(blockInput).max(100, { error: 'Šablon može imati najviše 100 blokova.' }),
+  blocks: z.array(blockInput).max(100, E('template.tooManyBlocks')),
 });
 
 const weekdayMap = z.strictObject({
@@ -172,19 +174,21 @@ const weekdayMap = z.strictObject({
 
 const settingsPatch = z.object({
   dayStart: z
-    .int({ error: 'Početak dana mora biti ceo broj minuta.' })
-    .min(0, { error: 'Dan može da počne između 00:00 i 06:00.' })
-    .max(360, { error: 'Dan može da počne između 00:00 i 06:00.' })
+    .int(E('settings.dayStartInt'))
+    .min(0, E('settings.dayStartRange'))
+    .max(360, E('settings.dayStartRange'))
     .optional(),
   streakThreshold: z
-    .number({ error: 'Prag mora biti broj.' })
-    .min(0.1, { error: 'Prag mora biti između 10% i 100%.' })
-    .max(1, { error: 'Prag mora biti između 10% i 100%.' })
+    .number(E('settings.thresholdNumber'))
+    .min(0.1, E('settings.thresholdRange'))
+    .max(1, E('settings.thresholdRange'))
     .optional(),
+  // Jezik interfejsa naloga (važi na svim uređajima naloga).
+  lang: z.enum(LANGS, E('settings.langInvalid')).optional(),
 });
 
 const scheduleReset = z.object({
-  dayStart: z.boolean({ error: 'Neispravna vrednost za početak dana.' }).optional(),
+  dayStart: z.boolean(E('settings.resetDayStartInvalid')).optional(),
 });
 
 // ---- Pomoćnici ----
@@ -193,7 +197,7 @@ function sizeLimit(maxSize: number): MiddlewareHandler {
   return bodyLimit({
     maxSize,
     // Nepročitano telo ostaje na konekciji — zatvori je da klijent ne bi ponovo koristio isti socket.
-    onError: (c) => c.json({ error: 'Zahtev je prevelik.' }, 413, { Connection: 'close' }),
+    onError: (c) => c.json({ error: msg(requestLang(c), 'request.tooLarge') }, 413, { Connection: 'close' }),
   });
 }
 
@@ -209,7 +213,7 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
   api.use('*', async (c, next) => {
     const m = c.req.method;
     if (m !== 'GET' && m !== 'HEAD' && c.req.header('x-ritam') !== '1') {
-      throw new HttpError(403, 'Zahtev je odbijen.');
+      throw new HttpError(403, 'request.rejected');
     }
     await next();
   });
@@ -296,9 +300,9 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
   });
 
   api.get('/tasks/done', (c) => {
-    const from = parseDateParam(c.req.query('from'), 'Početni datum');
-    const to = parseDateParam(c.req.query('to'), 'Krajnji datum');
-    if (from > to) throw badRequest('Početni datum je posle krajnjeg.');
+    const from = parseDateParam(c.req.query('from'), 'param.fromInvalid');
+    const to = parseDateParam(c.req.query('to'), 'param.toInvalid');
+    if (from > to) throw badRequest('param.fromAfterTo');
     return c.json(repoOf(c).doneTasks(from, to));
   });
 
@@ -313,13 +317,13 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
   // ---- Statistika i dnevnik ----
 
   api.get('/stats', (c) => {
-    const from = parseDateParam(c.req.query('from'), 'Početni datum');
-    const to = parseDateParam(c.req.query('to'), 'Krajnji datum');
-    if (from > to) throw badRequest('Početni datum je posle krajnjeg.');
-    if (diffDays(from, to) + 1 > MAX_STATS_DAYS) throw badRequest(`Opseg može imati najviše ${MAX_STATS_DAYS} dana.`);
+    const from = parseDateParam(c.req.query('from'), 'param.fromInvalid');
+    const to = parseDateParam(c.req.query('to'), 'param.toInvalid');
+    if (from > to) throw badRequest('param.fromAfterTo');
+    if (diffDays(from, to) + 1 > MAX_STATS_DAYS) throw badRequest('stats.rangeTooLong', { n: MAX_STATS_DAYS });
     // Logičko danas klijenta (opciono): za završen period i poslednji dan prekida niz.
     const todayRaw = c.req.query('today');
-    const today = todayRaw ? parseDateParam(todayRaw, 'Današnji datum') : undefined;
+    const today = todayRaw ? parseDateParam(todayRaw, 'param.todayInvalid') : undefined;
     return c.json(repoOf(c).stats(from, to, today));
   });
 
@@ -330,7 +334,7 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
     const limitRaw = c.req.query('limit');
     let limit = 20;
     if (limitRaw) {
-      if (!/^\d{1,4}$/.test(limitRaw) || Number(limitRaw) < 1) throw badRequest('Neispravan limit.');
+      if (!/^\d{1,4}$/.test(limitRaw) || Number(limitRaw) < 1) throw badRequest('param.limitInvalid');
       limit = Math.min(Number(limitRaw), 100);
     }
     return c.json(repoOf(c).journal({ before, q, limit }));
@@ -421,7 +425,7 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
   });
 
   // Nepoznata API putanja ne sme da padne na SPA fallback.
-  api.all('*', (c) => c.json({ error: 'Ne postoji.' }, 404));
+  api.all('*', (c) => c.json({ error: msg(requestLang(c), 'request.notFound') }, 404));
 
   return api;
 }

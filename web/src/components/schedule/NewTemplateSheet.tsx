@@ -2,11 +2,13 @@
 
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { api, errorMessage } from '../../api.ts';
+import { useT } from '../../i18n/index.ts';
 import { scheduleStore, useScheduleData } from '../../lib/store.ts';
 import { Button, Field, Select, Sheet, TextInput, toast } from '../../ui/index.ts';
 import { TEMPLATE_NAME_MAX, maxId } from './util.ts';
 
 export function NewTemplateSheet({ onClose, onCreated }: { onClose: () => void; onCreated: (id: number) => void }) {
+  const t = useT();
   const { templates } = useScheduleData();
   const formId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -27,7 +29,7 @@ export function NewTemplateSheet({ onClose, onCreated }: { onClose: () => void; 
     if (saving) return;
     const trimmed = name.trim();
     if (!trimmed) {
-      setError('Upiši naziv.');
+      setError(t('schedule.nameRequired'));
       inputRef.current?.focus();
       return;
     }
@@ -53,7 +55,7 @@ export function NewTemplateSheet({ onClose, onCreated }: { onClose: () => void; 
       onClose={() => {
         if (!saving) onClose();
       }}
-      title="Novi šablon"
+      title={t('schedule.templates.new')}
       size="sm"
       footer={
         <>
@@ -63,21 +65,21 @@ export function NewTemplateSheet({ onClose, onCreated }: { onClose: () => void; 
             </p>
           )}
           <Button variant="ghost" onClick={onClose} disabled={saving}>
-            Otkaži
+            {t('common.cancel')}
           </Button>
           <Button variant="primary" type="submit" form={formId} loading={saving}>
-            Napravi
+            {t('schedule.newTemplate.create')}
           </Button>
         </>
       }
     >
       <form id={formId} className="stack" onSubmit={submit} noValidate>
-        <Field label="Naziv" error={error}>
+        <Field label={t('schedule.nameLabel')} error={error}>
           <TextInput
             ref={inputRef}
             value={name}
             maxLength={TEMPLATE_NAME_MAX}
-            placeholder="Naziv šablona"
+            placeholder={t('schedule.newTemplate.namePlaceholder')}
             onChange={(e) => {
               setName(e.target.value);
               if (error) setError(null);
@@ -87,14 +89,14 @@ export function NewTemplateSheet({ onClose, onCreated }: { onClose: () => void; 
         </Field>
         {templates.length > 0 && (
           <Field
-            label="Kopiraj iz"
-            hint={copyFrom ? 'Novi šablon dobija iste blokove kao izabrani.' : 'Šablon počinje bez blokova.'}
+            label={t('schedule.newTemplate.copyFrom')}
+            hint={copyFrom ? t('schedule.newTemplate.copyHint') : t('schedule.newTemplate.emptyHint')}
           >
             <Select value={copyFrom} onChange={(e) => setCopyFrom(e.target.value)}>
-              <option value="">Prazan šablon</option>
-              {templates.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
+              <option value="">{t('schedule.newTemplate.empty')}</option>
+              {templates.map((tpl) => (
+                <option key={tpl.id} value={tpl.id}>
+                  {tpl.name}
                 </option>
               ))}
             </Select>

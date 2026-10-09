@@ -1,6 +1,7 @@
 // Potvrda pre opasnih akcija: `if (await confirmDialog({...})) ...`. <ConfirmHost/> renderuje App.
 
 import { useSyncExternalStore, type ReactNode } from 'react';
+import { t, useT } from '../i18n/index.ts';
 import { Button } from './Button.tsx';
 import { Sheet } from './Sheet.tsx';
 
@@ -28,9 +29,15 @@ export function confirmDialog(opts: ConfirmOptions): Promise<boolean> {
   });
 }
 
-/** "Odbaci izmene?" pre zatvaranja forme sa nesačuvanim izmenama. true = odbaci. */
-export function confirmDiscard(body = 'Izmene nisu sačuvane.'): Promise<boolean> {
-  return confirmDialog({ title: 'Odbaci izmene?', body, confirmText: 'Odbaci', cancelText: 'Nastavi izmenu', danger: true });
+/** "Discard changes?" / "Odbaci izmene?" pre zatvaranja forme sa nesačuvanim izmenama. true = odbaci. */
+export function confirmDiscard(body: string = t('ui.discard.body')): Promise<boolean> {
+  return confirmDialog({
+    title: t('ui.discard.title'),
+    body,
+    confirmText: t('ui.discard.confirm'),
+    cancelText: t('ui.discard.keepEditing'),
+    danger: true,
+  });
 }
 
 function settle(ok: boolean) {
@@ -41,6 +48,7 @@ function settle(ok: boolean) {
 }
 
 export function ConfirmHost() {
+  const tr = useT();
   const c = useSyncExternalStore(
     (l) => {
       listeners.add(l);
@@ -60,14 +68,14 @@ export function ConfirmHost() {
         <>
           {/* Fokus: kod opasnih akcija na "Otkaži" (Enter ne briše slučajno), inače na potvrdu. */}
           <Button variant="ghost" onClick={() => settle(false)} data-autofocus={c?.danger ? true : undefined}>
-            {c?.cancelText ?? 'Otkaži'}
+            {c?.cancelText ?? tr('common.cancel')}
           </Button>
           <Button
             variant={c?.danger ? 'danger' : 'primary'}
             onClick={() => settle(true)}
             data-autofocus={c?.danger ? undefined : true}
           >
-            {c?.confirmText ?? 'Potvrdi'}
+            {c?.confirmText ?? tr('ui.confirm')}
           </Button>
         </>
       }

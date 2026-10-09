@@ -1,6 +1,7 @@
 import { useId, useRef, useState, type FormEvent } from 'react';
 import type { Category, DayPayload, Task, TaskPatch } from '../../../../shared/types.ts';
 import { addDays, capitalize, fmtClock, fmtDateMedium, isValidISODate, localISODate } from '../../../../shared/time.ts';
+import { useLang, useT } from '../../i18n/index.ts';
 import { createInlineCategory } from '../../lib/categories.ts';
 import { useUnsavedGuard } from '../../lib/useUnsavedGuard.ts';
 import {
@@ -16,6 +17,7 @@ import {
   toast,
   type CategoryPickerHandle,
 } from '../../ui/index.ts';
+import { SLOT, rich } from './rich.tsx';
 
 /** Izmena zadatka: naslov, kategorija, premeštanje na drugi datum, brisanje. */
 export function TaskSheet({
@@ -34,6 +36,8 @@ export function TaskSheet({
   onPatch: (id: number, patch: TaskPatch) => Promise<DayPayload | null>;
   onDelete: (id: number) => Promise<DayPayload | null>;
 }) {
+  const lang = useLang();
+  const t = useT();
   const formId = useId();
   /**
    * Zadatak kakav je bio pri otvaranju. Forma se poredi sa njim, ne sa živim `task`: ako
@@ -52,8 +56,8 @@ export function TaskSheet({
   const [catPending, setCatPending] = useState(false);
 
   const tomorrow = addDays(today, 1);
-  const titleError = submitted && !title.trim() ? 'Upiši naslov zadatka.' : null;
-  const dateError = submitted && !isValidISODate(date) ? 'Izaberi datum.' : null;
+  const titleError = submitted && !title.trim() ? t('tasks.sheet.titleRequired') : null;
+  const dateError = submitted && !isValidISODate(date) ? t('tasks.sheet.dateRequired') : null;
   const dirty = catPending || title.trim() !== base.title || categoryId !== base.categoryId || date !== base.date;
   const changedElsewhere =
     busy == null && (task.title !== base.title || task.categoryId !== base.categoryId || task.date !== base.date);
@@ -68,7 +72,7 @@ export function TaskSheet({
   useUnsavedGuard(dirty && busy == null, requestClose);
 
   // Native polje za datum prikazuje format jezika uređaja (npr. 10/08/2026), pa je skriveno:
-  // vidi se datum na srpskom, a klik otvara sistemski izbor datuma.
+  // vidi se datum na jeziku aplikacije, a klik otvara sistemski izbor datuma.
   const openPicker = () => {
     const el = dateRef.current;
     if (!el) return;
@@ -87,8 +91,8 @@ export function TaskSheet({
   const save = async (e?: FormEvent) => {
     e?.preventDefault();
     setSubmitted(true);
-    const t = title.trim();
-    if (busy || !t || !isValidISODate(date)) return;
+    const trimmed = title.trim();
+    if (busy || !trimmed || !isValidISODate(date)) return;
 
     setBusy('save');
     // Upisan, a nepotvrđen naziv nove kategorije se prvo napravi (inače bi se tiho izgubio).
@@ -104,7 +108,7 @@ export function TaskSheet({
     }
 
     const patch: TaskPatch = {};
-    if (t !== base.title) patch.title = t;
+    if (trimmed !== base.title) patch.title = trimmed;
     if (catId !== base.categoryId) patch.categoryId = catId;
     if (date !== base.date) patch.date = date;
     if (Object.keys(patch).length === 0) {
@@ -118,17 +122,22 @@ export function TaskSheet({
       return;
     }
     if (patch.date) {
-      const where = patch.date === today ? 'danas' : patch.date === tomorrow ? 'sutra' : fmtDateMedium(patch.date);
-      toast(`Zadatak je premešten na ${where}.`);
+      toast(
+        patch.date === today
+          ? t('tasks.sheet.movedToday')
+          : patch.date === tomorrow
+            ? t('tasks.sheet.movedTomorrow')
+            : t('tasks.sheet.movedTo', { date: fmtDateMedium(patch.date, lang) }),
+      );
     }
     onClose();
   };
 
   const remove = async () => {
     const ok = await confirmDialog({
-      title: 'Obriši zadatak?',
-      body: `„${task.title}“ će biti trajno obrisan.`,
-      confirmText: 'Obriši',
+      title: t('tasks.sheet.deleteTitle'),
+      body: t('tasks.sheet.deleteBody', { title: task.title }),
+      confirmText: t('common.delete'),
       danger: true,
     });
     if (!ok) return;
@@ -144,7 +153,7 @@ export function TaskSheet({
     <Sheet
       open
       onClose={requestClose}
-      title="Izmeni zadatak"
+      title={t('tasks.sheet.editTitle')}
       footer={
         <>
           <Button
@@ -154,10 +163,10 @@ export function TaskSheet({
             loading={busy === 'delete'}
             disabled={busy != null}
           >
-            Obriši
+            {t('common.delete')}
           </Button>
           <Button variant="primary" type="submit" form={formId} loading={busy === 'save'} disabled={busy != null}>
-            Sačuvaj
+            {t('common.save')}
           </Button>
         </>
       }
@@ -165,15 +174,15 @@ export function TaskSheet({
       <form id={formId} className="day-form" onSubmit={save} noValidate>
         {changedElsewhere && (
           <p className="field-hint day-form-warn" role="status">
-            Zadatak je u međuvremenu promenjen na drugom uređaju. Čuvanje menja samo polja koja si ovde izmenio.
+            {t('tasks.sheet.changedElsewhere')}
           </p>
         )}
-        <Field label="Naslov" error={titleError}>
+        <Field label={t('tasks.sheet.titleLabel')} error={titleError}>
           <TextInput value={title} onChange={(e) => setTitle(e.target.value)} maxLength={300} autoComplete="off" />
         </Field>
 
         <div className="field">
-          <span className="field-label">Kategorija</span>
+          <span className="field-label">{t('tasks.sheet.category')}</span>
           <CategoryPicker
             ref={pickerRef}
             categories={categories}
@@ -185,16 +194,20 @@ export function TaskSheet({
         </div>
 
         <div className="field">
-          <span className="field-label">Datum</span>
+          <span className="field-label">{t('tasks.sheet.date')}</span>
           <div className="day-date-row">
             <span className="day-task-date">
               <button
                 type="button"
                 className="input day-task-date-btn"
                 onClick={openPicker}
-                aria-label={`Datum zadatka: ${isValidISODate(date) ? fmtDateMedium(date) : 'nije izabran'}`}
+                aria-label={t('tasks.sheet.dateAria', {
+                  date: isValidISODate(date) ? fmtDateMedium(date, lang) : t('tasks.sheet.dateNone'),
+                })}
               >
-                <span className="truncate">{isValidISODate(date) ? capitalize(fmtDateMedium(date)) : 'Izaberi datum'}</span>
+                <span className="truncate">
+                  {isValidISODate(date) ? capitalize(fmtDateMedium(date, lang)) : t('tasks.sheet.pickDate')}
+                </span>
                 <Icon name="calendar" size={18} />
               </button>
               <input
@@ -214,27 +227,29 @@ export function TaskSheet({
               className={cx('chip', date === today && 'is-active')}
               onClick={() => setDate(today)}
             >
-              Danas
+              {t('common.today')}
             </button>
             <button
               type="button"
               className={cx('chip', date === tomorrow && 'is-active')}
               onClick={() => setDate(tomorrow)}
             >
-              Sutra
+              {t('common.tomorrow')}
             </button>
           </div>
           {dateError ? (
             <span className="field-error">{dateError}</span>
           ) : (
-            <span className="field-hint">Promenom datuma zadatak prelazi na taj dan.</span>
+            <span className="field-hint">{t('tasks.sheet.dateHint')}</span>
           )}
         </div>
 
         {doneAt && (
           <p className="day-sheet-note">
-            Završen {fmtDateMedium(localISODate(doneAt))} u{' '}
-            <span className="tabular">{fmtClock(doneAt.getHours() * 60 + doneAt.getMinutes())}</span>
+            {rich(
+              t('tasks.sheet.doneAt', { date: fmtDateMedium(localISODate(doneAt), lang), time: SLOT }),
+              <span className="tabular">{fmtClock(doneAt.getHours() * 60 + doneAt.getMinutes())}</span>,
+            )}
           </p>
         )}
       </form>

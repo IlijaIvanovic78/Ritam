@@ -2,9 +2,10 @@
 
 import type { ReactNode } from 'react';
 import type { StatsPayload } from '../../../../shared/types.ts';
-import { fmtDateShort, fmtPercent } from '../../../../shared/time.ts';
+import { fmtDateShort, fmtDecimal, fmtPercent } from '../../../../shared/time.ts';
+import { useLang, useT } from '../../i18n/index.ts';
 import { cx } from '../../ui/index.ts';
-import { danWord, fmtDecimal, isLiveDay } from './period.ts';
+import { isLiveDay, splitCount } from './period.ts';
 
 function Kpi({ label, value, unit, caption }: { label: string; value: ReactNode; unit?: string; caption: string }) {
   return (
@@ -33,6 +34,8 @@ export function Kpis({
   today: string;
   className?: string;
 }) {
+  const lang = useLang();
+  const t = useT();
   const { totals, streak, days } = stats;
   const rated = days.filter((d) => d.rating != null).length;
 
@@ -48,32 +51,46 @@ export function Kpis({
   }
   const avgScore = scores.length > 0 ? scores.reduce((a, s) => a + s, 0) / scores.length : null;
   const scored = scores.length;
+  // "5 days" / "5 dana": broj je vrednost pločice, reč posle njega jedinica.
+  const streakDays = splitCount(t('common.days', { n: streak }), streak);
 
   return (
     <dl className={cx('prog-kpis', className)}>
       <Kpi
-        label="Ispunjenost"
+        label={t('progress.kpi.completion')}
         value={fmtPercent(avgScore)}
         caption={
-          scored > 0 ? `prosek za ${scored} ${danWord(scored)}` : liveToday ? 'danas je u toku' : 'nema praćenih dana'
+          scored > 0
+            ? t('progress.kpi.average', { n: scored })
+            : liveToday
+              ? t('progress.kpi.todayLive')
+              : t('progress.kpi.noTrackedDays')
         }
       />
       <Kpi
-        label="Niz"
-        value={streak}
-        unit={danWord(streak)}
-        caption={isCurrent ? `prag ${Math.round(threshold * 100)}%` : `do ${fmtDateShort(stats.to)}`}
+        label={t('progress.kpi.streak')}
+        value={streakDays.value}
+        unit={streakDays.unit}
+        caption={
+          isCurrent
+            ? t('progress.kpi.threshold', { pct: Math.round(threshold * 100) })
+            : t('progress.kpi.asOf', { date: fmtDateShort(stats.to, lang) })
+        }
       />
       <Kpi
-        label="Zadaci"
+        label={t('progress.kpi.tasks')}
         value={`${totals.tasksDone} / ${totals.tasksTotal}`}
-        caption={totals.tasksTotal > 0 ? `${fmtPercent(totals.tasksDone / totals.tasksTotal)} urađeno` : 'nema zadataka'}
+        caption={
+          totals.tasksTotal > 0
+            ? t('progress.kpi.tasksDone', { pct: fmtPercent(totals.tasksDone / totals.tasksTotal) })
+            : t('progress.kpi.noTasks')
+        }
       />
       <Kpi
-        label="Ocena dana"
-        value={totals.avgRating != null ? fmtDecimal(totals.avgRating) : '—'}
+        label={t('progress.kpi.rating')}
+        value={totals.avgRating != null ? fmtDecimal(totals.avgRating, lang) : '—'}
         unit={totals.avgRating != null ? '/ 5' : undefined}
-        caption={rated > 0 ? `prosek za ${rated} ${danWord(rated)}` : 'bez ocena'}
+        caption={rated > 0 ? t('progress.kpi.average', { n: rated }) : t('progress.kpi.noRatings')}
       />
     </dl>
   );

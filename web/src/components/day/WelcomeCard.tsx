@@ -3,14 +3,15 @@
 // urađeni koraci označeni, i put do stranice Raspored.
 
 import { useId } from 'react';
+import { useT } from '../../i18n/index.ts';
 import { navigate, paths } from '../../lib/router.tsx';
 import { Button, Icon, cx } from '../../ui/index.ts';
 
-const STEPS: Array<{ title: string; text: string }> = [
-  { title: 'Kategorije', text: 'stvari koje radiš i njihove boje' },
-  { title: 'Šablon', text: 'plan dana sa blokovima i vremenima' },
-  { title: 'Dani u nedelji', text: 'koji šablon važi kog dana' },
-];
+const STEPS = [
+  { title: 'day.welcome.categoriesTitle', text: 'day.welcome.categoriesText' },
+  { title: 'day.welcome.templateTitle', text: 'day.welcome.templateText' },
+  { title: 'day.welcome.weekdaysTitle', text: 'day.welcome.weekdaysText' },
+] as const;
 
 export function WelcomeCard({
   hasCategories,
@@ -27,13 +28,14 @@ export function WelcomeCard({
   disabled?: boolean;
   onAddBlock: () => void;
 }) {
+  const t = useT();
   const titleId = useId();
   return (
     <section className="card day-welcome" aria-labelledby={titleId}>
       <h2 className="day-welcome-title" id={titleId}>
-        Napravi svoj raspored
+        {t('day.welcome.title')}
       </h2>
-      <p className="day-welcome-lead">Opiši jednom kako izgleda tvoj dan, a Ritam će ga sam postaviti za svaki dan.</p>
+      <p className="day-welcome-lead">{t('day.welcome.lead')}</p>
       <ol className="day-welcome-steps">
         {STEPS.map((s, i) => {
           const done = (i === 0 && hasCategories) || (i === 1 && hasTemplates);
@@ -43,8 +45,8 @@ export function WelcomeCard({
                 {done ? <Icon name="check" size={16} /> : i + 1}
               </span>
               <span>
-                <span className="day-welcome-step-title">{s.title}:</span> {s.text}
-                {done && <span className="sr-only"> (urađeno)</span>}
+                <span className="day-welcome-step-title">{t(s.title)}:</span> {t(s.text)}
+                {done && <span className="sr-only"> {t('day.welcome.stepDone')}</span>}
               </span>
             </li>
           );
@@ -52,10 +54,10 @@ export function WelcomeCard({
       </ol>
       <div className="day-welcome-actions">
         <Button variant="primary" onClick={() => navigate(paths.schedule)}>
-          Podesi raspored
+          {t('day.welcome.setUp')}
         </Button>
         <Button variant="ghost" onClick={onAddBlock} disabled={disabled}>
-          {isToday ? 'Dodaj blok samo za danas' : 'Dodaj blok samo za ovaj dan'}
+          {isToday ? t('day.welcome.addToday') : t('day.welcome.addThisDay')}
         </Button>
       </div>
     </section>

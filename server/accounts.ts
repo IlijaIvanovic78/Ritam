@@ -2,7 +2,7 @@
 // opoziv familije, čišćenje). Kriptografija je u auth.ts, HTTP u authRoutes.ts.
 
 import type { DatabaseSync, StatementSync } from 'node:sqlite';
-import type { AuthUser } from '../shared/types.ts';
+import type { AuthUser, Lang } from '../shared/types.ts';
 import { hashRefreshToken, newFamilyId, newRefreshToken } from './auth.ts';
 import { statementCache, tx } from './db.ts';
 import { DEFAULT_SETTINGS } from './defaults.ts';
@@ -98,16 +98,22 @@ export class Accounts {
    * meta 'settings' — ništa se ne briše ni ne kopira, redovi samo dobijaju vlasnika. Svaki sledeći nalog
    * počinje prazan (7 dana u nedelji bez šablona, podrazumevana podešavanja). 409 ako email već postoji.
    */
-  /** `adopted` = prvi nalog je preuzeo podatke (dane, zadatke, raspored) iz verzije bez naloga. */
-  createUser(email: string, passwordHash: string): { user: AuthUser; adopted: boolean } {
+  /**
+   * `adopted` = prvi nalog je preuzeo podatke (dane, zadatke, raspored) iz verzije bez naloga. `lang` = jezik
+   * interfejsa novog naloga (izbor sa ekrana prijave ili jezik zahteva), i za prvi nalog.
+   */
+  createUser(email: string, passwordHash: string, lang: Lang): { user: AuthUser; adopted: boolean } {
     try {
       return tx(this.db, () => {
-        if (this.findByEmail(email)) throw new HttpError(409, 'Nalog sa tom email adresom već postoji.');
+        if (this.findByEmail(email)) throw new HttpError(409, 'auth.emailTaken');
         const first = !this.q('SELECT 1 FROM users LIMIT 1').get();
         const hadData = first && this.hasUnclaimedData();
-        const settings = first
-          ? parseSettings(strOrUndefined(this.q(`SELECT value FROM meta WHERE key = 'settings'`).get()?.value))
-          : { ...DEFAULT_SETTINGS };
+        const settings = {
+          ...(first
+            ? parseSettings(strOrUndefined(this.q(`SELECT value FROM meta WHERE key = 'settings'`).get()?.value))
+            : DEFAULT_SETTINGS),
+          lang,
+        };
         const id = Number(
           this.q('INSERT INTO users (email, password_hash, settings, created_at) VALUES (?, ?, ?, ?)').run(
             email,
@@ -135,7 +141,7 @@ export class Accounts {
     } catch (err) {
       // Dve istovremene registracije istog emaila: druga pada na UNIQUE.
       if (err instanceof Error && /UNIQUE constraint failed: users\.email/.test(err.message)) {
-        throw new HttpError(409, 'Nalog sa tom email adresom već postoji.');
+        throw new HttpError(409, 'auth.emailTaken');
       }
       throw err;
     }

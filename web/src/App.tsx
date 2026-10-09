@@ -12,7 +12,7 @@ import {
   type ReactNode,
 } from 'react';
 import { capitalize, fmtDateMedium } from '../../shared/time.ts';
-import type { AuthUser } from '../../shared/types.ts';
+import type { AuthUser, Lang } from '../../shared/types.ts';
 import {
   ApiError,
   UNAUTHORIZED_EVENT,
@@ -23,6 +23,7 @@ import {
   sessionStore,
   setOfflineUser,
 } from './api.ts';
+import { useLang, useT, type MessageKey, type TFunction } from './i18n/index.ts';
 import {
   adoptUser,
   announceLogin,
@@ -79,6 +80,9 @@ type StartOutcome = { kind: 'ok'; user: AuthUser } | { kind: 'login' } | { kind:
 const wait = (ms: number) => new Promise<void>((r) => window.setTimeout(r, ms));
 
 export default function App() {
+  // Promena jezika ponovo renderuje celu aplikaciju (stranice nemaju memo), pa se svaki tekst prevede; stanje
+  // stranica i otvorenih formi ostaje.
+  const t = useT();
   const [phase, setPhase] = useState<Phase>('checking');
   const phaseRef = useRef(phase);
   phaseRef.current = phase;
@@ -239,11 +243,11 @@ export default function App() {
     content = (
       <div className="shell-splash">
         <Empty
-          title="Podaci nisu učitani."
+          title={t('shell.loadFailed')}
           text={schedule.error}
           action={
             <Button icon="refresh" onClick={() => void start()}>
-              Pokušaj ponovo
+              {t('common.retry')}
             </Button>
           }
         />
@@ -273,29 +277,29 @@ export default function App() {
 interface NavItem {
   route: Route['name'];
   to: string;
-  label: string;
   icon: IconName;
 }
 
 const NAV: NavItem[] = [
-  { route: 'day', to: paths.today, label: 'Danas', icon: 'today' },
-  { route: 'progress', to: paths.progress, label: 'Napredak', icon: 'chart' },
-  { route: 'journal', to: paths.journal, label: 'Dnevnik', icon: 'journal' },
-  { route: 'schedule', to: paths.schedule, label: 'Raspored', icon: 'blocks' },
+  { route: 'day', to: paths.today, icon: 'today' },
+  { route: 'progress', to: paths.progress, icon: 'chart' },
+  { route: 'journal', to: paths.journal, icon: 'journal' },
+  { route: 'schedule', to: paths.schedule, icon: 'blocks' },
 ];
 
-const TITLES: Record<Route['name'], string> = {
-  day: 'Danas',
-  progress: 'Napredak',
-  journal: 'Dnevnik',
-  schedule: 'Raspored',
-  settings: 'Podešavanja',
-  notfound: 'Nije pronađeno',
+/** Naziv stranice (navigacija i naslov taba). */
+const TITLES: Record<Route['name'], Extract<MessageKey, `shell.page.${string}`>> = {
+  day: 'shell.page.today',
+  progress: 'shell.page.progress',
+  journal: 'shell.page.journal',
+  schedule: 'shell.page.schedule',
+  settings: 'shell.page.settings',
+  notfound: 'shell.page.notFound',
 };
 
-function pageTitle(route: Route): string {
-  if (route.name === 'day' && route.date) return capitalize(fmtDateMedium(route.date));
-  return TITLES[route.name];
+function pageTitle(route: Route, t: TFunction, lang: Lang): string {
+  if (route.name === 'day' && route.date) return capitalize(fmtDateMedium(route.date, lang));
+  return t(TITLES[route.name]);
 }
 
 /** Klik na već aktivan tab vraća stranicu na vrh (kao u nativnim aplikacijama). */
@@ -307,6 +311,8 @@ function scrollTopIfActive(active: boolean) {
 }
 
 function Shell() {
+  const t = useT();
+  const lang = useLang();
   const route = useRoute();
   const pathname = useLocation().split('?')[0];
   const online = useOnline();
@@ -330,8 +336,8 @@ function Shell() {
     };
   }, [stale]);
 
-  // route je nov objekat svakim renderom; naslov zavisi samo od putanje.
-  const title = `${pageTitle(route)} · Ritam`;
+  // route je nov objekat svakim renderom; naslov zavisi samo od putanje i jezika.
+  const title = `${pageTitle(route, t, lang)} · Ritam`;
   useEffect(() => {
     document.title = title;
   }, [title]);
@@ -344,14 +350,14 @@ function Shell() {
   return (
     <div className="shell">
       <a className="shell-skip" href="#main">
-        Preskoči na sadržaj
+        {t('shell.skipToContent')}
       </a>
 
-      <nav className="shell-side" aria-label="Glavna navigacija">
+      <nav className="shell-side" aria-label={t('shell.mainNav')}>
         <Link
           to={paths.today}
           className="shell-brand"
-          aria-label="Ritam — Danas"
+          aria-label={t('shell.homeLink')}
           onClick={() => scrollTopIfActive(pathname === paths.today)}
         >
           <Wordmark height={34} />
@@ -368,7 +374,7 @@ function Shell() {
                   onClick={() => scrollTopIfActive(active && item.to === pathname)}
                 >
                   <Icon name={item.icon} size={20} />
-                  <span>{item.label}</span>
+                  <span>{t(TITLES[item.route])}</span>
                 </Link>
               </li>
             );
@@ -381,7 +387,7 @@ function Shell() {
             aria-current={settingsActive ? 'page' : undefined}
           >
             <Icon name="settings" size={20} />
-            <span>Podešavanja</span>
+            <span>{t('shell.page.settings')}</span>
           </Link>
         </div>
       </nav>
@@ -391,7 +397,7 @@ function Shell() {
           <Link
             to={paths.today}
             className="shell-top-brand"
-            aria-label="Ritam — Danas"
+            aria-label={t('shell.homeLink')}
             onClick={() => scrollTopIfActive(pathname === paths.today)}
           >
             <Wordmark height={30} />
@@ -400,9 +406,7 @@ function Shell() {
         {(!online || stale) && (
           <div className="shell-offline" role="status">
             <span className="shell-offline-dot" aria-hidden="true" />
-            {online
-              ? 'Server nije dostupan — prikazani su sačuvani podaci.'
-              : 'Nema interneta — izmene se ne čuvaju.'}
+            {online ? t('shell.serverStale') : t('shell.offline')}
           </div>
         )}
         <PageErrorBoundary key={pathname}>
@@ -412,7 +416,7 @@ function Shell() {
 
       <UpdateBar />
 
-      <nav className="shell-tabbar" aria-label="Glavna navigacija">
+      <nav className="shell-tabbar" aria-label={t('shell.mainNav')}>
         {NAV.map((item) => {
           const active = isTabActive(item);
           return (
@@ -424,7 +428,7 @@ function Shell() {
               onClick={() => scrollTopIfActive(isActive(item) && item.to === pathname)}
             >
               <Icon name={item.icon} size={22} />
-              <span className="shell-tab-label">{item.label}</span>
+              <span className="shell-tab-label">{t(TITLES[item.route])}</span>
             </Link>
           );
         })}
@@ -448,12 +452,13 @@ function useDialogOpen(): boolean {
 }
 
 /**
- * "Dostupna je nova verzija." + Osveži + ×: tiha traka na dnu (telefon: odmah iznad donje trake;
- * desktop: na dnu sadržaja). Stranica se nikad ne učitava sama (lib/pwa.ts). Dok je otvoren sheet ili
+ * "A new version is available." (update.available) + Osveži + ×: tiha traka na dnu (telefon: odmah iznad donje
+ * trake; desktop: na dnu sadržaja). Stranica se nikad ne učitava sama (lib/pwa.ts). Dok je otvoren sheet ili
  * dijalog, traka čeka da se zatvori — Osveži bi prekinuo formu, a van dijaloga ionako ne prima dodir.
  * Visina trake ide u --update-h: stranica dobija toliko prostora na dnu, a toast-ovi stoje iznad nje.
  */
 function UpdateBar() {
+  const t = useT();
   const { available, applying } = useUpdateState();
   const dialogOpen = useDialogOpen();
   const ref = useRef<HTMLDivElement>(null);
@@ -478,8 +483,8 @@ function UpdateBar() {
   const refresh = async () => {
     if (applying) return;
     const result = await applyUpdate();
-    if (result === 'offline') toast.error('Nema konekcije.');
-    else if (result === 'unavailable') toast.error('Server nije dostupan. Pokušaj ponovo.');
+    if (result === 'offline') toast.error(t('error.offline'));
+    else if (result === 'unavailable') toast.error(t('error.unavailable'));
   };
 
   const dismiss = () => {
@@ -492,7 +497,7 @@ function UpdateBar() {
   return (
     <div ref={ref} className="shell-update" role="status">
       <div className="shell-update-text">
-        <span>Dostupna je nova verzija.</span>
+        <span>{t('update.available')}</span>
         <button
           type="button"
           className={cx('shell-update-btn', applying && 'is-busy')}
@@ -500,14 +505,14 @@ function UpdateBar() {
           onClick={() => void refresh()}
         >
           {applying && <span className="spinner shell-update-spinner" aria-hidden="true" />}
-          {applying ? 'Osvežava se…' : 'Osveži'}
+          {applying ? t('update.refreshing') : t('update.refresh')}
         </button>
       </div>
       <button
         type="button"
         className="shell-update-close"
-        aria-label="Sakrij obaveštenje o novoj verziji"
-        title="Sakrij"
+        aria-label={t('update.hideLabel')}
+        title={t('update.hide')}
         disabled={applying}
         onClick={dismiss}
       >
@@ -535,15 +540,16 @@ function PageView({ route }: { route: Route }) {
 }
 
 function NotFound() {
+  const t = useT();
   return (
     <div className="page">
-      <PageHeader title="Nije pronađeno" />
+      <PageHeader title={t('shell.page.notFound')} />
       <Empty
-        title="Ova stranica ne postoji."
-        text="Proveri adresu ili se vrati na današnji dan."
+        title={t('shell.notFound.title')}
+        text={t('shell.notFound.text')}
         action={
           <Link to={paths.today} className="btn btn-secondary">
-            <span>Idi na Danas</span>
+            <span>{t('shell.notFound.goToday')}</span>
           </Link>
         }
       />
@@ -561,25 +567,31 @@ class PageErrorBoundary extends Component<{ children: ReactNode }, { error: Erro
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
-    console.error('Greška u prikazu stranice:', error, info.componentStack);
+    console.error('Page render error:', error, info.componentStack);
   }
 
   render() {
     if (!this.state.error) return this.props.children;
-    return (
-      <div className="page">
-        <div className="shell-crash">
-          <Empty
-            title="Ova stranica nije uspela da se prikaže."
-            text="Podaci na serveru nisu dirani. Učitaj stranicu ponovo."
-            action={
-              <Button icon="refresh" onClick={() => window.location.reload()}>
-                Učitaj ponovo
-              </Button>
-            }
-          />
-        </div>
-      </div>
-    );
+    return <PageCrash />;
   }
+}
+
+/** Prikaz umesto stranice koja je pala (funkcijska komponenta, da tekst prati jezik). */
+function PageCrash() {
+  const t = useT();
+  return (
+    <div className="page">
+      <div className="shell-crash">
+        <Empty
+          title={t('shell.crash.title')}
+          text={t('shell.crash.text')}
+          action={
+            <Button icon="refresh" onClick={() => window.location.reload()}>
+              {t('common.reload')}
+            </Button>
+          }
+        />
+      </div>
+    </div>
+  );
 }

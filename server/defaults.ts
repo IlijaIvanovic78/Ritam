@@ -4,8 +4,11 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { Settings } from '../shared/types.ts';
 
-/** Podešavanja nove baze; i rezerva kad sačuvana podešavanja nedostaju ili nisu ispravna. */
-export const DEFAULT_SETTINGS: Settings = { dayStart: 0, streakThreshold: 0.7 };
+/**
+ * Podešavanja nove baze; i rezerva kad sačuvana podešavanja nedostaju ili nisu ispravna. Jezik interfejsa je
+ * podrazumevano engleski (i za nalog napravljen pre izbora jezika); nov nalog dobija jezik iz registracije.
+ */
+export const DEFAULT_SETTINGS: Settings = { dayStart: 0, streakThreshold: 0.7, lang: 'en' };
 
 /**
  * Upisuje prazno početno stanje: svih 7 dana u nedelji bez šablona i podrazumevana podešavanja.

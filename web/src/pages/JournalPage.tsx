@@ -12,7 +12,9 @@ import {
   type ReactNode,
 } from 'react';
 import type { JournalEntry } from '../../../shared/types.ts';
+import type { Lang } from '../../../shared/types.ts';
 import { fmtDateLong, fmtMonthYear, fmtPercent, logicalNow } from '../../../shared/time.ts';
+import { useLang, useT } from '../i18n/index.ts';
 import { api, errorMessage } from '../api.ts';
 import { Link, dayPath, paths } from '../lib/router.tsx';
 import { useSettings } from '../lib/store.ts';
@@ -58,6 +60,8 @@ async function fetchPage(q: string, size: number, before?: string): Promise<Omit
 }
 
 export default function JournalPage() {
+  const lang = useLang();
+  const t = useT();
   const { dayStart } = useSettings();
   const [input, setInput] = useState(() => memo?.input ?? '');
   const [q, setQ] = useState(() => memo?.list.q ?? '');
@@ -81,8 +85,8 @@ export default function JournalPage() {
   useEffect(() => {
     const next = input.trim();
     if (next === q) return;
-    const t = window.setTimeout(() => setQ(next), next ? SEARCH_DELAY : 0);
-    return () => window.clearTimeout(t);
+    const timer = window.setTimeout(() => setQ(next), next ? SEARCH_DELAY : 0);
+    return () => window.clearTimeout(timer);
   }, [input, q]);
 
   // Prva strana za upit. Za isti upit (povratak na stranicu, "Pokušaj ponovo")
@@ -158,7 +162,7 @@ export default function JournalPage() {
     }
   };
 
-  const groups = useMemo(() => (list ? groupByMonth(list.entries) : []), [list]);
+  const groups = useMemo(() => (list ? groupByMonth(list.entries, lang) : []), [list, lang]);
   const today = logicalNow(dayStart).date;
 
   // Dok stiže odgovor za novi upit, stari rezultati ostaju vidljivi ali prigušeni.
@@ -170,9 +174,9 @@ export default function JournalPage() {
   if (error) {
     content = (
       <Empty
-        title="Dnevnik nije učitan."
+        title={t('journal.loadError')}
         text={error}
-        action={<Button onClick={() => setReloadKey((k) => k + 1)}>Pokušaj ponovo</Button>}
+        action={<Button onClick={() => setReloadKey((k) => k + 1)}>{t('common.retry')}</Button>}
       />
     );
   } else if (!list) {
@@ -180,20 +184,20 @@ export default function JournalPage() {
   } else if (list.entries.length === 0) {
     content = list.q ? (
       <Empty
-        title={`Ništa nije pronađeno za „${list.q}“.`}
+        title={t('journal.search.noResults', { query: list.q })}
         action={
           <Button variant="ghost" onClick={clearSearch}>
-            Obriši pretragu
+            {t('journal.search.clear')}
           </Button>
         }
       />
     ) : (
       <Empty
-        title="Još nema beležaka."
-        text="Piši ih na stranici Danas."
+        title={t('journal.empty.title')}
+        text={t('journal.empty.text')}
         action={
           <Link to={paths.today} className="btn btn-secondary">
-            Otvori Danas
+            {t('journal.empty.openToday')}
           </Link>
         }
       />
@@ -216,7 +220,7 @@ export default function JournalPage() {
         {list.hasMore && (
           <div className="jr-more">
             <Button onClick={loadMore} loading={loadingMore} disabled={loading}>
-              Učitaj još
+              {t('journal.loadMore')}
             </Button>
           </div>
         )}
@@ -226,7 +230,7 @@ export default function JournalPage() {
 
   return (
     <div className="page jr-page">
-      <PageHeader title="Dnevnik" />
+      <PageHeader title={t('journal.title')} />
 
       {showSearch && (
         <form className="jr-search" role="search" onSubmit={onSubmit}>
@@ -235,8 +239,8 @@ export default function JournalPage() {
             ref={inputRef}
             type="search"
             className="jr-search-input"
-            placeholder="Pretraži beleške"
-            aria-label="Pretraži beleške"
+            placeholder={t('journal.search.placeholder')}
+            aria-label={t('journal.search.placeholder')}
             enterKeyHint="search"
             autoComplete="off"
             autoCapitalize="none"
@@ -246,11 +250,11 @@ export default function JournalPage() {
             onKeyDown={onSearchKey}
           />
           {input !== '' && (
-            <IconButton icon="x" label="Obriši pretragu" className="jr-search-clear" onClick={clearSearch} />
+            <IconButton icon="x" label={t('journal.search.clear')} className="jr-search-clear" onClick={clearSearch} />
           )}
           <p className="sr-only" aria-live="polite">
             {list && list.q && !loading && !error
-              ? `Pronađeno unosa: ${list.entries.length}${list.hasMore ? '+' : ''}`
+              ? t('journal.search.found', { count: `${list.entries.length}${list.hasMore ? '+' : ''}` })
               : ''}
           </p>
         </form>
@@ -264,6 +268,8 @@ export default function JournalPage() {
 // ---- Jedan unos ----
 
 function EntryItem({ entry, query, today }: { entry: JournalEntry; query: string; today: string }) {
+  const lang = useLang();
+  const t = useT();
   const curYear = today.slice(0, 4);
   const textId = useId();
   const itemRef = useRef<HTMLElement>(null);
@@ -315,7 +321,7 @@ function EntryItem({ entry, query, today }: { entry: JournalEntry; query: string
         <header className="jr-entry-head">
           <h3 className="jr-date" id={headingId}>
             <Link to={dayPath(entry.date, today)} className="jr-date-link">
-              {fmtDateLong(entry.date, entry.date.slice(0, 4) !== curYear)}
+              {fmtDateLong(entry.date, lang, entry.date.slice(0, 4) !== curYear)}
               <Icon name="chevron-right" size={16} className="jr-date-icon" />
             </Link>
           </h3>
@@ -326,7 +332,7 @@ function EntryItem({ entry, query, today }: { entry: JournalEntry; query: string
         </p>
         {overflows && (
           <button type="button" className="jr-toggle" aria-expanded={expanded} aria-controls={textId} onClick={toggle}>
-            {expanded ? 'Prikaži manje' : 'Prikaži više'}
+            {t(expanded ? 'journal.entry.showLess' : 'journal.entry.showMore')}
             <Icon name={expanded ? 'chevron-up' : 'chevron-down'} size={16} />
           </button>
         )}
@@ -337,13 +343,23 @@ function EntryItem({ entry, query, today }: { entry: JournalEntry; query: string
 
 /** Ocena, ispunjenost i zadaci dana — prikazuje se samo ono što postoji. */
 function EntryMeta({ entry }: { entry: JournalEntry }) {
+  const t = useT();
   const items: Array<{ key: string; node: ReactNode; title?: string }> = [];
   if (entry.rating != null) items.push({ key: 'r', node: <RatingDots value={entry.rating} /> });
   if (entry.score != null) {
-    items.push({ key: 's', node: `${fmtPercent(entry.score)} ispunjeno`, title: 'Ispunjenost blokova' });
+    items.push({
+      key: 's',
+      node: t('journal.meta.score', { pct: fmtPercent(entry.score) }),
+      title: t('journal.meta.scoreTitle'),
+    });
   }
   if (entry.tasksTotal > 0) {
-    items.push({ key: 't', node: tasksLabel(entry.tasksDone, entry.tasksTotal), title: 'Urađeni zadaci' });
+    items.push({
+      key: 't',
+      // "3/5 tasks" / "3/5 zadataka", "1/2 zadatka" — oblik se slaže sa ukupnim brojem ("od 5 zadataka").
+      node: t('journal.meta.tasks', { done: entry.tasksDone, n: entry.tasksTotal }),
+      title: t('journal.meta.tasksTitle'),
+    });
   }
   if (items.length === 0) return null;
   return (
@@ -359,26 +375,18 @@ function EntryMeta({ entry }: { entry: JournalEntry }) {
 
 // ---- Pomoćne funkcije ----
 
-function groupByMonth(entries: JournalEntry[]) {
+function groupByMonth(entries: JournalEntry[], lang: Lang) {
   const groups: Array<{ key: string; label: string; entries: JournalEntry[] }> = [];
   for (const e of entries) {
     const key = e.date.slice(0, 7);
     let g = groups[groups.length - 1];
     if (!g || g.key !== key) {
-      g = { key, label: fmtMonthYear(e.date), entries: [] };
+      g = { key, label: fmtMonthYear(e.date, lang), entries: [] };
       groups.push(g);
     }
     g.entries.push(e);
   }
   return groups;
-}
-
-/** "3/5 zadataka", "1/2 zadatka" — oblik se slaže sa ukupnim brojem ("od 5 zadataka"). */
-function tasksLabel(done: number, total: number): string {
-  const n10 = total % 10;
-  const n100 = total % 100;
-  const few = n10 >= 1 && n10 <= 4 && (n100 < 11 || n100 > 14);
-  return `${done}/${total} ${few ? 'zadatka' : 'zadataka'}`;
 }
 
 /**

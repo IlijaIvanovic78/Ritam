@@ -2,32 +2,34 @@
 
 import { useState } from 'react';
 import type { Category } from '../../../../shared/types.ts';
+import { useT } from '../../i18n/index.ts';
 import { useScheduleData } from '../../lib/store.ts';
 import { Button, Card, CategoryDot, Icon } from '../../ui/index.ts';
 import { CategorySheet } from './CategorySheet.tsx';
 
 export function CategoriesCard() {
+  const t = useT();
   const { categories } = useScheduleData();
   // null unutar objekta = nova kategorija; null spolja = sheet zatvoren.
   const [sheet, setSheet] = useState<{ category: Category | null } | null>(null);
 
   return (
     <Card
-      title="Kategorije"
+      title={t('schedule.categories.title')}
       flush
       actions={
         categories.length > 0 && (
           <Button variant="ghost" size="sm" icon="plus" onClick={() => setSheet({ category: null })}>
-            Nova kategorija
+            {t('schedule.categories.new')}
           </Button>
         )
       }
     >
       {categories.length === 0 ? (
         <div className="sched-empty">
-          <p className="sched-empty-line">Kategorija daje boju bloku i sabira vreme u Napretku.</p>
+          <p className="sched-empty-line">{t('schedule.categories.empty')}</p>
           <Button icon="plus" onClick={() => setSheet({ category: null })}>
-            Nova kategorija
+            {t('schedule.categories.new')}
           </Button>
         </div>
       ) : (
@@ -37,7 +39,7 @@ export function CategoriesCard() {
               <button type="button" className="sched-cat" onClick={() => setSheet({ category: c })}>
                 <CategoryDot color={c.color} />
                 <span className="sched-cat-name truncate">{c.name}</span>
-                {!c.counts && <span className="sched-tag">ne računa se</span>}
+                {!c.counts && <span className="sched-tag">{t('schedule.notCounted')}</span>}
                 <Icon name="chevron-right" size={18} className="sched-chev" />
               </button>
             </li>

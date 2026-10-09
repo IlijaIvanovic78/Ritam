@@ -3,28 +3,39 @@
 import type { SQLOutputValue } from 'node:sqlite';
 import type { Context } from 'hono';
 import { isValidISODate } from '../shared/time.ts';
+import { msg } from './i18n.ts';
+import type { MsgKey, MsgParams } from './i18n.ts';
 
 /** HTTP statusi koje API namerno vraća. */
 export type ErrorStatus = 400 | 401 | 403 | 404 | 409 | 413 | 429 | 500;
 
-/** Greška koju error handler pretvara u `{ error, code? }` odgovor sa datim statusom. */
+/**
+ * Greška koju error handler (app.ts) pretvara u `{ error, code? }` odgovor sa datim statusom. Poruka je ključ
+ * iz kataloga (server/i18n.ts) i prevodi se na jezik zahteva tek u odgovoru; `message` je engleski tekst (log).
+ */
 export class HttpError extends Error {
   status: ErrorStatus;
+  /** Ključ poruke za korisnika (server/i18n.ts). */
+  key: MsgKey;
+  /** Parametri poruke ({n}, {where}…). */
+  params: MsgParams | undefined;
   /** Mašinski čitljiv razlog (npr. 'token_expired'); klijent prikazuje `error`. */
   code: string | undefined;
   /** Dodatni headeri odgovora (npr. Retry-After). */
   headers: Record<string, string> | undefined;
-  constructor(status: ErrorStatus, message: string, code?: string, headers?: Record<string, string>) {
-    super(message);
+  constructor(status: ErrorStatus, key: MsgKey, code?: string, headers?: Record<string, string>, params?: MsgParams) {
+    super(msg('en', key, params));
     this.name = 'HttpError';
     this.status = status;
+    this.key = key;
+    this.params = params;
     this.code = code;
     this.headers = headers;
   }
 }
 
-export const badRequest = (message: string) => new HttpError(400, message);
-export const notFound = (message: string) => new HttpError(404, message);
+export const badRequest = (key: MsgKey, params?: MsgParams) => new HttpError(400, key, undefined, undefined, params);
+export const notFound = (key: MsgKey) => new HttpError(404, key);
 
 export function nowISO(): string {
   return new Date().toISOString();
@@ -55,15 +66,18 @@ export function flag(b: boolean): number {
   return b ? 1 : 0;
 }
 
-/** Parametar datuma iz putanje/upita; neispravan → 400. */
-export function parseDateParam(value: string | undefined, label = 'Datum'): string {
-  if (!value || !isValidISODate(value)) throw badRequest(`${label} nije ispravan.`);
+/** Parametar datuma iz putanje/upita; neispravan → 400 (`key` = poruka, npr. 'param.fromInvalid'). */
+export function parseDateParam(
+  value: string | undefined,
+  key: 'param.dateInvalid' | 'param.fromInvalid' | 'param.toInvalid' | 'param.todayInvalid' = 'param.dateInvalid',
+): string {
+  if (!value || !isValidISODate(value)) throw badRequest(key);
   return value;
 }
 
 /** Pozitivan celobrojni id iz putanje; neispravan → 400. */
 export function parseIdParam(value: string | undefined): number {
-  if (!value || !/^[1-9]\d{0,14}$/.test(value)) throw badRequest('Neispravan id.');
+  if (!value || !/^[1-9]\d{0,14}$/.test(value)) throw badRequest('param.idInvalid');
   return Number(value);
 }
 

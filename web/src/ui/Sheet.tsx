@@ -5,6 +5,7 @@
 // nesačuvanim izmenama može da pita "Odbaci izmene?" i ostavi sheet otvoren.
 
 import { useEffect, useRef, type ReactNode } from 'react';
+import { useT } from '../i18n/index.ts';
 import { IconButton } from './Button.tsx';
 import { cx } from './cx.ts';
 
@@ -35,6 +36,7 @@ function isTypingField(el: Element | null): el is HTMLElement {
 }
 
 export function Sheet({ open, onClose, title, children, footer, size = 'md', returnFocus }: SheetProps) {
+  const t = useT();
   const ref = useRef<HTMLDialogElement>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
@@ -112,7 +114,7 @@ export function Sheet({ open, onClose, title, children, footer, size = 'md', ret
         <div className="sheet-panel">
           <header className="sheet-head">
             <h2 className="sheet-title">{title}</h2>
-            <IconButton icon="x" label="Zatvori" onClick={() => onCloseRef.current()} />
+            <IconButton icon="x" label={t('common.close')} onClick={() => onCloseRef.current()} />
           </header>
           <div className="sheet-body">{children}</div>
           {footer && <footer className="sheet-foot">{footer}</footer>}

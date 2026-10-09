@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
+import { useT } from '../../i18n/index.ts';
 import { Icon, IconButton, type IconName } from '../../ui/index.ts';
 
 export interface MenuItem {
@@ -9,7 +10,9 @@ export interface MenuItem {
 }
 
 /** Mali padajući meni (⋯). Zatvara se klikom van, Escape-om ili izborom stavke. */
-export function DayMenu({ items, label = 'Još opcija' }: { items: MenuItem[]; label?: string }) {
+export function DayMenu({ items, label: labelProp }: { items: MenuItem[]; label?: string }) {
+  const t = useT();
+  const label = labelProp ?? t('day.menu.label');
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);

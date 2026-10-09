@@ -1,7 +1,8 @@
-// Kratka obaveštenja. toast('Sačuvano'), toast.error('...'), toast.success('...').
+// Kratka obaveštenja. toast(t('common.saved')), toast.error('...'), toast.success('...'). Poruka je već prevedena.
 
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
+import { useT } from '../i18n/index.ts';
 import { cx } from './cx.ts';
 import { DIALOGS_EVENT } from './Sheet.tsx';
 
@@ -35,6 +36,7 @@ export const toast = Object.assign((message: string) => push(message, 'info'), {
 });
 
 export function Toaster() {
+  const t = useT();
   const list = useSyncExternalStore(
     (l) => {
       listeners.add(l);
@@ -61,10 +63,14 @@ export function Toaster() {
 
   return createPortal(
     <div className={cx('toaster', host && 'toaster-top')} aria-live="polite" aria-atomic="false">
-      {list.map((t) => (
-        <div key={t.id} className={cx('toast', `toast-${t.kind}`)} role={t.kind === 'error' ? 'alert' : 'status'}>
-          <span>{t.message}</span>
-          <button type="button" className="toast-close" aria-label="Zatvori" onClick={() => dismiss(t.id)}>
+      {list.map((item) => (
+        <div
+          key={item.id}
+          className={cx('toast', `toast-${item.kind}`)}
+          role={item.kind === 'error' ? 'alert' : 'status'}
+        >
+          <span>{item.message}</span>
+          <button type="button" className="toast-close" aria-label={t('common.close')} onClick={() => dismiss(item.id)}>
             ×
           </button>
         </div>

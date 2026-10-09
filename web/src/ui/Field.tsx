@@ -10,6 +10,7 @@ import {
   type SelectHTMLAttributes,
   type TextareaHTMLAttributes,
 } from 'react';
+import { useT } from '../i18n/index.ts';
 import { cx } from './cx.ts';
 
 /** Labela + kontrola + opcioni hint/greška. */
@@ -54,7 +55,7 @@ type TimeInputProps = {
   /** Granice "HH:MM", uključivo. */
   min?: string;
   max?: string;
-  /** Naziv polja za čitače ekrana ("Od", "Do"…); select-ovi dobijaju "<naziv>: sat/minuti". */
+  /** Naziv polja za čitače ekrana ("Od", "Do"…); select-ovi dobijaju "<naziv>: hour/minutes" ("sat/minuti"). */
   'aria-label': string;
   'aria-invalid'?: boolean;
   'aria-describedby'?: string;
@@ -87,6 +88,7 @@ export function TimeInput({
   'aria-invalid': ariaInvalid,
   'aria-describedby': describedBy,
 }: TimeInputProps) {
+  const t = useT();
   const parsed = /^(\d{1,2}):(\d{2})$/.exec(value ?? '');
   const h = parsed ? Number(parsed[1]) : null;
   const m = parsed ? Number(parsed[2]) : null;
@@ -102,8 +104,8 @@ export function TimeInput({
   const allowedMinutes = h == null ? minutes : minutes.filter((x) => h * 60 + x >= lo && h * 60 + x <= hi);
 
   const emit = (hh: number, mm: number) => {
-    const t = Math.min(hi, Math.max(lo, hh * 60 + mm));
-    onChange({ target: { value: `${pad2(Math.floor(t / 60))}:${pad2(t % 60)}` } });
+    const v = Math.min(hi, Math.max(lo, hh * 60 + mm));
+    onChange({ target: { value: `${pad2(Math.floor(v / 60))}:${pad2(v % 60)}` } });
   };
 
   return (
@@ -115,7 +117,7 @@ export function TimeInput({
         value={h ?? ''}
         disabled={disabled}
         required={required}
-        aria-label={`${label}: sat`}
+        aria-label={t('ui.time.hour', { label })}
         aria-invalid={ariaInvalid || undefined}
         aria-describedby={describedBy}
         onChange={(e) => emit(Number(e.target.value), m ?? 0)}
@@ -135,7 +137,7 @@ export function TimeInput({
         value={m ?? ''}
         disabled={disabled}
         required={required}
-        aria-label={`${label}: minuti`}
+        aria-label={t('ui.time.minutes', { label })}
         aria-invalid={ariaInvalid || undefined}
         aria-describedby={describedBy}
         onChange={(e) => emit(h ?? 0, Number(e.target.value))}

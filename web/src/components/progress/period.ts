@@ -1,18 +1,20 @@
 // Period (nedelja/mesec) za stranicu Napredak, formatiranje i pomoćne funkcije.
 
-import type { StatsDay } from '../../../../shared/types.ts';
+import type { Lang, StatsDay } from '../../../../shared/types.ts';
 import {
-  MONTH_SHORT,
   addDays,
   addMonths,
   endOfMonth,
   fmtDateLong,
+  fmtDateRange,
+  fmtDecimal,
   fmtMonthYear,
   fmtPercent,
   isValidISODate,
   startOfMonth,
   startOfWeek,
 } from '../../../../shared/time.ts';
+import { getLang, tIn } from '../../i18n/index.ts';
 
 export type PeriodMode = 'week' | 'month';
 
@@ -64,19 +66,15 @@ export function clampEnd(p: Period, today: string): string {
 }
 
 /**
- * Naslov perioda: "6–12. okt", "29. sep – 5. okt", "29. dec 2025. – 4. jan 2026.",
- * mesec: "Oktobar 2026.". Godina uz nedelju samo ako nije tekuća.
+ * Naslov perioda: "6–12. okt", "29. sep – 5. okt", "29. dec 2025. – 4. jan 2026." (en "Oct 6–12",
+ * "Sep 29 – Oct 5", "Dec 29, 2025 – Jan 4, 2026"), mesec: "Oktobar 2026." / "October 2026".
+ * Godina uz nedelju samo ako nije tekuća.
  */
-export function periodTitle(p: Period, today: string): string {
-  if (p.mode === 'month') return fmtMonthYear(p.start);
-  const [sy, sm, sd] = p.start.split('-').map(Number);
-  const [ey, em, ed] = p.end.split('-').map(Number);
-  const cy = Number(today.slice(0, 4));
-  const showYear = sy !== cy || ey !== cy;
-  if (sy === ey && sm === em) return `${sd}–${ed}. ${MONTH_SHORT[sm - 1]}${showYear ? ` ${sy}.` : ''}`;
-  const left = `${sd}. ${MONTH_SHORT[sm - 1]}${showYear && sy !== ey ? ` ${sy}.` : ''}`;
-  const right = `${ed}. ${MONTH_SHORT[em - 1]}${showYear ? ` ${ey}.` : ''}`;
-  return `${left} – ${right}`;
+export function periodTitle(p: Period, today: string, lang: Lang = getLang()): string {
+  if (p.mode === 'month') return fmtMonthYear(p.start, lang);
+  const cy = today.slice(0, 4);
+  const showYear = p.start.slice(0, 4) !== cy || p.end.slice(0, 4) !== cy;
+  return fmtDateRange(p.start, p.end, lang, showYear);
 }
 
 // ---- Pamćenje perioda u history.state ----
@@ -111,33 +109,26 @@ export function writeHistorySel(sel: PeriodSel): void {
 
 // ---- Formatiranje ----
 
-/** Srpski oblik imenice posle broja: plural(1,'dan','dana','dana') → dan; 2 → dana; 5 → dana; 21 → dan. */
-export function plural(n: number, one: string, few: string, many: string): string {
-  const a = Math.abs(Math.trunc(n));
-  const d = a % 10;
-  const dd = a % 100;
-  if (d === 1 && dd !== 11) return one;
-  if (d >= 2 && d <= 4 && (dd < 12 || dd > 14)) return few;
-  return many;
-}
-
-export const danWord = (n: number) => plural(n, 'dan', 'dana', 'dana');
-export const putWord = (n: number) => plural(n, 'put', 'puta', 'puta');
-
-/** 4.25 → "4,3" */
-export function fmtDecimal(n: number, digits = 1): string {
-  return n.toFixed(digits).replace('.', ',');
-}
-
-/** Broj odrađenih blokova (može biti x,5 zbog delimičnih): 3 → "3", 2.5 → "2,5". */
-export function fmtCount(n: number): string {
+/** Broj odrađenih blokova (može biti x,5 zbog delimičnih): 3 → "3", 2.5 → en "2.5" / sr "2,5". */
+export function fmtCount(n: number, lang: Lang = getLang()): string {
   const r = Math.round(n * 2) / 2;
-  return Number.isInteger(r) ? String(r) : fmtDecimal(r, 1);
+  return Number.isInteger(r) ? String(r) : fmtDecimal(r, lang, 1);
 }
 
-/** Datum za tooltip: "Utorak, 7. oktobar" (+ godina ako nije tekuća). */
-export function fmtDayLabel(date: string, today: string): string {
-  return fmtDateLong(date, date.slice(0, 4) !== today.slice(0, 4));
+/**
+ * Broj i reč posle njega iz poruke sa množinom ("5 days" / "5 dana"), da se reč prikaže manjim slovima
+ * (jedinica u KPI pločici): ("5 dana", 5) → { value: "5", unit: "dana" }.
+ */
+export function splitCount(text: string, n: number): { value: string; unit: string } {
+  const value = String(n);
+  const i = text.indexOf(value);
+  if (i < 0) return { value, unit: text };
+  return { value, unit: (text.slice(0, i) + text.slice(i + value.length)).trim() };
+}
+
+/** Datum za tooltip: "Utorak, 7. oktobar" / "Tuesday, October 7" (+ godina ako nije tekuća). */
+export function fmtDayLabel(date: string, today: string, lang: Lang = getLang()): string {
+  return fmtDateLong(date, lang, date.slice(0, 4) !== today.slice(0, 4));
 }
 
 /**
@@ -149,19 +140,32 @@ export function isLiveDay(date: string, day: StatsDay | undefined, today: string
   return date === today && score != null && score < threshold;
 }
 
-/** Tekst za tooltip/čitač ekrana jednog dana (live = dan je u toku, vidi isLiveDay). */
-export function dayTip(date: string, day: StatsDay | undefined, today: string, live = false): string {
-  const head = fmtDayLabel(date, today);
+/**
+ * Tekst za tooltip/čitač ekrana jednog dana (live = dan je u toku, vidi isLiveDay):
+ * "Tuesday, October 7: 73% · blocks 5 / 7 (+1 partial) · tasks 2 / 3" / "Utorak, 7. oktobar: 73% · blokovi 5 / 7 …".
+ */
+export function dayTip(
+  date: string,
+  day: StatsDay | undefined,
+  today: string,
+  live = false,
+  lang: Lang = getLang(),
+): string {
+  const head = fmtDayLabel(date, today, lang);
   const sum = day?.summary;
-  if (!day?.initialized || !sum) return `${head}: nije praćeno`;
+  if (!day?.initialized || !sum) return `${head}: ${tIn(lang, 'progress.notTracked')}`;
   const parts: string[] = [];
-  if (sum.score == null) parts.push('nema blokova koji se računaju');
+  if (sum.score == null) parts.push(tIn(lang, 'progress.tip.noCounted'));
   else {
     parts.push(fmtPercent(sum.score));
-    parts.push(`blokovi ${sum.done} / ${sum.counted}${sum.partial ? ` (+${sum.partial} delimično)` : ''}`);
+    parts.push(
+      sum.partial
+        ? tIn(lang, 'progress.tip.blocksPartial', { done: sum.done, counted: sum.counted, partial: sum.partial })
+        : tIn(lang, 'progress.tip.blocks', { done: sum.done, counted: sum.counted }),
+    );
   }
-  if (day.tasksTotal > 0) parts.push(`zadaci ${day.tasksDone} / ${day.tasksTotal}`);
-  if (live) parts.push('u toku');
+  if (day.tasksTotal > 0) parts.push(tIn(lang, 'progress.tip.tasks', { done: day.tasksDone, total: day.tasksTotal }));
+  if (live) parts.push(tIn(lang, 'progress.live'));
   return `${head}: ${parts.join(' · ')}`;
 }
 

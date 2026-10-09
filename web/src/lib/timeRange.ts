@@ -1,6 +1,7 @@
 // Pretvaranje zidnog vremena u minute dana pri IZMENI postojećeg bloka.
 
 import { DAY_MIN, fmtClock, normalizeRange } from '../../../shared/time.ts';
+import { t } from '../i18n/index.ts';
 
 /**
  * Kao normalizeRange, ali početak bira prema dosadašnjem mestu bloka (`anchorStart`, minuti dana):
@@ -31,15 +32,16 @@ export function normalizeNear(
 /**
  * Upozorenje kad izmenjen početak postojećeg bloka (`origStart`) prebaci blok na suprotni kraj
  * logičkog dana (pomeraj 12h ili više), npr. "01:00–09:00" → 23:30 postaje večerašnji blok
- * 23:30–09:00 sutra. null kad blok ostaje na svom kraju dana.
+ * 23:30–09:00 sutra. null kad blok ostaje na svom kraju dana. Tekst je na trenutnom jeziku.
  */
 export function jumpHint(range: { start: number; end: number }, origStart: number, dayStart: number): string | null {
   const shown = `${fmtClock(range.start)}–${fmtClock(range.end)}`;
   if (range.start - origStart >= DAY_MIN / 2) {
-    return `Blok prelazi na kraj ovog dana (${shown}${range.end > DAY_MIN ? ' sutra' : ''}). Vreme pre ${fmtClock(dayStart)} pripada prethodnom danu.`;
+    const shownEnd = range.end > DAY_MIN ? t('common.rangeNextDay', { range: shown }) : shown;
+    return t('common.blockJumpToEnd', { range: shownEnd, dayStart: fmtClock(dayStart) });
   }
   if (origStart - range.start >= DAY_MIN / 2) {
-    return `Blok prelazi na početak ovog dana (${shown}): dan počinje u ${fmtClock(dayStart)}. Za blok posle ponoći na kraju dana pomeri „Dan počinje u“ (Podešavanja).`;
+    return t('common.blockJumpToStart', { range: shown, dayStart: fmtClock(dayStart) });
   }
   return null;
 }

@@ -1,6 +1,7 @@
 import type { Block, BlockStatus, Category } from '../../../../shared/types.ts';
 import { fmtClock, fmtDuration } from '../../../../shared/time.ts';
 import { blockDuration } from '../../../../shared/summary.ts';
+import { useT } from '../../i18n/index.ts';
 import { categoryColor, categoryName } from '../../lib/store.ts';
 import { CategoryStroke, Icon, cx } from '../../ui/index.ts';
 import { StatusControl } from './StatusControl.tsx';
@@ -34,6 +35,7 @@ export function BlockRow({
   onOpen: (block: Block, index: number) => void;
   onStatus: (block: Block, index: number, status: BlockStatus) => void;
 }) {
+  const t = useT();
   const color = categoryColor(catMap, block.categoryId);
   const actual = isActiveStatus(block.status) ? block.actualMin : null;
 
@@ -48,7 +50,7 @@ export function BlockRow({
         <span className="day-text">
           <span className="day-title">{block.title}</span>
           <span className="day-meta">
-            {isNow && <span className="day-now-tag">sada</span>}
+            {isNow && <span className="day-now-tag">{t('day.nowTag')}</span>}
             {/* Red se prelama samo pre "·": trajanje ("2h 30m") se nikad ne cepa, a tačka ne visi na kraju reda. */}
             <span>
               {categoryName(catMap, block.categoryId)}{' '}
@@ -56,23 +58,23 @@ export function BlockRow({
               {actual != null && (
                 <>
                   {' '}
-                  <span className="day-meta-seg">· stvarno {fmtDuration(actual)}</span>
+                  <span className="day-meta-seg">· {t('day.row.actual', { time: fmtDuration(actual) })}</span>
                 </>
               )}
             </span>
             {block.note.trim() !== '' && (
-              <span className="day-meta-note" title="Ima belešku">
+              <span className="day-meta-note" title={t('day.row.noteTooltip')}>
                 <Icon name="note" size={14} />
-                <span className="sr-only">ima belešku</span>
+                <span className="sr-only">{t('day.row.noteLabel')}</span>
               </span>
             )}
-            {isDue && <span className="day-due-tag">čeka ocenu</span>}
+            {isDue && <span className="day-due-tag">{t('day.row.due')}</span>}
           </span>
         </span>
       </button>
       <StatusControl
         value={block.status}
-        label={`Status: ${block.title}`}
+        label={t('day.row.statusLabel', { title: block.title })}
         disabled={statusDisabled}
         onChange={(s) => onStatus(block, index, s)}
       />

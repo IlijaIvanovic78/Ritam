@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { BlockInput, BlockPatch, BlockStatus, DayPayload, Task, TaskPatch } from '../../../../shared/types.ts';
 import { api, ApiError, errorMessage, isCachedPayload, serverStaleStore } from '../../api.ts';
+import { t } from '../../i18n/index.ts';
 import { listNoteDraftDates, isNoteOpen, readNoteDraft, removeNoteDraft } from '../../lib/noteDrafts.ts';
 import { storeOfflineCopy } from '../../lib/pwa.ts';
 import { enqueue, queuePending } from '../../lib/queue.ts';
@@ -43,8 +44,6 @@ interface MutateOpts {
 
 /** Rezultat čuvanja beleške: 'conflict' = beleška je u međuvremenu promenjena na drugom uređaju. */
 export type NoteSaveResult = 'ok' | 'conflict' | 'error';
-
-const NOTE_CONFLICT = 'Beleška je u međuvremenu promenjena na drugom uređaju.';
 
 // ---- Keš odgovora servera: trenutan prikaz pri listanju dana (pa osvežavanje u pozadini) ----
 
@@ -515,7 +514,8 @@ export function useDay(date: string, ensure: boolean) {
             const b = base();
             if (b == null) {
               conflict = true;
-              throw new ApiError(409, NOTE_CONFLICT);
+              // Poruka se ne prikazuje (rezultat je 'conflict', traku pokazuje NotesCard); ista je radi doslednosti.
+              throw new ApiError(409, t('notes.conflict'));
             }
             try {
               const res = await api.patchDay(d, { note, baseNote: b });

@@ -28,6 +28,7 @@ import type {
   Weekday,
   WeekdayMap,
 } from '../shared/types.ts';
+import { isLang } from '../shared/i18n.ts';
 import { DAY_MIN, eachDay, isoWeekday, isValidRange } from '../shared/time.ts';
 import { computeStreak, mergeCategoryTimes, sortBlocks, summarizeBlocks } from '../shared/summary.ts';
 import { statementCache, tx } from './db.ts';
@@ -120,7 +121,9 @@ export function sanitizeSettings(raw: unknown): Settings {
     typeof s.streakThreshold === 'number' && s.streakThreshold >= 0.1 && s.streakThreshold <= 1
       ? s.streakThreshold
       : DEFAULT_SETTINGS.streakThreshold;
-  return { dayStart, streakThreshold };
+  // Nalog napravljen pre izbora jezika nema `lang` → engleski (podrazumevano).
+  const lang = isLang(s.lang) ? s.lang : DEFAULT_SETTINGS.lang;
+  return { dayStart, streakThreshold, lang };
 }
 
 /** Podešavanja iz JSON teksta (users.settings, meta 'settings'); neispravna → podrazumevana. */
@@ -192,6 +195,7 @@ export class Repo {
       const next: Settings = {
         dayStart: p.dayStart ?? cur.dayStart,
         streakThreshold: p.streakThreshold ?? cur.streakThreshold,
+        lang: p.lang ?? cur.lang,
       };
       this.saveSettings(next);
       // Zidno vreme ostaje isto. Blok koji se i dalje preklapa sa novim logičkim danom
@@ -247,7 +251,7 @@ export class Repo {
   /** Kategorija koja nije obrisana. */
   categoryOr404(id: number): Category {
     const r = this.q('SELECT * FROM categories WHERE id = ? AND user_id = ? AND archived = 0').get(id, this.uid);
-    if (!r) throw notFound('Kategorija ne postoji.');
+    if (!r) throw notFound('category.notFound');
     return mapCategory(r);
   }
 
@@ -255,7 +259,7 @@ export class Repo {
   assertCategoryRef(id: number | null | undefined): void {
     if (id == null) return;
     if (!this.q('SELECT 1 FROM categories WHERE id = ? AND user_id = ? AND archived = 0').get(id, this.uid)) {
-      throw badRequest('Kategorija ne postoji.');
+      throw badRequest('category.notFound');
     }
   }
 
@@ -267,10 +271,7 @@ export class Repo {
       .all(this.uid, exceptId ?? 0)
       .some((r) => nameKey(str(r.name)) === key);
     if (taken) {
-      throw new HttpError(
-        409,
-        table === 'categories' ? 'Kategorija sa tim nazivom već postoji.' : 'Šablon sa tim nazivom već postoji.',
-      );
+      throw new HttpError(409, table === 'categories' ? 'category.nameTaken' : 'template.nameTaken');
     }
   }
 
@@ -354,14 +355,14 @@ export class Repo {
 
   templateOr404(id: number): { id: number; name: string; sort: number } {
     const r = this.q('SELECT * FROM templates WHERE id = ? AND user_id = ?').get(id, this.uid);
-    if (!r) throw notFound('Šablon ne postoji.');
+    if (!r) throw notFound('template.notFound');
     return { id: num(r.id), name: str(r.name), sort: num(r.sort) };
   }
 
   /** Šablon iz tela zahteva (tuđi šablon ne postoji). */
   assertTemplateRef(id: number): void {
     if (!this.q('SELECT 1 FROM templates WHERE id = ? AND user_id = ?').get(id, this.uid)) {
-      throw badRequest('Šablon ne postoji.');
+      throw badRequest('template.notFound');
     }
   }
 
@@ -518,7 +519,7 @@ export class Repo {
   initDayRequest(date: string, opts: { reset?: boolean; templateId?: number | null }): void {
     tx(this.db, () => {
       if (this.dayRow(date)?.initialized && !opts.reset) {
-        throw new HttpError(409, 'Plan za ovaj dan već postoji.');
+        throw new HttpError(409, 'day.planExists');
       }
       const tplId = opts.templateId === undefined ? this.weekdayTemplateId(date) : opts.templateId;
       if (tplId != null) this.assertTemplateRef(tplId);
@@ -540,7 +541,7 @@ export class Repo {
       if (p.note !== undefined && p.baseNote !== undefined) {
         const stored = this.dayRow(date)?.note ?? '';
         if (stored !== p.baseNote && stored !== p.note) {
-          throw new HttpError(409, 'Beleška je u međuvremenu promenjena na drugom uređaju.');
+          throw new HttpError(409, 'day.noteConflict');
         }
       }
       this.q(
@@ -612,7 +613,7 @@ export class Repo {
 
   blockOr404(id: number): Block {
     const r = this.q('SELECT * FROM blocks WHERE id = ? AND user_id = ?').get(id, this.uid);
-    if (!r) throw notFound('Blok ne postoji.');
+    if (!r) throw notFound('block.notFound');
     return mapBlock(r);
   }
 
@@ -640,7 +641,7 @@ export class Repo {
       const end = p.end ?? cur.end;
       // Proverava se samo kad se vreme menja — status/beleška moraju raditi i na starom redu.
       if ((p.start !== undefined || p.end !== undefined) && !isValidRange(start, end)) {
-        throw badRequest('Neispravno vreme bloka.');
+        throw badRequest('block.timeInvalid');
       }
       // Ista (i obrisana) kategorija koju blok već ima je u redu.
       if (p.categoryId !== undefined && p.categoryId !== cur.categoryId) this.assertCategoryRef(p.categoryId);
@@ -685,11 +686,11 @@ export class Repo {
     return tx(this.db, () => {
       const cur = this.blockOr404(id);
       if (at - cur.start < 5 || cur.end - at < 5) {
-        throw badRequest('Oba dela bloka moraju imati bar 5 minuta.');
+        throw badRequest('block.splitTooShort');
       }
       // Npr. drugi deo bi počeo posle 2880 (blok od skoro 24h koji počinje posle ponoći).
       if (!isValidRange(cur.start, at) || !isValidRange(at, cur.end)) {
-        throw badRequest('Neispravno mesto deljenja.');
+        throw badRequest('block.splitInvalid');
       }
       const firstDur = at - cur.start;
       const actual = cur.actualMin != null && cur.actualMin > firstDur ? null : cur.actualMin;
@@ -713,10 +714,10 @@ export class Repo {
    */
   swapBlocks(id: number, withId: number): string {
     return tx(this.db, () => {
-      if (id === withId) throw badRequest('Blok ne može da se zameni sam sa sobom.');
+      if (id === withId) throw badRequest('block.swapSelf');
       const a = this.blockOr404(id);
       const b = this.blockOr404(withId);
-      if (a.date !== b.date) throw badRequest('Možeš da zameniš samo blokove istog dana.');
+      if (a.date !== b.date) throw badRequest('block.swapOtherDay');
       const set = this.q('UPDATE blocks SET title = ?, category_id = ? WHERE id = ? AND user_id = ?');
       set.run(b.title, b.categoryId, a.id, this.uid);
       set.run(a.title, a.categoryId, b.id, this.uid);
@@ -729,7 +730,7 @@ export class Repo {
 
   taskOr404(id: number): Task {
     const r = this.q('SELECT * FROM tasks WHERE id = ? AND user_id = ?').get(id, this.uid);
-    if (!r) throw notFound('Zadatak ne postoji.');
+    if (!r) throw notFound('task.notFound');
     return mapTask(r);
   }
 

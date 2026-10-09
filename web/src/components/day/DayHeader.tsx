@@ -1,31 +1,30 @@
 import { useRef } from 'react';
 import {
-  MONTH_NAMES,
-  WEEKDAY_NAMES,
   addDays,
   capitalize,
   diffDays,
+  fmtDayMonth,
   isValidISODate,
   isoWeekday,
+  weekdayName,
 } from '../../../../shared/time.ts';
+import { useLang, useT, type TFunction } from '../../i18n/index.ts';
 import { Button, Icon, IconButton, PageHeader } from '../../ui/index.ts';
 import { DayMenu, type MenuItem } from './DayMenu.tsx';
-import { plural } from './plural.ts';
 
-/** "Juče", "Sutra", "Pre 3 dana", "Za 5 dana". */
-function relativeLabel(today: string, date: string): string {
+/** "Yesterday", "Tomorrow", "3 days ago", "In 5 days" / "Juče", "Sutra", "Pre 3 dana", "Za 5 dana". */
+function relativeLabel(t: TFunction, today: string, date: string): string {
   const d = diffDays(today, date);
-  if (d === -1) return 'Juče';
-  if (d === 1) return 'Sutra';
+  if (d === -1) return t('common.yesterday');
+  if (d === 1) return t('common.tomorrow');
   const n = Math.abs(d);
-  const word = plural(n, 'dan', 'dana', 'dana');
-  return d < 0 ? `Pre ${n} ${word}` : `Za ${n} ${word}`;
+  return d < 0 ? t('day.header.daysAgo', { n }) : t('day.header.inDays', { n });
 }
 
 /**
  * Zaglavlje dana: datum (klik = izbor datuma), oznaka/relativni dan, šablon, navigacija i meni.
- * Desktop: "Četvrtak, 8. oktobar". Telefon: naslov "8. oktobar" (staje u jedan red pored dugmadi),
- * a dan u nedelji ide u podnaslov: "Četvrtak · Danas · <šablon>" / "Ponedeljak · pre 3 dana".
+ * Desktop: "Thursday, October 8" / "Četvrtak, 8. oktobar". Telefon: naslov "October 8" / "8. oktobar" (staje u
+ * jedan red pored dugmadi), a dan u nedelji ide u podnaslov: "Četvrtak · Danas · <šablon>" / "Ponedeljak · pre 3 dana".
  */
 export function DayHeader({
   date,
@@ -43,11 +42,12 @@ export function DayHeader({
   menuItems: MenuItem[];
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const lang = useLang();
+  const t = useT();
   const isToday = date === today;
-  const [y, m, d] = date.split('-').map(Number);
-  const weekday = capitalize(WEEKDAY_NAMES[isoWeekday(date) - 1]);
-  // Dan i mesec se ne razdvajaju pri prelamanju (nbsp), da "8." ne ostane sam u redu.
-  const dayMonth = `${d}. ${MONTH_NAMES[m - 1]}${date.slice(0, 4) !== today.slice(0, 4) ? ` ${y}.` : ''}`;
+  const weekday = capitalize(weekdayName(isoWeekday(date), lang));
+  // Dan i mesec se ne razdvajaju pri prelamanju (nbsp), da "8." / "October 8" ne ostane sam u redu.
+  const dayMonth = fmtDayMonth(date, lang, date.slice(0, 4) !== today.slice(0, 4));
   const label = isDesktop ? `${weekday}, ${dayMonth}` : dayMonth;
   // Poslednja reč + strelica se ne razdvajaju pri prelamanju naslova.
   const cut = label.lastIndexOf(' ') + 1;
@@ -69,7 +69,7 @@ export function DayHeader({
 
   const todayButton = !isToday && (
     <Button size="sm" className={isDesktop ? undefined : 'day-today-btn'} onClick={() => onGo(today)}>
-      Danas
+      {t('common.today')}
     </Button>
   );
 
@@ -86,7 +86,7 @@ export function DayHeader({
       className="day-head"
       title={
         <span className="day-date">
-          <button type="button" className="day-date-btn" onClick={openPicker} title="Izaberi datum">
+          <button type="button" className="day-date-btn" onClick={openPicker} title={t('day.header.pickDate')}>
             {label.slice(0, cut)}
             <span className="day-date-last">
               {label.slice(cut)}
@@ -110,14 +110,18 @@ export function DayHeader({
       sub={
         isDesktop ? (
           <span className="day-sub">
-            {isToday ? <span className="day-tag">Danas</span> : <span>{relativeLabel(today, date)}</span>}
+            {isToday ? <span className="day-tag">{t('common.today')}</span> : <span>{relativeLabel(t, today, date)}</span>}
             {template}
           </span>
         ) : (
           <span className="day-sub">
             <span>{weekday}</span>
             {dot}
-            {isToday ? <span className="day-tag">Danas</span> : <span>{relativeLabel(today, date).toLowerCase()}</span>}
+            {isToday ? (
+              <span className="day-tag">{t('common.today')}</span>
+            ) : (
+              <span>{relativeLabel(t, today, date).toLowerCase()}</span>
+            )}
             {/* Šablon ranijeg/budućeg dana piše u traci pregleda; ovde samo za danas. */}
             {isToday && template}
             {todayButton}
@@ -127,9 +131,9 @@ export function DayHeader({
       actions={
         <>
           {isDesktop && todayButton}
-          <IconButton icon="chevron-left" label="Prethodni dan" onClick={() => onGo(addDays(date, -1))} />
-          <IconButton icon="chevron-right" label="Sledeći dan" onClick={() => onGo(addDays(date, 1))} />
-          <DayMenu items={[...menuItems, { label: 'Idi na datum…', icon: 'calendar', onSelect: openPicker }]} />
+          <IconButton icon="chevron-left" label={t('day.header.prevDay')} onClick={() => onGo(addDays(date, -1))} />
+          <IconButton icon="chevron-right" label={t('day.header.nextDay')} onClick={() => onGo(addDays(date, 1))} />
+          <DayMenu items={[...menuItems, { label: t('day.menu.goToDate'), icon: 'calendar', onSelect: openPicker }]} />
         </>
       }
     />

@@ -1,7 +1,8 @@
 // Kalendar-heatmapa za mesec: ćelija = dan, intenzitet po ispunjenosti.
 
 import type { StatsDay } from '../../../../shared/types.ts';
-import { WEEKDAY_SHORT, eachDay, fmtPercent, isoWeekday } from '../../../../shared/time.ts';
+import { eachDay, fmtPercent, isoWeekday, weekdayShortNames } from '../../../../shared/time.ts';
+import { useLang, useT } from '../../i18n/index.ts';
 import { cx } from '../../ui/index.ts';
 import { HeatLegend } from './HeatLegend.tsx';
 import { cellHeatClass, dayTip, isLiveDay } from './period.ts';
@@ -25,17 +26,19 @@ export function MonthCalendar({
   threshold: number;
   onOpen: (date: string) => void;
 }) {
+  const lang = useLang();
+  const t = useT();
   const lead = isoWeekday(start) - 1; // prazna mesta pre prvog dana (nedelja počinje ponedeljkom)
   let hasLive = false;
 
   return (
     <div className="prog-cal">
       <div className="prog-cal-head" aria-hidden="true">
-        {WEEKDAY_SHORT.map((w) => (
+        {weekdayShortNames(lang).map((w) => (
           <span key={w}>{w}</span>
         ))}
       </div>
-      <div className="prog-cal-grid" role="group" aria-label="Ispunjenost po danu u mesecu">
+      <div className="prog-cal-grid" role="group" aria-label={t('progress.byDay.monthLabel')}>
         {Array.from({ length: lead }, (_, i) => (
           <span key={`lead-${i}`} className="prog-cal-blank" aria-hidden="true" />
         ))}
@@ -52,7 +55,7 @@ export function MonthCalendar({
           const score = day?.summary?.score ?? null;
           const live = isLiveDay(date, day, today, threshold);
           if (live) hasLive = true;
-          const tip = dayTip(date, day, today, live);
+          const tip = dayTip(date, day, today, live, lang);
           return (
             <button
               key={date}

@@ -5,6 +5,9 @@ export type BlockStatus = 'pending' | 'done' | 'partial' | 'skipped';
 
 export type Weekday = 1 | 2 | 3 | 4 | 5 | 6 | 7; // ISO: 1 = ponedeljak … 7 = nedelja
 
+/** Jezik interfejsa: 'en' (podrazumevano) ili 'sr' (srpski, latinica). Pravila su u shared/i18n.ts. */
+export type Lang = 'en' | 'sr';
+
 export interface Category {
   id: number;
   name: string;
@@ -75,6 +78,11 @@ export interface Settings {
   dayStart: number;
   /** Prag ispunjenosti (0..1) da bi se dan računao u niz. Podrazumevano 0.7. */
   streakThreshold: number;
+  /**
+   * Jezik interfejsa naloga (važi na svim uređajima naloga). Nalog bez njega (napravljen pre jezika) je 'en'.
+   * Kopija iz keša od starije verzije servera ga nema — klijent ga zato proverava (`isLang`).
+   */
+  lang: Lang;
 }
 
 export interface SchedulePayload {

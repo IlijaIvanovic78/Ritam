@@ -5,6 +5,7 @@
 import { useMemo, useSyncExternalStore } from 'react';
 import type { Category, SchedulePayload, Settings } from '../../../shared/types.ts';
 import { api, errorMessage, isCachedPayload } from '../api.ts';
+import { resetAccountLang, syncAccountLang, t, tIn, useLang } from '../i18n/index.ts';
 import { storeOfflineCopy } from './pwa.ts';
 
 interface ScheduleState {
@@ -25,6 +26,8 @@ let loadedAt = 0;
 
 function setState(p: Partial<ScheduleState>) {
   state = { ...state, ...p };
+  // Jezik naloga (podešavanja) ima prednost posle prijave i prati promenu sa drugog uređaja (i18n/index.ts).
+  if (p.data) syncAccountLang(p.data.settings?.lang);
   listeners.forEach((l) => l());
 }
 
@@ -83,6 +86,8 @@ export const scheduleStore = {
   },
   clear() {
     generation += 1;
+    // Sledeća prijava ponovo primenjuje jezik naloga.
+    resetAccountLang();
     setState({ data: null, loading: false, error: null });
   },
 };
@@ -116,9 +121,13 @@ export function useCategoryMap(): Map<number, Category> {
  */
 export function useAllCategories(): Category[] {
   const { categories, archivedCategories } = useScheduleData();
+  const lang = useLang();
   return useMemo(
-    () => [...categories, ...(archivedCategories ?? []).map((c) => ({ ...c, name: `${c.name} (obrisana)` }))],
-    [categories, archivedCategories],
+    () => [
+      ...categories,
+      ...(archivedCategories ?? []).map((c) => ({ ...c, name: tIn(lang, 'common.deletedCategory', { name: c.name }) })),
+    ],
+    [categories, archivedCategories, lang],
   );
 }
 
@@ -133,7 +142,7 @@ export function categoryColor(map: Map<number, Category>, id: number | null): st
   return (id != null && map.get(id)?.color) || '#9a9890';
 }
 
-/** Naziv kategorije ili "Bez kategorije". */
+/** Naziv kategorije ili "Bez kategorije" (na trenutnom jeziku). */
 export function categoryName(map: Map<number, Category>, id: number | null): string {
-  return (id != null && map.get(id)?.name) || 'Bez kategorije';
+  return (id != null && map.get(id)?.name) || t('common.noCategory');
 }

@@ -7,7 +7,9 @@ sinhronizovali.
 Primer dana koji je korisnik jednom opisao je samo ilustracija: ništa se ne pravi niti ponaša prema njemu
 (sekcija 4). Raspored (kategorije, šabloni, dani u nedelji, početak dana) korisnik pravi sam.
 
-UI je **na srpskom (latinica)**, obraćanje na "ti", kratko i jasno. Bez emodžija, bez uzvičnika.
+UI je dvojezičan: **engleski je podrazumevan**, a **srpski (latinica, obraćanje na "ti")** je dodatni jezik koji se bira u
+Podešavanjima ili na ekranu prijave (sekcija 5, "Jezik"). Kratko i jasno, bez emodžija, bez uzvičnika (sekcija 7).
+U aplikaciji se stavke dana zovu **Block / Blocks** (srpski **Blok / Blokovi**) — nikad "cube" / "kocka".
 
 ---
 
@@ -33,15 +35,18 @@ UI je **na srpskom (latinica)**, obraćanje na "ti", kratko i jasno. Bez emodži
 - Dev: `npm run dev` (server na :3000 sa `--watch`, Vite na :5173 sa proxy `/api` → :3000).
 
 ```
-shared/          types.ts, time.ts, summary.ts — VEĆ NAPISANO, deli se između servera i weba
+shared/          types.ts, time.ts (datumi + formateri po jeziku), summary.ts, i18n.ts (jezici, množina,
+                 formatiranje poruka) — VEĆ NAPISANO, deli se između servera i weba
 server/          index.ts (ulaz), db.ts, defaults.ts, auth.ts (lozinke, JWT, refresh token, ograničenja),
                  accounts.ts (nalozi i refresh tokeni u bazi), authRoutes.ts (/api/auth/*, Bearer),
-                 repo.ts (podaci korisnika), backup.ts, validate.ts, api.ts ... (agent: server)
+                 repo.ts (podaci korisnika), backup.ts, validate.ts, i18n.ts (poruke grešaka en/sr),
+                 api.ts ... (agent: server)
 web/index.html
 web/public/      manifest.webmanifest, sw.js, icons/ (agent: shell)
 web/src/
   main.tsx, App.tsx               (agent: shell)
-  api.ts                          VEĆ NAPISANO — tipizovan API klijent
+  api.ts                          VEĆ NAPISANO — tipizovan API klijent (šalje X-Ritam-Lang)
+  i18n/en.ts, sr.ts, index.ts     VEĆ NAPISANO — katalozi (en = izvor istine ključeva), t/useT/useLang, jezik
   lib/store.ts, router.tsx, hooks.ts   VEĆ NAPISANO
   ui/                             VEĆ NAPISANO — Button, IconButton, Icon, Sheet, Field, TextInput,
                                   TimeInput, Select, TextArea, PageHeader, Card, Empty, Spinner,
@@ -63,7 +68,7 @@ Fajlovi označeni "VEĆ NAPISANO" su zajednički temelj. Agenti ih **ne menjaju*
 
 ## 2. Vreme i dani (najvažnije pravilo)
 
-- Datum: ISO `'YYYY-MM-DD'`. Sve funkcije su u `shared/time.ts`.
+- Datum: ISO `'YYYY-MM-DD'`. Sve funkcije su u `shared/time.ts` (i formateri za prikaz, koji primaju jezik — sekcija 7).
 - Vreme bloka: **minuti od 00:00 datuma kome blok pripada**. Vrednosti `>= 1440` = posle ponoći
   (npr. `00:00–01:00` na kraju dana = `1440–1500`).
 - `settings.dayStart` (podrazumevano `0` = 00:00; korisnik bira 00:00–06:00): logički dan traje od `dayStart` do `dayStart + 1440`.
@@ -92,7 +97,8 @@ CREATE TABLE users (
   id INTEGER PRIMARY KEY AUTOINCREMENT,      -- id se nikad ne dodeljuje ponovo (access token nosi id)
   email TEXT NOT NULL UNIQUE,                -- trim + mala slova
   password_hash TEXT NOT NULL,               -- 'scrypt$32768$8$1$<so base64url>$<heš base64url>'
-  settings TEXT NOT NULL DEFAULT '{"dayStart":0,"streakThreshold":0.7}',  -- Settings (JSON)
+  settings TEXT NOT NULL DEFAULT '{"dayStart":0,"streakThreshold":0.7}',  -- Settings (JSON): dayStart,
+                                             --   streakThreshold, lang ('en' | 'sr'; bez njega = 'en')
   created_at TEXT NOT NULL);
 
 CREATE TABLE refresh_tokens (
@@ -229,9 +235,10 @@ Nova baza (`server/defaults.ts`, upisuje se samo kad baza nema šemu, u istoj tr
 "bez vlasnika" (`user_id = 0`), pa ih prvi nalog preuzima isto kao podatke iz verzije bez naloga (sekcija 3):
 - `categories`, `templates`, `template_blocks`, `days`, `blocks`, `tasks`, `users`, `refresh_tokens`: prazne;
 - `weekday_templates`: redovi 1..7 sa `template_id = NULL` (nijedan dan nema šablon);
-- `meta.settings`: `{ dayStart: 0, streakThreshold: 0.7 }` — dan podrazumevano počinje u **00:00**, prag niza 70%.
-  Iste vrednosti dobija svaki sledeći nalog (`users.settings`) i koriste se kad sačuvana podešavanja nedostaju ili
-  nisu ispravna.
+- `meta.settings`: `{ dayStart: 0, streakThreshold: 0.7, lang: 'en' }` — dan podrazumevano počinje u **00:00**, prag
+  niza 70%, jezik engleski. Iste vrednosti dobija svaki sledeći nalog (`users.settings`), osim jezika: nov nalog (i prvi)
+  dobija jezik iz registracije (sekcija 5, "Jezik"). Koriste se i kad sačuvana podešavanja nedostaju ili nisu ispravna
+  (nalog napravljen pre izbora jezika nema `lang` → `'en'`).
 
 Postojeća baza se nikad ne prazni niti menja zbog ovoga: migracije samo menjaju šemu, a podaci (i oni iz ranije
 verzije koja je novu bazu punila primerom rasporeda) ostaju kakvi jesu. Takav raspored korisnik uklanja sam, jednom
@@ -247,10 +254,40 @@ ispunjenost), statistika, dnevnik, izvoz i uvoz rade i bez ijedne kategorije i �
 
 ## 5. API
 
-Svi odgovori su JSON. Greške: `{ "error": "Poruka na srpskom", "code"?: "…" }` sa odgovarajućim statusom (400 validacija,
-401 nije prijavljen, 403 CSRF / registracija, 404 ne postoji, 409 konflikt, 413 prevelik zahtev, 429 previše pokušaja).
-`code` (`AuthErrorCode` u `shared/types.ts`) imaju greške naloga. Tipovi su u `shared/types.ts`; klijent je
-`web/src/api.ts` (izvor istine za putanje i oblike).
+Svi odgovori su JSON. Greške: `{ "error": "Poruka na jeziku zahteva", "code"?: "…" }` sa odgovarajućim statusom (400
+validacija, 401 nije prijavljen, 403 CSRF / registracija, 404 ne postoji, 409 konflikt, 413 prevelik zahtev, 429 previše
+pokušaja). `code` (`AuthErrorCode` u `shared/types.ts`) imaju greške naloga i ne zavisi od jezika. Tipovi su u
+`shared/types.ts`; klijent je `web/src/api.ts` (izvor istine za putanje i oblike). Poruke navedene ispod su srpske
+(`X-Ritam-Lang: sr`); engleske su u `server/i18n.ts` (npr. 401 "You’re not signed in.", "Wrong email or password.").
+
+### Jezik
+- Jezici: `'en'` (podrazumevano) i `'sr'` (srpski, latinica) — `Lang` u `shared/types.ts`; pravila (množina, poruke) u
+  `shared/i18n.ts`.
+- **Jezik zahteva** (`server/i18n.ts` `requestLang`): header `X-Ritam-Lang: en|sr` (bez razlike velikih slova; klijent ga
+  šalje uz svaki zahtev, `web/src/api.ts`), inače najbolji podržan jezik iz `Accept-Language` (po `q`, primarna oznaka
+  `en`/`sr`), inače `'en'`. Na tom jeziku su SVE poruke za korisnika: greške validacije (zod šeme nose ključ kataloga,
+  `validate.ts` `E('…')`; opšte poruke "Nedostaje vrednost (polje)." / "Missing value (field)." itd.), naloga,
+  ograničenja (429 sa množinom: "1 minut" / "2 minuta" / "5 minuta", "1 minute" / "15 minutes"), 404, 413, 500 i
+  tekstualni 404 statike. `HttpError` nosi ključ poruke (`server/i18n.ts`), a prevodi se tek u odgovoru (`app.ts`
+  `onError`). Log pri pokretanju i upozorenja u logu ostaju na srpskom.
+- **Jezik naloga**: `users.settings.lang` (`Settings.lang`, u `SchedulePayload.settings`). `PATCH /api/settings { lang }`
+  ga menja (važi na svim uređajima naloga); nepoznata vrednost → 400 "Jezik mora biti "en" ili "sr".". Registracija prima
+  opciono `lang` (jezik izabran na ekranu prijave); bez njega nalog dobija jezik zahteva. Nalog bez `lang` (napravljen
+  pre jezika) je `'en'`. Izvoz ima `settings.lang`; uvoz kopije sa jezikom ga postavlja, a kopija bez jezika (ranija
+  verzija) ili sa nepoznatim jezikom zadržava jezik naloga.
+- **Klijent** (`web/src/i18n/`): jezik se pamti na uređaju (`localStorage 'ritam.lang'`, try/catch; bez njega `'en'`) i
+  primenjuje pre prvog rendera. Posle prijave i obnove sesije jezik naloga ima prednost i upisuje se na uređaj (prvi
+  raspored koji stigne sa servera, `syncAccountLang` u `lib/store.ts`); kasnije se primenjuje samo kad se jezik naloga
+  promeni na serveru (drugi uređaj), pa zakasneo odgovor ne vraća upravo promenjen jezik. Odjava/odbijena sesija
+  (`scheduleStore.clear`) to resetuje. Promena jezika menja `<html lang>` (`en` / `sr-Latn`), naslov dokumenta, ostale
+  tabove (`storage`) i ponovo renderuje celu aplikaciju (`App` sluša jezik; forme i stanje stranica ostaju).
+  Izbor: Podešavanja → prva kartica "Language · Jezik" (Segmented "English | Srpski"; odmah lokalno, pa
+  `api.patchSettings({ lang })`; neuspeh vraća prethodni jezik uz toast na tom, vraćenom jeziku: "Jezik nije sačuvan.
+  Pokušaj ponovo." / "Language wasn’t saved. Try again." — ne poruka servera ili SW-a, koja je već na novom jeziku)
+  i tih red "English · Srpski" ispod forme prijave (samo uređaj; pri registraciji ide kao `lang`).
+- Service worker: JSON greška bez mreže (`503 { error }`) je na jeziku zahteva (`X-Ritam-Lang`), a stranica "nema
+  konekcije" (kad ni keširani '/' ne postoji) je dvojezična — engleski, pa srpski. `manifest.webmanifest` i meta opis u
+  `index.html` su na engleskom (`lang: "en"`).
 
 Sve rute podataka (dan, blokovi, zadaci, statistika, dnevnik, raspored, podešavanja, izvoz/uvoz) rade nad podacima
 naloga iz access tokena, sa istim putanjama i oblicima kao pre naloga: svaki upit je ograničen na `user_id`, pa se
@@ -322,8 +359,8 @@ i šta). Namerno prihvaćeno za mali (porodični) server; neprozirni id-jevi po 
 
 Rute (javne: `/api/health`, `config`, `register`, `login`, `refresh`, `logout`; ostale traže Bearer):
 - `GET /api/auth/config` → `AuthConfig` `{ signup: 'open' | 'code' | 'closed' }`.
-- `POST /api/auth/register { email, password, code? }` (`code` samo uz `SIGNUP=code`; uz `open` je dovoljno
-  `{ email, password }`) → 201 `AuthResponse` `{ accessToken, expiresIn, user: { id, email,
+- `POST /api/auth/register { email, password, code?, lang? }` (`code` samo uz `SIGNUP=code`; uz `open` je dovoljno
+  `{ email, password }`; `lang` = jezik naloga, bez njega jezik zahteva — "Jezik" iznad) → 201 `AuthResponse` `{ accessToken, expiresIn, user: { id, email,
   legacyOwner? } }` (`legacyOwner: true` samo za nalog iz `meta.legacy_owner`, sekcija 3; u svim odgovorima naloga)
   + kolačić. Redom: `closed` → 403 `signup_closed` "Registracija nije otvorena."; 400 "Unesi ispravnu email adresu." /
   "Lozinka mora imati bar 8 znakova." / "Lozinka može imati najviše 200 znakova."; 429; uz `SIGNUP=code` pogrešan ili
@@ -417,7 +454,8 @@ Rute (javne: `/api/health`, `config`, `register`, `login`, `refresh`, `logout`; 
 - `PUT /api/templates/:id/blocks { blocks: BlockInput[] }` (max 100, svaki validan opseg, naslov 1..120) → `SchedulePayload`.
   Zamenjuje sve blokove šablona. Blok ceo van logičkog dana prelazi na drugi kraj dana (pravilo iz sekcije 3).
 - `PUT /api/weekdays WeekdayMap` (ključevi "1".."7", vrednost id postojećeg šablona ili null) → `SchedulePayload`
-- `PATCH /api/settings { dayStart? (0..360, ceo broj), streakThreshold? (0.1..1) }` → `SchedulePayload`
+- `PATCH /api/settings { dayStart? (0..360, ceo broj), streakThreshold? (0.1..1), lang? ('en' | 'sr') }` → `SchedulePayload`
+  (polja koja nisu poslata ostaju; "Raspored ispočetka" ne menja jezik)
 - `POST /api/schedule/reset { dayStart?: boolean }` (`ScheduleResetInput`) → `SchedulePayload` — "Raspored ispočetka".
   U jednoj transakciji briše sve šablone (`template_blocks` kaskadno; `weekday_templates.template_id` i
   `days.template_id` postaju NULL preko stranih ključeva, pa sačuvan dan gubi samo oznaku šablona) i briše sve
@@ -435,7 +473,8 @@ Rute (javne: `/api/health`, `config`, `register`, `login`, `refresh`, `logout`; 
   blokovi šablona, dani u nedelji, dani, blokovi, zadaci) dobijaju NOVE id-jeve (po rastućem id-ju iz kopije, pa
   redosled ostaje), a sve veze se prevode — kopija ne može da se sudari sa tuđim redovima ni da ih dotakne, kakve god
   id-jeve sadržala. Veza ka redu kog nema u kopiji, dupli id, dupli datum ili dan u nedelji → 400 "Kopija nije ispravna:
-  podaci se međusobno ne slažu." i ništa se ne menja. Podešavanja iz kopije postaju `users.settings`. Validiraj oblik (i
+  podaci se međusobno ne slažu." i ništa se ne menja. Podešavanja iz kopije postaju `users.settings` (kopija bez
+  `settings.lang` ili sa nepoznatim jezikom zadržava jezik naloga). Validiraj oblik (i
   `isValidRange` za `blocks`/`template_blocks`); max 20 MB → `{ ok: true }`. Ista ograničenja kao API (uvezen red mora
   moći da se izmeni): naslov bloka/bloka šablona 1..120 (trim), zadatak 1..300, kategorija 1..40, šablon 1..60, beleška
   dana ≤ 20000, beleška bloka ≤ 5000, `actual_min` 0..1440 ili null. `categories.archived` (0/1) je u kopiji; kopija bez
@@ -602,7 +641,8 @@ minut dok je tab vidljiv a nijedan sheet nije otvoren; stanje se menja samo ako 
   pregled bez blokova, pa šablon dodeljen kasnije istog dana odmah popuni i današnji dan.
 - Upisan dan bez šablona (npr. blok dodat sa "Dodaj blok samo za danas" pre nego što je raspored napravljen), a za
   njegov dan u nedelji sada važi šablon: danas i budući dani u kartici Blokovi imaju traku "Za <dan u nedelji> važi
-  šablon „X“, a ovaj dan je napravljen bez šablona." + dugme "Primeni" (isto pravilo potvrde kao izbor šablona).
+  šablon „X“, a ovaj dan je napravljen bez šablona." (dan u akuzativu, `weekdayNameAcc`: "Za subotu…", "Za sredu…"; en
+  "The template for Saturday is “X”, but this day was created without a template.") + dugme "Primeni" (isto pravilo potvrde kao izbor šablona).
   Raniji dani je nemaju (istorija).
 - Desktop: dve kolone (levo vremenska linija ~1.35fr, desno Pregled + Zadaci + Beleške). Telefon: jedna kolona:
   "Sada" kartica → vremenska linija → Pregled → Zadaci → Beleške.
@@ -697,13 +737,15 @@ minut dok je tab vidljiv a nijedan sheet nije otvoren; stanje se menja samo ako 
   Svako čuvanje šalje `baseNote` = belešku sa servera nad kojom je tekst pisan (čita se kad zahtev krene iz reda). Ako je
   beleška u međuvremenu promenjena na drugom uređaju (409, ili osvežavanje pokaže treći tekst dok postoje nesačuvane
   izmene), ništa se ne šalje: tekst ostaje u polju i u `localStorage`, a traka "Beleška je u međuvremenu promenjena na
-  drugom uređaju." nudi "Sačuvaj ovu" (prepiše tu verziju) / "Uzmi tu verziju" (odbaci lokalni tekst). Ako svež odgovor
+  drugom uređaju." nudi "Sačuvaj ovu" (prepiše tu verziju) / "Uzmi tu verziju" (odbaci lokalni tekst); en "Save this
+  version" / "Use the other version". Ako svež odgovor
   pokaže naš ranije poslat tekst (čuvanje kome je istekao rok ipak je stiglo, pa je sledeće dobilo 409), to nije sukob:
   traka se ne prikazuje (ili nestaje), a ostatak teksta se šalje nad tim tekstom. Fokus u polju
   osveži dan ako poslednji odgovor nije skorašnji.
   Draftovi drugih dana (čuvanje nije uspelo pa se prešlo na drugi dan / aplikacija zatvorena) šalju se sami pri otvaranju
   stranice, povratku u aplikaciju, `online` i kad server ponovo odgovori, ako je server i dalje na `base`; inače kartica pokazuje
-  "Nesačuvana beleška za <datum>" sa linkom na taj dan.
+  "Nesačuvana beleška za <datum>" sa linkom na taj dan (više dana: "Nesačuvane beleške za" / "Unsaved notes for" i do
+  tri linka).
   Ispod: "Kakav je bio dan?" + RatingInput.
 - Prečice na desktopu: ← / → prethodni/sledeći dan, `t` danas (ne kad je fokus u polju za unos).
 - Telefon: brzo prevlačenje levo/desno = sledeći/prethodni dan (`useSwipeNav`); ne dok je otvoren sheet ili potvrda,
@@ -754,7 +796,8 @@ minut dok je tab vidljiv a nijedan sheet nije otvoren; stanje se menja samo ako 
   koraci na stranici Danas; desktop: kategorije i šabloni levo, dani desno); posle toga Dani u nedelji i Planirano
   nedeljno levo, Šabloni i Kategorije desno. Šablon otvoren u editoru drži stranica (kartica menja mesto baš kad
   nastane prvi šablon, a editor se tada otvara).
-- **Dani u nedelji**: 7 redova (Ponedeljak…Nedelja) sa Select-om šablona (ili "Bez šablona"; `title` sa nazivom izabranog
+- **Dani u nedelji** (en "Days of the week" — ne "Weekdays", jer to je na engleskom samo pon–pet): 7 redova
+  (Ponedeljak…Nedelja) sa Select-om šablona (ili "Bez šablona"; `title` sa nazivom izabranog
   šablona) → `api.putWeekdays` sa samo promenjenim danom (ostali dani ostaju kako su na serveru; zahtevi idu jedan za
   drugim kroz zajednički red zahteva `lib/queue.ts`, pa ih "Osveži" i odjava čekaju). Bez ijednog šablona redovi su
   onemogućeni, a iznad piše "Prvo napravi šablon.".
@@ -770,7 +813,8 @@ minut dok je tab vidljiv a nijedan sheet nije otvoren; stanje se menja samo ako 
   Vreme reda: novi red preko normalizeRange, postojeći preko `normalizeNear` (isto pravilo kao sheet bloka u 6.1 — blok
   nikad ne završi van logičkog dana, gde bi bio skriven na traci i pomeren pri promeni "Dan počinje u"); kad izmena
   prebaci blok na suprotni kraj dana, ispod reda stoji isto upozorenje kao u sheet-u bloka. Red koji traje posle ponoći
-  ima diskretnu napomenu "Preko ponoći, do 07:00 sutra." / "Posle ponoći, na kraju ovog dana.".
+  ima diskretnu napomenu "Preko ponoći, do 07:00 sutra." / "Posle ponoći, na kraju ovog dana." (en "Past midnight,
+  until 07:00 the next day." — šablon nema datum, pa ne "tomorrow"; isto "23:30–01:00 the next day" u upozorenju).
   Kolona kategorije je šira (telefon do 45% reda, desktop 9–14rem), a izbor ima `title` sa celim nazivom.
   Izbor kategorije u redu editora ima poslednju stavku "+ Nova kategorija…": otvara mali sheet (`sm`, naziv, boja i
   prekidač "Računa se u ispunjenost dana") pored editora (ne u njemu, da Esc i klikovi ne stignu do editora); napravljena
@@ -807,7 +851,8 @@ minut dok je tab vidljiv a nijedan sheet nije otvoren; stanje se menja samo ako 
 - "Prag za niz dana" (Segmented 50/60/70/80/90%).
 - Instalacija: dugme "Instaliraj aplikaciju" ako je dostupan `beforeinstallprompt`; inače uputstvo za iPhone
   (Safari → Podeli → Dodaj na početni ekran) i Android (Chrome meni → Instaliraj aplikaciju).
-- Rezervna kopija (samo podaci prijavljenog naloga): "Preuzmi kopiju (JSON)" i "Vrati iz kopije…" (input file, potvrda
+- Rezervna kopija (samo podaci prijavljenog naloga): "Preuzmi kopiju" (JSON fajl) i "Vrati iz kopije" (dugme "Izaberi
+  fajl…", input file, potvrda
   "Svi podaci ovog naloga biće zamenjeni…", `api.importData`, pa reload).
 - "Raspored ispočetka" (kartica posle Rezervne kopije): objašnjenje da se brišu sve kategorije, šabloni i dodela
   šablona danima u nedelji (da raspored napraviš od nule — npr. primer koji je ranija verzija upisala u novu bazu),
@@ -819,9 +864,10 @@ minut dok je tab vidljiv a nijedan sheet nije otvoren; stanje se menja samo ako 
 - Kartica "Nalog": email naloga ("Prijavljen si ovim nalogom."; dugačka adresa se prelama posle "@"), "Lozinka" → dugme "Promeni lozinku" (mali
   sheet: "Trenutna lozinka" `current-password` + "Nova lozinka" `new-password`, bar 8 znakova; skriveno polje
   `username` sa email-om za menadžer lozinki; `api.changePassword` → nova sesija ovog uređaja, toast "Lozinka je
-  promenjena."; pogrešna trenutna → greška ispod tog polja; ostali uređaji moraju ponovo da se prijave), "Odjava" →
-  "Odjavi se": sačeka izmene iz reda (najviše 5 s), pa ako ima lokalnih nesačuvanih beleški ovog naloga prvo potvrda
-  "Imaš nesačuvanu belešku" sa datumima; zatim `POST /api/auth/logout` (bez servera odjava ne uspeva — kolačić je
+  promenjena."; pogrešna trenutna → greška ispod tog polja; ostali uređaji moraju ponovo da se prijave), "Odjava" (en
+  "This device") → "Odjavi se" / "Sign out": sačeka izmene iz reda (najviše 5 s), pa ako ima lokalnih nesačuvanih
+  beleški ovog naloga prvo potvrda "Imaš nesačuvanu belešku" sa datumom (više: "Imaš nesačuvane beleške", datumi
+  nabrojani kratko — "6. okt i 8. okt" / "Oct 6 and Oct 8"); zatim `POST /api/auth/logout` (bez servera odjava ne uspeva — kolačić je
   HttpOnly — i toast kaže zašto), odmah završava sesiju u tabu (izmena koja stigne kasnije ne upisuje ništa na uređaj),
   briše draftove ovog naloga i keš API odgovora, označava `ritam.lastUser` kao odjavljen (pokretanje bez mreže zatim
   prikazuje Prijavu), javlja ostalim tabovima i vraća na Prijavu (sledeća prijava otvara Danas). Istekla sesija (401) draftove ne briše — šalju se posle ponovne prijave istog naloga.
@@ -914,7 +960,7 @@ serif samo za naslove, sve ostalo sistemski sans, jedan prigušen akcenat po tem
   `aria-label`, dugmad sa `aria-pressed`, jer klik na aktivno poništava izbor); Segmented i CategoryPicker su radio
   grupe sa strelicama (roving tabindex; "+ Nova" u CategoryPicker-u je obično dugme, strelice rade samo na čipovima); fokus vidljiv.
 - Tekstovi i placeholderi ne pominju konkretne kategorije, šablone ni nečiji primer dana ("Naziv bloka", "Naziv
-  kategorije", "Naziv šablona").
+  kategorije", "Naziv šablona" / "Block name", "Category name", "Template name").
 - Forme u sheet-u (blok, zadatak, kategorija, šablon) pitaju "Odbaci izmene?" pre zatvaranja sa nesačuvanim izmenama
   (X, Esc, "nazad" na Androidu, klik na pozadinu, "nazad" u browseru — miš, Alt+← — i zatvaranje/osvežavanje taba;
   `lib/useUnsavedGuard.ts`). Klik na pozadinu zatvara samo ako je i počeo na pozadini; dodir pored otvorene
@@ -928,7 +974,29 @@ serif samo za naslove, sve ostalo sistemski sans, jedan prigušen akcenat po tem
 - Tamna tema: izabrana stavka Segmented i dugme prekidača su svetliji od staze (`--raised`, `--toggle-knob`,
   uključen prekidač `--toggle-knob-on`);
   tekst na `--danger` je `--danger-contrast` (taman u tamnoj temi).
-- Sav tekst na srpskom latinici, kratak; vreme "09:15", trajanje "4h 45m" (`fmtDuration`), procenat "73%" (`fmtPercent`).
+- **Tekst i jezici**: sav tekst interfejsa je u katalozima `web/src/i18n/en.ts` (engleski, izvor istine ključeva) i
+  `sr.ts` (isti ključevi — TypeScript proverava; smoke test proverava i iste {parametre} i oblike množine). Ključevi
+  su ravni, sa oblašću na početku (`common.*`, `status.*`, `error.*`, `day.*`, `tasks.*`, `notes.*`, `progress.*`,
+  `journal.*`, `schedule.*`, `settings.*`, `login.*`, `shell.*`, `ui.*`, `update.*`); pravila su na vrhu `en.ts`.
+  Komponenta koristi `useT()` (`t('day.now.next', { title, time })`, množina `t('common.blocks', { n })`), kod van
+  Reacta `t()`; tekst iz useMemo ima jezik u zavisnostima. Nijedan tekst za korisnika nije zakucan u komponenti.
+  - **Engleski** (podrazumevan): kratko, jasno, sentence case ("Add block", ne "Add Block"), bez uzvičnika i emodžija,
+    bez marketinškog tona, obraćanje sa "you"; tipografski apostrof i navodnici (’ “ ”), tri tačke kao jedan znak (…).
+    Stavke dana su **Block / Blocks**. Pojmovi: Template, Category, Today, Progress, Journal, Schedule, Settings,
+    Tasks, Notes, Now, Overview, Free time, Days of the week (ne "Weekdays" — to je samo pon–pet), "Day starts at",
+    completion (ispunjenost), streak (niz dana), Done / Partial / Not done / Pending, Backup, Account, Sign in,
+    Create account, Sign out (cela lista u `en.ts`). Kraj bloka posle ponoći je "the next day", ne "tomorrow" (šablon
+    nema datum, a prošli ili budući dan nije danas).
+  - **Srpski**: latinica, obraćanje na "ti", kratko; isti tekst kao pre prevoda (pregledan) — "Blok / Blokovi",
+    navodnici „…“, množina one/few/other ("1 blok", "2 bloka", "5 blokova", "21 blok").
+  - **Datumi i brojevi** (`shared/time.ts`, uvek sa jezikom iz `useLang()`; podrazumevano `'en'`): `fmtDateLong` en
+    "Thursday, October 8" (sa godinom ", 2026") / sr "Četvrtak, 8. oktobar" (" 2026."); `fmtDateMedium` "Thu, Oct 8" /
+    "čet, 8. okt"; `fmtDateShort` "Oct 8" / "8. okt"; `fmtMonthYear` "October 2026" / "Oktobar 2026."; `fmtDayMonth`
+    "October 8" / "8. oktobar" (bez prelamanja); `fmtDateRange` "Oct 6–12", "Sep 29 – Oct 5", "Dec 29, 2025 – Jan 4,
+    2026" / "6–12. okt", "29. sep – 5. okt", "29. dec 2025. – 4. jan 2026." (unutar datuma nerazdvojivi razmaci, pa se
+    prelama samo oko " – "); `weekdayName` / `weekdayShort` / `monthName` / `monthShort`; posle srpskog "za"
+    `weekdayNameAcc` ("za subotu"); nabrajanje `joinAnd` (`i18n/index.ts`) "a, b and c" / "a, b i c"; `fmtDecimal` "4.3" / "4,3". U oba
+    jezika: vreme 24h "09:15" (`fmtClock`), trajanje "4h 45m" (`fmtDuration`), procenat "73%" (`fmtPercent`).
 
 ## 8. Podaci u komponentama
 - `useScheduleData()` → kategorije, šabloni, mapiranje, podešavanja (App garantuje da su učitani).

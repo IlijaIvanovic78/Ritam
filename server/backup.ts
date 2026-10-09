@@ -6,9 +6,11 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { z } from 'zod';
 import type { Settings } from '../shared/types.ts';
+import { LANGS } from '../shared/i18n.ts';
 import { isValidISODate, isValidRange } from '../shared/time.ts';
 import { tx } from './db.ts';
-import { HttpError, badRequest } from './util.ts';
+import { parseSettings } from './repo.ts';
+import { HttpError, badRequest, str } from './util.ts';
 
 /** Oblik kopije (isti kao pre naloga, pa se stare kopije uvoze bez izmena). */
 export const BACKUP_VERSION = 1;
@@ -76,6 +78,9 @@ const backupSchema = z.object({
   settings: z.object({
     dayStart: z.int().min(0).max(360),
     streakThreshold: z.number().min(0.1).max(1),
+    // Jezik interfejsa (kopija iz verzije pre jezika ga nema; nepoznat jezik se ne uvozi) — bez njega nalog
+    // zadržava svoj jezik.
+    lang: z.enum(LANGS).optional().catch(undefined),
   }),
   categories: z.array(
     z.object({
@@ -136,7 +141,6 @@ const backupSchema = z.object({
 
 type Backup = z.output<typeof backupSchema>;
 
-const MISMATCH = 'Kopija nije ispravna: podaci se međusobno ne slažu.';
 
 function isSqliteError(err: unknown): boolean {
   return err instanceof Error && (err as { code?: string }).code === 'ERR_SQLITE_ERROR';
@@ -150,13 +154,13 @@ function mapper(name: string) {
   const map = new Map<number, number>();
   return {
     add(oldId: number, newId: number) {
-      if (map.has(oldId)) throw badRequest(`${MISMATCH} (${name}: dupli id ${oldId})`);
+      if (map.has(oldId)) throw badRequest('backup.duplicateId', { table: name, id: oldId });
       map.set(oldId, newId);
     },
     ref(oldId: number | null): number | null {
       if (oldId == null) return null;
       const v = map.get(oldId);
-      if (v === undefined) throw badRequest(MISMATCH);
+      if (v === undefined) throw badRequest('backup.mismatch');
       return v;
     },
   };
@@ -171,7 +175,7 @@ export function importData(db: DatabaseSync, uid: number, input: unknown): void 
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
     const where = issue?.path.length ? ` (${issue.path.join('.')})` : '';
-    throw badRequest(`Kopija nije ispravna${where}.`);
+    throw badRequest('backup.invalid', { where });
   }
   const data: Backup = parsed.data;
 
@@ -293,12 +297,15 @@ export function importData(db: DatabaseSync, uid: number, input: unknown): void 
         `UPDATE template_blocks SET category_id = NULL
          WHERE category_id IN (SELECT id FROM categories WHERE user_id = ? AND archived = 1)`,
       ).run(uid);
-      db.prepare('UPDATE users SET settings = ? WHERE id = ?').run(JSON.stringify(data.settings), uid);
+      const row = db.prepare('SELECT settings FROM users WHERE id = ?').get(uid);
+      const lang = data.settings.lang ?? parseSettings(row ? str(row.settings) : null).lang;
+      const settings = { ...data.settings, lang };
+      db.prepare('UPDATE users SET settings = ? WHERE id = ?').run(JSON.stringify(settings), uid);
     });
   } catch (err) {
     if (err instanceof HttpError) throw err;
     // Duplirani dani ili veze ka nepostojećim redovima.
-    if (isSqliteError(err)) throw badRequest(MISMATCH);
+    if (isSqliteError(err)) throw badRequest('backup.mismatch');
     throw err;
   }
 }

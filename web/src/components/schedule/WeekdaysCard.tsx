@@ -2,8 +2,9 @@
 
 import { useRef, useState } from 'react';
 import type { Weekday, WeekdayMap } from '../../../../shared/types.ts';
-import { WEEKDAY_NAMES, capitalize, isoWeekday } from '../../../../shared/time.ts';
+import { capitalize, isoWeekday, weekdayName } from '../../../../shared/time.ts';
 import { api, errorMessage } from '../../api.ts';
+import { useLang, useT } from '../../i18n/index.ts';
 import { useLogicalNow } from '../../lib/hooks.ts';
 import { enqueue } from '../../lib/queue.ts';
 import { scheduleStore, useScheduleData } from '../../lib/store.ts';
@@ -11,6 +12,8 @@ import { Card, Select, cx, toast } from '../../ui/index.ts';
 import { WEEKDAYS } from './util.ts';
 
 export function WeekdaysCard() {
+  const t = useT();
+  const lang = useLang();
   const { templates, weekdays } = useScheduleData();
   const today = isoWeekday(useLogicalNow().date);
 
@@ -45,17 +48,17 @@ export function WeekdaysCard() {
   }
 
   return (
-    <Card title="Dani u nedelji" className="sched-card-wd">
-      {none && <p className="sched-empty-line">Prvo napravi šablon.</p>}
+    <Card title={t('schedule.weekdays.title')} className="sched-card-wd">
+      {none && <p className="sched-empty-line">{t('schedule.weekdays.needTemplate')}</p>}
       <div className={cx('sched-wd-list', none && 'is-disabled')}>
         {WEEKDAYS.map((wd) => {
           const tid = map[wd];
-          const selected = tid != null ? templates.find((t) => t.id === tid) : undefined;
+          const selected = tid != null ? templates.find((tpl) => tpl.id === tid) : undefined;
           return (
             <label key={wd} className="sched-wd-row">
               <span className="sched-wd-name">
-                <span>{capitalize(WEEKDAY_NAMES[wd - 1])}</span>
-                {wd === today && <span className="sched-wd-today">danas</span>}
+                <span>{capitalize(weekdayName(wd, lang))}</span>
+                {wd === today && <span className="sched-wd-today">{t('schedule.weekdays.today')}</span>}
               </span>
               <Select
                 value={selected ? String(selected.id) : ''}
@@ -63,10 +66,10 @@ export function WeekdaysCard() {
                 onChange={(e) => change(wd, e.target.value)}
                 disabled={none}
               >
-                <option value="">Bez šablona</option>
-                {templates.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}
+                <option value="">{t('schedule.weekdays.none')}</option>
+                {templates.map((tpl) => (
+                  <option key={tpl.id} value={tpl.id}>
+                    {tpl.name}
                   </option>
                 ))}
               </Select>

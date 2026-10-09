@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import type { Block, BlockInput, BlockPatch, BlockStatus, Category, DayPayload } from '../../../../shared/types.ts';
 import { DAY_MIN, fmtClock, fmtDuration, isValidRange, normalizeRange, parseClock } from '../../../../shared/time.ts';
 import { blockDoneMin } from '../../../../shared/summary.ts';
+import { useT, type TFunction } from '../../i18n/index.ts';
 import { createInlineCategory } from '../../lib/categories.ts';
 import { jumpHint, normalizeNear } from '../../lib/timeRange.ts';
 import { useUnsavedGuard } from '../../lib/useUnsavedGuard.ts';
@@ -27,12 +28,15 @@ import { isActiveStatus } from './useDay.ts';
 type Result = Promise<DayPayload | null>;
 type Range = { start: number; end: number };
 
-const STATUS_OPTIONS: Array<{ value: BlockStatus; label: string; title: string }> = [
-  { value: 'pending', label: 'Čeka', title: 'Još nije ocenjen' },
-  { value: 'done', label: 'Urađeno', title: 'Urađeno' },
-  { value: 'partial', label: 'Delimično', title: 'Delimično' },
-  { value: 'skipped', label: 'Nije', title: 'Nije urađeno' },
-];
+/** Izbor statusa u formi (Segmented): kratka oznaka, puni naziv u title. */
+function statusOptions(t: TFunction): Array<{ value: BlockStatus; label: string; title: string }> {
+  return [
+    { value: 'pending', label: t('status.pending'), title: t('status.pendingHint') },
+    { value: 'done', label: t('status.done'), title: t('status.done') },
+    { value: 'partial', label: t('status.partial'), title: t('status.partial') },
+    { value: 'skipped', label: t('status.skippedShort'), title: t('status.skipped') },
+  ];
+}
 
 /** Najkraći deo posle deljenja (isto pravilo kao na serveru). */
 const MIN_PART = 5;
@@ -43,6 +47,7 @@ const MIN_PART = 5;
  * da npr. blok 01:00–09:00 pomeren na 00:30 ne skoči na kraj dana — dok god ostaje u logičkom danu.
  */
 function readRange(
+  t: TFunction,
   startStr: string,
   endStr: string,
   dayStart: number,
@@ -50,10 +55,10 @@ function readRange(
 ): { range: Range | null; error: string | null } {
   const s = parseClock(startStr);
   const e = parseClock(endStr);
-  if (s == null || e == null) return { range: null, error: 'Unesi vreme početka i kraja.' };
-  if (s === e) return { range: null, error: 'Početak i kraj ne mogu biti isti.' };
+  if (s == null || e == null) return { range: null, error: t('day.block.timeRequired') };
+  if (s === e) return { range: null, error: t('day.block.timeSame') };
   const r = anchorStart == null ? normalizeRange(s, e, dayStart) : normalizeNear(s, e, anchorStart, dayStart);
-  if (!isValidRange(r.start, r.end)) return { range: null, error: 'Neispravno vreme.' };
+  if (!isValidRange(r.start, r.end)) return { range: null, error: t('day.block.timeInvalid') };
   return { range: r, error: null };
 }
 
@@ -74,12 +79,12 @@ function sameBlock(a: Block, b: Block): boolean {
  * "" → null (podrazumevano); inače ceo broj 0..1440, i ne više od trajanja bloka (`max`, null kad
  * vreme bloka nije ispravno) — jedna nula viška (600 umesto 60) bi inače izobličila statistiku.
  */
-function readActual(s: string, max: number | null): { value: number | null; error: string | null } {
-  const t = s.trim();
-  if (t === '') return { value: null, error: null };
-  if (!/^\d{1,4}$/.test(t) || Number(t) > DAY_MIN) return { value: null, error: 'Unesi broj minuta (0–1440).' };
-  const v = Number(t);
-  if (max != null && v > max) return { value: null, error: `Najviše ${max} min (trajanje bloka).` };
+function readActual(t: TFunction, s: string, max: number | null): { value: number | null; error: string | null } {
+  const str = s.trim();
+  if (str === '') return { value: null, error: null };
+  if (!/^\d{1,4}$/.test(str) || Number(str) > DAY_MIN) return { value: null, error: t('day.block.actualInvalid') };
+  const v = Number(str);
+  if (max != null && v > max) return { value: null, error: t('day.block.actualMax', { max }) };
   return { value: v, error: null };
 }
 
@@ -123,6 +128,7 @@ export function BlockSheet({
   onSwap: (id: number, withId: number) => Result;
   onDelete: (id: number) => Result;
 }) {
+  const t = useT();
   const formId = useId();
   const isNew = block == null;
   /** Blok kakav je bio kad je forma otvorena (ili posle sopstvenog čuvanja pre deljenja/zamene). */
@@ -161,14 +167,14 @@ export function BlockSheet({
   const { range, error: timeError } =
     block && !timesTouched
       ? { range: { start: block.start, end: block.end }, error: null }
-      : readRange(startStr, endStr, dayStart, base ? base.start : null);
+      : readRange(t, startStr, endStr, dayStart, base ? base.start : null);
   const duration = range ? range.end - range.start : 0;
 
   const showActual = isActiveStatus(status);
-  const actual = readActual(actualStr, range ? duration : null);
+  const actual = readActual(t, actualStr, range ? duration : null);
   const actualDefault = range ? blockDoneMin({ start: range.start, end: range.end, status, actualMin: null }) : 0;
 
-  const titleError = submitted && !title.trim() ? 'Upiši naslov bloka.' : null;
+  const titleError = submitted && !title.trim() ? t('day.block.titleRequired') : null;
   const formValid = !!title.trim() && !timeError && !(showActual && actual.error);
 
   useEffect(() => {
@@ -178,8 +184,8 @@ export function BlockSheet({
   /** Samo izmenjena polja (za PATCH); `catId` = kategorija posle pravljenja upisane nove. */
   function buildPatch(b: Block, catId: number | null = categoryId): BlockPatch {
     const p: BlockPatch = {};
-    const t = title.trim();
-    if (t !== b.title) p.title = t;
+    const trimmed = title.trim();
+    if (trimmed !== b.title) p.title = trimmed;
     if (catId !== b.categoryId) p.categoryId = catId;
     if (timesTouched && range) {
       if (range.start !== b.start) p.start = range.start;
@@ -281,11 +287,11 @@ export function BlockSheet({
   const splitAt = range && splitClock != null ? clockInside(splitClock, range.start, range.end) : null;
   let splitError: string | null = null;
   if (range) {
-    if (splitClock == null) splitError = 'Unesi vreme.';
-    else if (splitAt == null) splitError = `Izaberi vreme između ${fmtClock(range.start)} i ${fmtClock(range.end)}.`;
+    if (splitClock == null) splitError = t('day.split.timeRequired');
+    else if (splitAt == null) splitError = t('day.split.outside', { start: fmtClock(range.start), end: fmtClock(range.end) });
     // Drugi deo mora da počne pre kraja sutrašnjeg dana (isto pravilo kao isValidRange na serveru).
-    else if (splitAt >= 2 * DAY_MIN) splitError = 'Neispravno mesto deljenja.';
-    else if (splitAt - range.start < MIN_PART || range.end - splitAt < MIN_PART) splitError = 'Oba dela moraju imati bar 5 minuta.';
+    else if (splitAt >= 2 * DAY_MIN) splitError = t('day.split.invalid');
+    else if (splitAt - range.start < MIN_PART || range.end - splitAt < MIN_PART) splitError = t('day.split.tooShort');
   }
 
   const doSplit = async () => {
@@ -322,7 +328,7 @@ export function BlockSheet({
     const res = await onSwap(block.id, withId);
     if (res) {
       onClose();
-      toast.success('Zamenjeno.');
+      toast.success(t('day.block.swapped'));
     } else setBusy(null);
   };
 
@@ -331,9 +337,9 @@ export function BlockSheet({
   const remove = async () => {
     if (!block || busy || gone) return;
     const ok = await confirmDialog({
-      title: 'Obriši blok?',
-      body: `„${block.title}“ će biti uklonjen iz ovog dana.`,
-      confirmText: 'Obriši',
+      title: t('day.block.deleteTitle'),
+      body: t('day.block.deleteBody', { title: block.title }),
+      confirmText: t('common.delete'),
       danger: true,
     });
     if (!ok) return;
@@ -350,10 +356,10 @@ export function BlockSheet({
     footer = (
       <>
         <Button variant="ghost" onClick={() => void requestClose()} disabled={busy != null}>
-          Otkaži
+          {t('common.cancel')}
         </Button>
         <Button variant="primary" type="submit" form={formId} loading={busy === 'save'}>
-          Dodaj blok
+          {t('day.addBlock')}
         </Button>
       </>
     );
@@ -361,10 +367,10 @@ export function BlockSheet({
     footer = (
       <>
         <Button variant="ghost" onClick={() => setSplitOpen(false)} disabled={busy != null}>
-          Otkaži
+          {t('common.cancel')}
         </Button>
         <Button variant="primary" onClick={doSplit} loading={busy === 'split'} disabled={busy != null && busy !== 'split'}>
-          Podeli blok
+          {t('day.split.confirm')}
         </Button>
       </>
     );
@@ -378,31 +384,31 @@ export function BlockSheet({
           loading={busy === 'delete'}
           disabled={busy != null || gone}
         >
-          Obriši
+          {t('common.delete')}
         </Button>
         <Button
           variant="ghost"
           className={swapWith.length === 0 ? 'day-foot-left' : undefined}
           onClick={openSplit}
           disabled={busy != null || !canSplit}
-          title={canSplit ? 'Podeli blok na dva dela' : gone ? undefined : 'Blok je prekratak za deljenje'}
+          title={canSplit ? t('day.split.hint') : gone ? undefined : t('day.split.tooShortHint')}
         >
-          Podeli
+          {t('day.split.open')}
         </Button>
         {swapWith.length > 0 && (
           // Izgleda kao dugme, a ispod je native <select> preko celog dugmeta: na telefonu
           // otvara sistemsku listu, a izbor odmah menja blokove.
           <span
             className={cx('btn btn-ghost day-swap day-foot-left', busy != null && 'is-disabled')}
-            title="Zameni naslov i kategoriju sa drugim blokom"
+            title={t('day.swap.hint')}
           >
             {busy === 'swap' && <span className="spinner spinner-sm" aria-hidden="true" />}
             <span className="day-swap-label" aria-hidden="true">
-              Zameni sa…
+              {t('day.swap.label')}
             </span>
             <select
               className="day-swap-select"
-              aria-label="Zameni naslov i kategoriju sa blokom"
+              aria-label={t('day.swap.aria')}
               value=""
               disabled={busy != null}
               aria-busy={busy === 'swap' || undefined}
@@ -413,7 +419,7 @@ export function BlockSheet({
               }}
             >
               <option value="" disabled hidden>
-                Zameni sa…
+                {t('day.swap.label')}
               </option>
               {swapWith.map((b) => (
                 <option key={b.id} value={b.id}>
@@ -424,14 +430,15 @@ export function BlockSheet({
           </span>
         )}
         <Button variant="primary" type="submit" form={formId} loading={busy === 'save'} disabled={busy != null || gone}>
-          Sačuvaj
+          {t('common.save')}
         </Button>
       </>
     );
   }
 
   const timeHint = range
-    ? `Trajanje ${fmtDuration(duration)}${range.start >= DAY_MIN ? ' · posle ponoći' : ''}`
+    ? t('day.block.duration', { time: fmtDuration(duration) }) +
+      (range.start >= DAY_MIN ? ` · ${t('day.block.afterMidnight')}` : '')
     : undefined;
   // Novi blok koji počinje pre "dan počinje u" i traje do jutra (npr. 00:30–08:30) ide na KRAJ
   // ovog dana — to treba jasno reći, ne samo diskretno.
@@ -444,35 +451,35 @@ export function BlockSheet({
     <Sheet
       open
       onClose={requestClose}
-      title={isNew ? 'Novi blok' : 'Izmeni blok'}
+      title={isNew ? t('day.block.newTitle') : t('day.block.editTitle')}
       footer={footer}
       returnFocus={returnFocus}
     >
       <form id={formId} className="day-form" onSubmit={save} noValidate>
         {gone ? (
           <p className="field-hint day-form-warn" role="status">
-            Blok je u međuvremenu obrisan na drugom uređaju.
+            {t('day.block.deletedElsewhere')}
           </p>
         ) : (
           changedElsewhere && (
             <p className="field-hint day-form-warn" role="status">
-              Blok je u međuvremenu promenjen na drugom uređaju. Čuvanje menja samo polja koja si ovde izmenio.
+              {t('day.block.changedElsewhere')}
             </p>
           )
         )}
-        <Field label="Naslov" error={titleError}>
+        <Field label={t('day.block.titleLabel')} error={titleError}>
           <TextInput
             ref={titleRef}
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             maxLength={120}
-            placeholder="Naziv bloka"
+            placeholder={t('day.block.titlePlaceholder')}
             autoComplete="off"
           />
         </Field>
 
         <div className="field">
-          <span className="field-label">Kategorija</span>
+          <span className="field-label">{t('day.block.category')}</span>
           <CategoryPicker
             ref={pickerRef}
             categories={categories}
@@ -484,17 +491,22 @@ export function BlockSheet({
         </div>
 
         <div className="day-form-times">
-          <Field label="Od">
-            <TimeInput aria-label="Od" value={startStr} onChange={(e) => setStartStr(e.target.value)} required />
+          <Field label={t('day.block.from')}>
+            <TimeInput
+              aria-label={t('day.block.from')}
+              value={startStr}
+              onChange={(e) => setStartStr(e.target.value)}
+              required
+            />
           </Field>
-          <Field label="Do">
-            <TimeInput aria-label="Do" value={endStr} onChange={(e) => setEndStr(e.target.value)} required />
+          <Field label={t('day.block.to')}>
+            <TimeInput aria-label={t('day.block.to')} value={endStr} onChange={(e) => setEndStr(e.target.value)} required />
           </Field>
           {timeError ? (
             <span className="field-error day-form-times-msg">{timeError}</span>
           ) : lateWarn ? (
             <span className="field-hint day-form-times-msg day-form-warn tabular" role="status">
-              {timeHint}. Blok ide na kraj ovog dana, posle ponoći.
+              {t('day.block.lateWarn', { hint: timeHint ?? '' })}
             </span>
           ) : jumpWarn ? (
             <span className="field-hint day-form-times-msg day-form-warn tabular" role="status">
@@ -508,24 +520,26 @@ export function BlockSheet({
         {!isNew && (
           <>
             <div className="field">
-              <span className="field-label">Status</span>
+              <span className="field-label">{t('day.block.status')}</span>
               <Segmented
                 className="day-form-seg"
-                label="Status bloka"
+                label={t('day.block.statusAria')}
                 value={status}
-                options={STATUS_OPTIONS}
+                options={statusOptions(t)}
                 onChange={setStatus}
               />
             </div>
 
             {showActual && (
               <Field
-                label="Stvarno vreme (min)"
+                label={t('day.block.actualLabel')}
                 error={actual.error}
                 hint={
                   actual.value != null
                     ? `= ${fmtDuration(actual.value)}`
-                    : `Prazno = ${status === 'done' ? 'ceo blok' : 'pola bloka'} (${fmtDuration(actualDefault)})`
+                    : status === 'done'
+                      ? t('day.block.actualDefaultDone', { time: fmtDuration(actualDefault) })
+                      : t('day.block.actualDefaultPartial', { time: fmtDuration(actualDefault) })
                 }
               >
                 <TextInput
@@ -540,13 +554,13 @@ export function BlockSheet({
               </Field>
             )}
 
-            <Field label="Beleška">
+            <Field label={t('day.block.note')}>
               <TextArea
                 value={note}
                 onChange={(e) => setNote(e.target.value)}
                 minRows={2}
                 maxLength={5000}
-                placeholder="Kako je prošlo, šta je falilo…"
+                placeholder={t('day.block.notePlaceholder')}
               />
             </Field>
           </>
@@ -556,16 +570,19 @@ export function BlockSheet({
       {splitOpen && range && (
         <div className="day-split" ref={splitRef}>
           <Field
-            label="Podeli u"
+            label={t('day.split.at')}
             error={splitError && (splitTried || splitStr !== '') ? splitError : null}
             hint={
               splitAt != null && !splitError
-                ? `${fmtClock(range.start)}–${fmtClock(splitAt)} i ${fmtClock(splitAt)}–${fmtClock(range.end)}`
+                ? t('day.split.parts', {
+                    first: `${fmtClock(range.start)}–${fmtClock(splitAt)}`,
+                    second: `${fmtClock(splitAt)}–${fmtClock(range.end)}`,
+                  })
                 : undefined
             }
           >
             <TimeInput
-              aria-label="Podeli u"
+              aria-label={t('day.split.at')}
               value={splitStr}
               onChange={(e) => setSplitStr(e.target.value)}
               onKeyDown={(e) => {
@@ -577,7 +594,7 @@ export function BlockSheet({
               autoFocus
             />
           </Field>
-          <p className="day-sheet-note">Drugi deo dobija isti naslov i kategoriju, bez statusa i beleške.</p>
+          <p className="day-sheet-note">{t('day.split.note')}</p>
         </div>
       )}
     </Sheet>

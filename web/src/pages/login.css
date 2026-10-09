@@ -89,3 +89,39 @@
     text-decoration-color: currentColor;
   }
 }
+
+/* Izbor jezika: tih red ispod forme ("English · Srpski"); izabran jezik u --text, drugi podvučen. */
+.login-lang {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 28px;
+  font-size: 13px;
+  color: var(--text-3);
+}
+
+.login-lang-btn {
+  display: inline-flex;
+  align-items: center;
+  min-height: 40px;
+  padding: 0 6px;
+  color: var(--text-2);
+  text-decoration: underline;
+  text-decoration-color: var(--text-3);
+  text-underline-offset: 3px;
+  border-radius: var(--radius-sm);
+}
+
+.login-lang-btn[aria-pressed='true'] {
+  color: var(--text);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+@media (hover: hover) {
+  .login-lang-btn[aria-pressed='false']:hover {
+    color: var(--text);
+    text-decoration-color: currentColor;
+  }
+}

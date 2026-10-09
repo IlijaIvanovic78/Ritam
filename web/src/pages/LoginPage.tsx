@@ -1,9 +1,11 @@
 // Prijava i registracija naloga (email + lozinka). Prikazuje se kad sesija ne postoji ili je
 // istekla. Bez drugih ekrana: nema resetovanja lozinke ni dvostepene provere.
 
-import { useEffect, useRef, useState, type FormEvent, type RefObject } from 'react';
+import { Fragment, useEffect, useRef, useState, type FormEvent, type RefObject } from 'react';
+import { htmlLang } from '../../../shared/i18n.ts';
 import type { AuthConfig, AuthUser } from '../../../shared/types.ts';
 import { ApiError, api, errorMessage } from '../api.ts';
+import { LANGS, setLang, useLang, useT } from '../i18n/index.ts';
 import { Button, Field, TextInput, Wordmark } from '../ui/index.ts';
 import './login.css';
 
@@ -19,6 +21,7 @@ const EMAIL_MAX = 254;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export default function LoginPage({ onLoggedIn }: { onLoggedIn: (user: AuthUser) => void | Promise<void> }) {
+  const t = useT();
   const [mode, setMode] = useState<Mode>('login');
   /** null = još nije poznato (server nije odgovorio) — opcija registracije se tada ne nudi. */
   const [signup, setSignup] = useState<Signup | null>(null);
@@ -34,9 +37,20 @@ export default function LoginPage({ onLoggedIn }: { onLoggedIn: (user: AuthUser)
   const register = mode === 'register';
   const needsCode = register && signup === 'code';
 
+  const docTitle = register ? t('login.titleRegister') : t('login.titleSignIn');
   useEffect(() => {
-    document.title = register ? 'Novi nalog · Ritam' : 'Prijava · Ritam';
-  }, [register]);
+    document.title = docTitle;
+  }, [docTitle]);
+
+  // Promena jezika ispod forme: prikazane greške su na prethodnom jeziku — sklanjaju se (sledeći pokušaj ih
+  // prikazuje ponovo, na novom jeziku).
+  const lang = useLang();
+  const shownLang = useRef(lang);
+  useEffect(() => {
+    if (shownLang.current === lang) return;
+    shownLang.current = lang;
+    setErrors({});
+  }, [lang]);
 
   // Da li se nudi registracija (i da li traži kod). Bez mreže se proverava ponovo kad mreža stigne.
   useEffect(() => {
@@ -86,11 +100,11 @@ export default function LoginPage({ onLoggedIn }: { onLoggedIn: (user: AuthUser)
   const validate = (): Errors => {
     const e: Errors = {};
     const em = email.trim();
-    if (!em || em.length > EMAIL_MAX || !EMAIL_RE.test(em)) e.email = 'Unesi ispravnu email adresu.';
-    if (!password) e.password = register ? `Lozinka mora imati bar ${PASSWORD_MIN} znakova.` : 'Unesi lozinku.';
-    else if (register && password.length < PASSWORD_MIN) e.password = `Lozinka mora imati bar ${PASSWORD_MIN} znakova.`;
-    else if (register && password.length > PASSWORD_MAX) e.password = `Lozinka može imati najviše ${PASSWORD_MAX} znakova.`;
-    if (needsCode && !code.trim()) e.code = 'Unesi kod za registraciju.';
+    if (!em || em.length > EMAIL_MAX || !EMAIL_RE.test(em)) e.email = t('login.emailInvalid');
+    if (!password) e.password = register ? t('login.passwordMin', { min: PASSWORD_MIN }) : t('login.passwordRequired');
+    else if (register && password.length < PASSWORD_MIN) e.password = t('login.passwordMin', { min: PASSWORD_MIN });
+    else if (register && password.length > PASSWORD_MAX) e.password = t('login.passwordMax', { max: PASSWORD_MAX });
+    if (needsCode && !code.trim()) e.code = t('login.codeRequired');
     return e;
   };
 
@@ -111,9 +125,10 @@ export default function LoginPage({ onLoggedIn }: { onLoggedIn: (user: AuthUser)
     if (err.status === 409) return { email: msg };
     if (err.status === 401) return { password: msg };
     if (err.status === 400) {
+      // Poruka servera je na jeziku interfejsa (X-Ritam-Lang).
       if (/email/i.test(msg)) return { email: msg };
-      if (/lozink/i.test(msg)) return { password: msg };
-      if (/kod/i.test(msg)) return { code: msg };
+      if (/lozink|password/i.test(msg)) return { password: msg };
+      if (/kod|code/i.test(msg)) return { code: msg };
     }
     // 429 (previše pokušaja), greška mreže, server nedostupan…
     return { form: msg };
@@ -160,10 +175,10 @@ export default function LoginPage({ onLoggedIn }: { onLoggedIn: (user: AuthUser)
           <h1 className="login-title">
             <Wordmark height={64} />
           </h1>
-          <p className="login-sub">{register ? 'Napravi nalog da počneš.' : 'Prijavi se da nastaviš.'}</p>
+          <p className="login-sub">{register ? t('login.subRegister') : t('login.subSignIn')}</p>
         </div>
 
-        <Field label="Email" error={errors.email}>
+        <Field label={t('login.email')} error={errors.email}>
           <TextInput
             ref={emailRef}
             type="email"
@@ -185,7 +200,11 @@ export default function LoginPage({ onLoggedIn }: { onLoggedIn: (user: AuthUser)
           />
         </Field>
 
-        <Field label="Lozinka" error={errors.password} hint={register ? `Bar ${PASSWORD_MIN} znakova.` : undefined}>
+        <Field
+          label={t('login.password')}
+          error={errors.password}
+          hint={register ? t('login.passwordHint', { min: PASSWORD_MIN }) : undefined}
+        >
           <TextInput
             ref={passwordRef}
             type="password"
@@ -204,7 +223,7 @@ export default function LoginPage({ onLoggedIn }: { onLoggedIn: (user: AuthUser)
         </Field>
 
         {needsCode && (
-          <Field label="Kod za registraciju" error={errors.code} hint="Kod postavlja onaj ko vodi server.">
+          <Field label={t('login.code')} error={errors.code} hint={t('login.codeHint')}>
             <TextInput
               ref={codeRef}
               name="signup-code"
@@ -231,18 +250,46 @@ export default function LoginPage({ onLoggedIn }: { onLoggedIn: (user: AuthUser)
         )}
 
         <Button type="submit" variant="primary" block loading={busy}>
-          {register ? 'Napravi nalog' : 'Prijavi se'}
+          {register ? t('login.createAccount') : t('login.signIn')}
         </Button>
 
         {(register || canRegister) && (
           <p className="login-switch">
-            {register ? 'Već imaš nalog?' : 'Nemaš nalog?'}{' '}
+            {register ? t('login.haveAccount') : t('login.noAccount')}{' '}
             <button type="button" className="login-link" onClick={() => switchMode(register ? 'login' : 'register')}>
-              {register ? 'Prijavi se' : 'Napravi nalog'}
+              {register ? t('login.signIn') : t('login.createAccount')}
             </button>
           </p>
         )}
       </form>
+      <LanguageSwitch />
+    </div>
+  );
+}
+
+/**
+ * Tih izbor jezika ispod forme ("English · Srpski"): menja jezik na ovom uređaju odmah; pri registraciji
+ * izabran jezik postaje jezik naloga, a posle prijave važi jezik naloga.
+ */
+function LanguageSwitch() {
+  const t = useT();
+  const lang = useLang();
+  return (
+    <div className="login-lang" role="group" aria-label={t('lang.label')}>
+      {LANGS.map((l, i) => (
+        <Fragment key={l}>
+          {i > 0 && <span aria-hidden="true">·</span>}
+          <button
+            type="button"
+            className="login-lang-btn"
+            lang={htmlLang(l)}
+            aria-pressed={lang === l}
+            onClick={() => setLang(l)}
+          >
+            {t(`lang.${l}` as const)}
+          </button>
+        </Fragment>
+      ))}
     </div>
   );
 }
