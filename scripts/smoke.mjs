@@ -1,8 +1,12 @@
-// Smoke test celog API-ja na posebnoj (privremenoj) instanci servera, nikad na pravoj:
-//   DATA_DIR=<privremen folder> PORT=3999 SIGNUP_CODE=x ACCESS_TOKEN_TTL_SEC=3 REFRESH_RACE_GRACE_SEC=2 npm start
-//   DATA_DIR=<drugi privremen folder> PORT=3998 SIGNUP=closed npm start
-//   BASE_URL=http://localhost:3999 SMOKE_CLOSED_URL=http://localhost:3998 SIGNUP_CODE=x REFRESH_RACE_GRACE_SEC=2 node scripts/smoke.mjs
-// Bez SMOKE_CLOSED_URL provera zatvorene registracije je SKIP (zbir: "… PASS, 0 FAIL, 1 SKIP"), što nije greška.
+// Smoke test celog API-ja na posebnoj (privremenoj) instanci servera, nikad na pravoj. Glavna instanca ima
+// podrazumevanu (otvorenu) registraciju; dve male dodatne instance proveravaju registraciju uz kod i zatvorenu:
+//   DATA_DIR=<privremen folder> PORT=3999 ACCESS_TOKEN_TTL_SEC=3 REFRESH_RACE_GRACE_SEC=2 npm start
+//   DATA_DIR=<drugi privremen folder> PORT=3998 SIGNUP=code SIGNUP_CODE=x npm start
+//   DATA_DIR=<treći privremen folder> PORT=3997 SIGNUP=closed npm start
+//   BASE_URL=http://localhost:3999 SMOKE_CODE_URL=http://localhost:3998 SIGNUP_CODE=x \
+//     SMOKE_CLOSED_URL=http://localhost:3997 REFRESH_RACE_GRACE_SEC=2 node scripts/smoke.mjs
+// Bez SMOKE_CODE_URL / SMOKE_CLOSED_URL te provere su SKIP (zbir: "… PASS, 0 FAIL, 2 SKIP"), što nije greška.
+// Ceo test radi i na instanci sa SIGNUP=code (BASE_URL te instance + SIGNUP_CODE): tada A, B… prave naloge uz kod.
 //
 // Test pravi svoje naloge (smoke-<oznaka>-…@example.test): A je glavni korisnik — kroz njega idu sve
 // funkcionalne provere (prazan start, raspored, dani, blokovi, zadaci, statistika, dnevnik, izvoz/uvoz,
@@ -12,10 +16,10 @@
 //
 // Kratak ACCESS_TOKEN_TTL_SEC (npr. 3) proverava istek access tokena (401 token_expired → refresh → radi), a
 // test usput stalno osvežava tokene kao klijent. REFRESH_RACE_GRACE_SEC (isti broj za server i test,
-// podrazumevano 30) skraćuje čekanje za proveru ponovo upotrebljenog refresh tokena. SIGNUP_CODE (ili
-// APP_PASSWORD) = kod za registraciju kad server traži kod. SMOKE_CLOSED_URL (opciono) = druga instanca sa
-// SIGNUP=closed. Ograničenja pokušaja (lažne adrese preko X-Forwarded-For) se proveravaju samo na lokalnom
-// serveru (SMOKE_RATE_LIMIT=0 ih preskače).
+// podrazumevano 30) skraćuje čekanje za proveru ponovo upotrebljenog refresh tokena. SIGNUP_CODE = kod za
+// registraciju instance sa SIGNUP=code (SMOKE_CODE_URL, ili BASE_URL kad ona traži kod); otvorena instanca ga
+// ignoriše. SMOKE_CLOSED_URL (opciono) = instanca sa SIGNUP=closed. Ograničenja pokušaja (lažne adrese preko
+// X-Forwarded-For) se proveravaju samo na lokalnom serveru (SMOKE_RATE_LIMIT=0 ih preskače).
 //
 // Prvi nalog na serveru preuzima podatke iz verzije bez naloga: zato A pravi PRVI i odmah proverava da je
 // prazan; ako nije (server je imao podatke bez vlasnika), test staje pre ikakve izmene i kaže kako da se
@@ -31,7 +35,7 @@ if (!process.env.BASE_URL) {
   process.exit(2);
 }
 const BASE = process.env.BASE_URL.replace(/\/+$/, '');
-const CODE = process.env.SIGNUP_CODE ?? process.env.APP_PASSWORD ?? process.env.CODE ?? '';
+const CODE = (process.env.SIGNUP_CODE ?? process.env.CODE ?? '').trim();
 const RACE_GRACE_SEC = Number(process.env.REFRESH_RACE_GRACE_SEC || 30);
 const REFRESH_TTL_SEC = Number(process.env.REFRESH_TOKEN_TTL_SEC || 90 * 24 * 60 * 60);
 const RUN = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
@@ -386,7 +390,7 @@ async function authSections() {
   if (signupPolicy === 'closed') {
     throw new Error('Registracija je zatvorena (SIGNUP=closed) — test pravi svoje naloge; pokreni ga na privremenoj instanci sa SIGNUP=open ili kodom.');
   }
-  if (signupPolicy === 'code' && !CODE) throw new Error('Server traži kod za registraciju — postavi SIGNUP_CODE (ili APP_PASSWORD) za test.');
+  if (signupPolicy === 'code' && !CODE) throw new Error('Server traži kod za registraciju — postavi SIGNUP_CODE za test.');
 
   await section('register A', async () => {
     // A je prvi nalog testa (vidi uputstvo na vrhu): mešana slova i razmaci → email malim slovima.
@@ -433,7 +437,14 @@ async function authSections() {
       await expectError('registracija pogrešan kod → 403 bad_code', reg({ email: X.email, password: X.password, code: `${CODE}x` }), 403, 'Pogrešan kod za registraciju.', 'bad_code');
       await expectError('duplikat sa pogrešnim kodom → 403 (kod pre emaila)', reg({ email: A.email, password: X.password, code: 'pogresan' }), 403, undefined, 'bad_code');
     } else {
-      skip('registracija: provere koda', `server nema kod (signup: ${signupPolicy})`);
+      // Otvorena registracija (podrazumevano): samo email i lozinka; poslat kod se ne proverava.
+      const O1 = newUser('o1');
+      const o1 = await rawReq('POST', '/api/auth/register', { body: { email: O1.email, password: O1.password }, headers: { 'X-Forwarded-For': O1.ip } });
+      check('otvorena: registracija samo email + lozinka (bez koda) → 201', o1.status === 201 && o1.json?.user?.email === O1.email && typeof o1.json?.accessToken === 'string', o1.text);
+      const O2 = newUser('o2');
+      const o2 = await rawReq('POST', '/api/auth/register', { body: { email: O2.email, password: O2.password, code: 'bilo-koji-kod' }, headers: { 'X-Forwarded-For': O2.ip } });
+      check('otvorena: poslat kod se ignoriše → 201', o2.status === 201 && o2.json?.user?.email === O2.email, o2.text);
+      check('otvorena: nov nalog se prijavljuje', (await login(O1)).status === 200);
     }
     await expectError('duplikat (velika slova) → 409', reg({ email: A.email.toUpperCase(), password: X.password, code: CODE }), 409, 'Nalog sa tom email adresom već postoji.');
     const lg = await login(X, { ip });
@@ -447,7 +458,7 @@ async function authSections() {
     await expectError('prijava nepostojeći email → 401 (ista poruka)', rawReq('POST', '/api/auth/login', { body: { email: `nema-${RUN}@example.test`, password: A.password }, headers: { 'X-Forwarded-For': ip } }), 401, 'Pogrešan email ili lozinka.');
     await expectError('prijava neispravan email → 401', rawReq('POST', '/api/auth/login', { body: { email: 'nije-email', password: A.password }, headers: { 'X-Forwarded-For': ip } }), 401, 'Pogrešan email ili lozinka.');
     await expectStatus('prijava bez lozinke → 400', rawReq('POST', '/api/auth/login', { body: { email: A.email }, headers: { 'X-Forwarded-For': ip } }), 400);
-    // Tab iz verzije pre naloga šalje samo { password } (APP_PASSWORD): poruka kaže da osveži stranicu.
+    // Tab iz verzije pre naloga šalje samo { password } (lozinka aplikacije): poruka kaže da osveži stranicu.
     await expectError('prijava bez emaila (stari klijent) → 400 client_outdated', rawReq('POST', '/api/auth/login', { body: { password: 'stara-lozinka-aplikacije' }, headers: { 'X-Forwarded-For': ip } }), 400, 'Ritam je ažuriran. Osveži stranicu (ili zatvori i ponovo otvori aplikaciju), pa se prijavi email-om.', 'client_outdated');
     await expectStatus('prijava bez X-Ritam → 403', rawReq('POST', '/api/auth/login', { body: { email: A.email, password: A.password }, csrf: false, headers: { 'X-Forwarded-For': ip } }), 403);
     const S = device(A);
@@ -724,6 +735,28 @@ async function authSections() {
     check('11. promena lozinke → 429', p11.status === 429, p11.text);
     const pl = await rawReq('POST', '/api/auth/login', { body: { email: P.email, password: P.password }, headers: { 'X-Forwarded-For': fakeIp() } });
     check('i prijava tim emailom → 429', pl.status === 429, pl.text);
+  });
+
+  await section('code signup', async () => {
+    const url = process.env.SMOKE_CODE_URL?.replace(/\/+$/, '');
+    if (!url) return skip('registracija uz kod', 'postavi SMOKE_CODE_URL (instanca sa SIGNUP=code) i SIGNUP_CODE');
+    if (!check('uz kod: SIGNUP_CODE je postavljen za test', CODE !== '')) return;
+    const cfg = await rawReq('GET', '/api/auth/config', { base: url });
+    check('uz kod: config { signup: "code" }', same(cfg.json, { signup: 'code' }), cfg.text);
+    const K = newUser('k');
+    const reg = (body) => rawReq('POST', '/api/auth/register', { base: url, body, headers: { 'X-Forwarded-For': K.ip } });
+    await expectError('uz kod: registracija bez koda → 403 bad_code', reg({ email: K.email, password: K.password }), 403, 'Pogrešan kod za registraciju.', 'bad_code');
+    await expectError('uz kod: pogrešan kod → 403 bad_code', reg({ email: K.email, password: K.password, code: `${CODE}x` }), 403, 'Pogrešan kod za registraciju.', 'bad_code');
+    const ok = await reg({ email: K.email, password: K.password, code: ` ${CODE} ` });
+    check('uz kod: tačan kod (razmaci na krajevima se ne računaju) → 201', ok.status === 201 && ok.json?.user?.email === K.email, ok.text);
+    if (ok.status === 201) {
+      const exp = await rawReq('GET', '/api/export', { base: url, token: ok.json.accessToken });
+      check('uz kod: nov nalog je prazan (instanca nema podatke bez vlasnika)', exp.status === 200 && isEmptyExport(exp.json), exp.text.slice(0, 200));
+    }
+    const lg = await rawReq('POST', '/api/auth/login', { base: url, body: { email: K.email, password: K.password }, headers: { 'X-Forwarded-For': fakeIp() } });
+    check('uz kod: prijava novim nalogom (bez koda) → 200', lg.status === 200 && lg.json?.user?.email === K.email, lg.text);
+    await expectError('uz kod: duplikat sa pogrešnim kodom → 403 (kod pre emaila)', reg({ email: K.email, password: K.password, code: 'pogresan' }), 403, undefined, 'bad_code');
+    await expectError('uz kod: duplikat sa tačnim kodom → 409', reg({ email: K.email, password: K.password, code: CODE }), 409, 'Nalog sa tom email adresom već postoji.');
   });
 
   await section('closed signup', async () => {
@@ -1067,8 +1100,14 @@ async function main() {
     await expectStatus('beleška > 20000 → 400', patch(`/api/days/${D2}`, { note: 'x'.repeat(20001) }), 400);
     await expectStatus('mutacija bez X-Ritam → 403', patch(`/api/days/${D2}`, { rating: 2 }, { csrf: false }), 403);
     await expectStatus('neispravan JSON → 400', req('PATCH', `/api/days/${D2}`, { rawBody: '{"note": ' }), 400);
-    const big = await req('PATCH', `/api/days/${D2}`, { rawBody: JSON.stringify({ note: 'x'.repeat(1_100_000) }) });
-    check('telo > 1 MB → 413', big.status === 413, `status ${big.status}`);
+    // Server odgovara 413 sa Connection: close dok se telo još šalje, pa klijent ponekad dobije prekid konekcije.
+    try {
+      const big = await req('PATCH', `/api/days/${D2}`, { rawBody: JSON.stringify({ note: 'x'.repeat(1_100_000) }) });
+      check('telo > 1 MB → 413', big.status === 413, `status ${big.status}`);
+    } catch (err) {
+      const code = err?.cause?.code;
+      check('telo > 1 MB → 413 (ili server zatvara konekciju)', ['ECONNRESET', 'EPIPE', 'UND_ERR_SOCKET'].includes(code), String(err?.cause ?? err));
+    }
   });
 
   // ---- Blokovi ----

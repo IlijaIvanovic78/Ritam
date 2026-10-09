@@ -8,8 +8,9 @@ services:
       - "127.0.0.1:3001:3000"
 
     environment:
-      APP_PASSWORD: ${APP_PASSWORD:?APP_PASSWORD is required}
       SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET is required}
+      SIGNUP: ${SIGNUP:-open}
+      SIGNUP_CODE: ${SIGNUP_CODE:-}
       TRUST_PROXY: "1"
       TZ: Europe/Belgrade
 

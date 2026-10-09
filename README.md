@@ -12,10 +12,13 @@ Treba ti Docker Desktop. U folderu projekta:
 docker compose up -d --build
 ```
 
-Otvori http://localhost:3001 i izaberi **Napravi nalog**: email, lozinka (bar 8 znakova) i **kod za registraciju**,
-a to je `APP_PASSWORD` iz fajla `.env`. Ako fajl ne postoji, napravi ga po uzoru na `.env.example` (`APP_PASSWORD` i
-`SESSION_SECRET` su obavezni). Vrednosti u `.env` piši u jednostrukim navodnicima (`APP_PASSWORD='…'`): bez njih
-Docker Compose menja znak `$`, pa pravi kod ne bi radio.
+Pre prvog pokretanja napravi fajl `.env` po uzoru na `.env.example`. Obavezan je samo `SESSION_SECRET`
+(`openssl rand -hex 32`); vrednosti piši u jednostrukim navodnicima (`SESSION_SECRET='…'`), jer bez njih Docker
+Compose menja znak `$`.
+
+Otvori http://localhost:3001 i izaberi **Napravi nalog**: samo email i lozinka (bar 8 znakova). Posle toga se
+prijavljuješ istim email-om i lozinkom. Posebne lozinke ili koda aplikacije nema (nekadašnji `APP_PASSWORD` se više ne
+koristi, pa ga možeš obrisati iz `.env`).
 
 `docker-compose.yml` vezuje aplikaciju samo na `127.0.0.1:3001`, pa je na serveru dostupna samo preko
 Nginx-a na istoj mašini. Gotov config je u `deploy/nginx/ritamorg.com.conf`, a koraci su u Opciji B ispod.
@@ -28,20 +31,25 @@ Zaustavljanje: `docker compose down`. Podaci ostaju u Docker volumenu `<ime fold
 - **Prijava**: email i lozinka. Nema dvostepene provere ni resetovanja lozinke — zapamti lozinku (menadžer lozinki) i
   povremeno preuzmi rezervnu kopiju. Lozinku menjaš u **Podešavanjima → Nalog → Promeni lozinku**; to odjavljuje sve
   ostale uređaje.
-- **Registracija** (env `SIGNUP`):
-  - `code` — nalog može da napravi samo ko zna kod za registraciju: `SIGNUP_CODE`, a ako nije postavljen
-    `APP_PASSWORD`. Ovo je podrazumevano kad kod postoji (i u `docker-compose.yml`, koji uvek prosleđuje `APP_PASSWORD`).
-  - `open` — svako ko vidi server može da napravi nalog. Podrazumevano kad koda nema (npr. `npm run dev`), i tada
-    server sluša samo na ovoj mašini (127.0.0.1): na adresi dostupnoj iz mreže (npr. `HOST=0.0.0.0` u Docker-u) se
-    bez koda ne pokreće, osim uz izričit `SIGNUP=open` (tada upozorava u logu).
-  - `closed` — nove naloge niko ne može da napravi (postojeći se normalno prijavljuju). Kad napraviš svoje naloge,
-    dodaj `SIGNUP: closed` u `environment` u `docker-compose.yml` (ili u Railway Variables) i ponovo pokreni kontejner.
-- **`APP_PASSWORD` više nije lozinka za prijavu**, nego kod za registraciju. Promena koda nikog ne odjavljuje.
+- **Registracija** (env `SIGNUP`, u Docker-u iz `.env`):
+  - `open` (podrazumevano) — nalog pravi svako ko otvori aplikaciju, samo email-om i lozinkom. Svaki nalog vidi
+    samo svoje podatke. Na javnom serveru to znači da svako ko nađe sajt može da napravi nalog i čuva podatke na
+    tvom serveru, bez ograničenja veličine po nalogu.
+  - `closed` — nove naloge niko ne može da napravi, a postojeći se normalno prijavljuju. Kad napraviš svoje naloge
+    (i naloge ukućana), ovo drži aplikaciju privatnom: dodaj `SIGNUP='closed'` u `.env` i pokreni
+    `docker compose up -d` (na Railway-u: `SIGNUP=closed` u Variables). Za nov nalog kasnije privremeno ukloni tu
+    liniju.
+  - `code` — nalog može da napravi samo ko zna kod: `SIGNUP='code'` i `SIGNUP_CODE='…'` u `.env`. Kod se unosi
+    samo pri registraciji; prijava je i dalje email i lozinka. Bez `SIGNUP_CODE` server se ne pokreće.
+- **Nema lozinke aplikacije.** `APP_PASSWORD` se više ne koristi ni za prijavu ni za registraciju; ako je još
+  postavljen, server ga ignoriše (jedan red u logu to kaže).
 - **Prvi nalog preuzima postojeće podatke.** Ako si Ritam koristio pre naloga, posle ažuriranja svi dosadašnji
   podaci (dani, blokovi, zadaci, beleške, raspored i podešavanja) čekaju vlasnika; u logu piše
-  `Ritam: baza ima podatke iz verzije bez naloga — prvi nalog koji se registruje ih preuzima.` Zato odmah posle
-  ažuriranja napravi **svoj** nalog (sa kodom = dosadašnji `APP_PASSWORD`): on dobija sve, ništa se ne briše ni ne
-  menja. Svaki sledeći nalog počinje prazan.
+  `Ritam: baza ima podatke iz verzije bez naloga — prvi nalog koji se registruje ih preuzima.`, a uz otvorenu
+  registraciju i upozorenje `Ritam: PAŽNJA — registracija je otvorena, pa SVE te podatke dobija PRVI ko napravi
+  nalog…`. Zato odmah posle ažuriranja otvori aplikaciju i napravi **svoj** nalog: on dobija sve, ništa se ne briše ni
+  ne menja. Svaki sledeći nalog počinje prazan. Ako ne možeš odmah, ažuriraj uz `SIGNUP='code'` i `SIGNUP_CODE='…'` u
+  `.env` (nalog tada pravi samo ko zna kod), pa te dve linije ukloni kad napraviš nalog.
 - **Sesija**: aplikacija dobija kratak access token (15 min, samo u memoriji) i refresh token (HttpOnly kolačić,
   90 dana), koji se menja pri svakom osvežavanju. Uređaj koji se koristi ostaje prijavljen; uređaj koji se ne otvori
   90 dana se odjavi. Stari refresh token upotrebljen ponovo (krađa kolačića) odjavljuje taj uređaj.
@@ -59,10 +67,10 @@ npm install
 npm run dev
 ```
 
-Server radi na :3000, a Vite sa hot reload-om na http://localhost:5173. Bez `APP_PASSWORD`/`SIGNUP_CODE`
-registracija je otvorena (napravi nalog na ekranu prijave), pa server sluša samo na ovoj mašini (127.0.0.1). Za
-pristup sa telefona u istoj mreži postavi `SIGNUP_CODE` (kod za registraciju): tada sluša na svim adresama, a nalog
-može da napravi samo ko zna kod. Ako postojeća baza (`./data`) ima podatke iz verzije bez naloga, prvi nalog ih preuzima.
+Server radi na :3000, a Vite sa hot reload-om na http://localhost:5173. Napravi nalog na ekranu prijave (email +
+lozinka; registracija je podrazumevano otvorena). Bez `HOST` server sluša samo na ovoj mašini (127.0.0.1); za
+pristup sa telefona u istoj mreži pokreni produkcijski server sa `HOST=0.0.0.0 npm start` (posle `npm run build`).
+Ako postojeća baza (`./data`) ima podatke iz verzije bez naloga, prvi nalog ih preuzima.
 
 Ostale komande: `npm run typecheck`, `npm run build`, `npm start` (produkcijski server, servira `dist/web`).
 
@@ -71,17 +79,22 @@ svoje naloge, a prvi nalog na serveru bi preuzeo podatke iz verzije bez naloga. 
 istek i obnovu tokena, rotaciju refresh tokena, odjavu, promenu lozinke, ograničenja pokušaja, sve funkcije
 aplikacije (kao nalog A) i potpunu odvojenost podataka dva naloga. Kratak `ACCESS_TOKEN_TTL_SEC` i
 `REFRESH_RACE_GRACE_SEC` (isti broj za server i test) skraćuju čekanje u proverama isteka i ponovo upotrebljenog tokena.
-Zatvorenu registraciju proverava uz drugu privremenu instancu sa `SIGNUP=closed` (`SMOKE_CLOSED_URL`). Obe instance
-uvek pokreni sa novim, praznim `DATA_DIR`:
+Glavna instanca ima podrazumevanu, otvorenu registraciju. Registraciju uz kod proverava uz drugu instancu sa
+`SIGNUP=code` (`SMOKE_CODE_URL`, isti `SIGNUP_CODE` za server i test), a zatvorenu uz treću sa `SIGNUP=closed`
+(`SMOKE_CLOSED_URL`). Svaku instancu uvek pokreni sa novim, praznim `DATA_DIR`:
 
 ```bash
-DATA_DIR=/tmp/ritam-test PORT=3999 SIGNUP_CODE=x ACCESS_TOKEN_TTL_SEC=3 REFRESH_RACE_GRACE_SEC=2 npm start
-DATA_DIR=/tmp/ritam-closed PORT=3998 SIGNUP=closed npm start
-BASE_URL=http://localhost:3999 SMOKE_CLOSED_URL=http://localhost:3998 SIGNUP_CODE=x REFRESH_RACE_GRACE_SEC=2 node scripts/smoke.mjs
+DATA_DIR=/tmp/ritam-test PORT=3999 ACCESS_TOKEN_TTL_SEC=3 REFRESH_RACE_GRACE_SEC=2 npm start
+DATA_DIR=/tmp/ritam-code PORT=3998 SIGNUP=code SIGNUP_CODE=x npm start
+DATA_DIR=/tmp/ritam-closed PORT=3997 SIGNUP=closed npm start
+BASE_URL=http://localhost:3999 SMOKE_CODE_URL=http://localhost:3998 SIGNUP_CODE=x \
+  SMOKE_CLOSED_URL=http://localhost:3997 REFRESH_RACE_GRACE_SEC=2 node scripts/smoke.mjs
 ```
 
-Na kraju piše `Ukupno: N PASS, 0 FAIL`. Bez druge instance (bez `SMOKE_CLOSED_URL`) provera zatvorene registracije se
-preskače, pa zbir ima `1 SKIP` i manje PASS-ova — to nije greška.
+Na kraju piše `Ukupno: N PASS, 0 FAIL`. Bez dodatnih instanci (bez `SMOKE_CODE_URL` / `SMOKE_CLOSED_URL`) te provere
+se preskaču, pa zbir ima `1 SKIP` ili `2 SKIP` i manje PASS-ova — to nije greška. Ceo test može da ide i na instanci
+koja traži kod (`BASE_URL` instance sa `SIGNUP=code SIGNUP_CODE=x`, uz `SIGNUP_CODE=x` za test): tada svi nalozi testa
+nastaju uz kod.
 
 ## Prvi koraci
 
@@ -120,20 +133,24 @@ menja. Zatim napravi svoj raspored po koracima iznad. Ako želiš da sačuvaš i
 
 ## Postavljanje na internet
 
-Aplikacija je jedan Docker kontejner sa jednim volumenom (`/data`). Obavezna env promenljiva je kod za registraciju
-(`APP_PASSWORD` ili `SIGNUP_CODE`), osim uz `SIGNUP=open`/`closed`; bez nje se server u kontejneru ne pokreće. PWA na
-telefonu traži HTTPS.
+Aplikacija je jedan Docker kontejner sa jednim volumenom (`/data`). Jedina obavezna env promenljiva je
+`SESSION_SECRET`; lozinke ili koda aplikacije nema. Registracija je podrazumevano otvorena (email + lozinka), pa:
+odmah posle prvog pokretanja otvori sajt i napravi svoj nalog. **Preporučeno za javni server:** kad napraviš svoje
+naloge (i naloge ukućana), zatvori registraciju sa `SIGNUP=closed` (vidi "Nalozi"), jer inače svako ko nađe sajt može
+da napravi nalog i puni disk servera. PWA na telefonu traži HTTPS.
 
 ### Opcija A: Railway (najlakše, bez održavanja servera)
 
 1. Postavi projekat na GitHub kao privatni repo.
 2. Na railway.com napravi projekat sa opcijom "Deploy from GitHub repo". Railway sam prepozna `Dockerfile`.
 3. U servisu dodaj **Volume** sa mount putanjom `/data`.
-4. U **Variables** postavi `APP_PASSWORD` (kod za registraciju; dugačak, nasumičan) i `SESSION_SECRET`
-   (`openssl rand -hex 32`, bar 32 znaka). Dodaj i `RAILWAY_RUN_UID=0`: Railway volumen pripada root-u, a aplikacija u kontejneru
-   inače radi kao korisnik `node` i ne bi mogla da upiše bazu. Dodaj i `TRUST_PROXY=1`: zahtevi stižu preko Railway
-   proxy-ja, pa se adresa klijenta (za ograničenje pokušaja prijave) čita iz `X-Forwarded-For`.
-5. U **Networking** klikni "Generate Domain". Dobijaš `https://<ime>.up.railway.app`. Otvori ga i napravi svoj nalog.
+4. U **Variables** postavi `SESSION_SECRET` (`openssl rand -hex 32`, bar 32 znaka). Dodaj i `RAILWAY_RUN_UID=0`:
+   Railway volumen pripada root-u, a aplikacija u kontejneru inače radi kao korisnik `node` i ne bi mogla da upiše
+   bazu. Dodaj i `TRUST_PROXY=1`: zahtevi stižu preko Railway proxy-ja, pa se adresa klijenta (za ograničenje
+   pokušaja prijave) čita iz `X-Forwarded-For`. `APP_PASSWORD` više ne treba (ako postoji, obriši ga).
+5. U **Networking** klikni "Generate Domain". Dobijaš `https://<ime>.up.railway.app`. Otvori ga i odmah napravi svoj
+   nalog (**Napravi nalog**: email + lozinka). **Preporučeno:** zatim dodaj `SIGNUP=closed` u Variables (nove naloge
+   tada niko ne može da napravi), jer inače svako ko nađe adresu može da napravi nalog i čuva podatke na servisu.
 6. Proveri adresu klijenta: na stranici prijave namerno unesi pogrešnu lozinku, pa u logu servisa
    (Deployments → View Logs) nađi red `Ritam: neuspela prijava (adresa …)`. Tu treba da piše tvoja javna IP adresa
    (vidi je npr. na https://ifconfig.me). Ako piše neka druga (adresa Railway-a), postavi `TRUST_PROXY=2` i proveri
@@ -151,7 +168,7 @@ Primer je za domen `ritamorg.com`; ako koristiš drugi, zameni ga u komandama i 
    ```bash
    curl -fsSL https://get.docker.com | sh
    git clone https://github.com/IlijaIvanovic78/Ritam.git && cd Ritam
-   cp .env.example .env && nano .env      # APP_PASSWORD (kod za registraciju) i SESSION_SECRET, u jednostrukim navodnicima
+   cp .env.example .env && nano .env      # SESSION_SECRET, u jednostrukim navodnicima
    docker compose up -d --build
    curl http://127.0.0.1:3001/api/health  # {"ok":true,...}
    ```
@@ -177,11 +194,24 @@ Primer je za domen `ritamorg.com`; ako koristiš drugi, zameni ga u komandama i 
    Certbot dopiše HTTPS deo u Nginx config, preusmeri HTTP na HTTPS i sam obnavlja sertifikat.
 5. **Firewall:** otvori samo 22, 80 i 443 (`sudo ufw allow OpenSSH && sudo ufw allow 'Nginx Full' && sudo ufw enable`,
    ili isto u Hetzner Cloud Firewall-u). Port 3001 ne otvaraj, jer je vezan samo za 127.0.0.1.
-6. Otvori `https://ritamorg.com` i napravi svoj nalog (kod = `APP_PASSWORD`).
+6. Otvori `https://ritamorg.com`, izaberi **Napravi nalog** i unesi email i lozinku. To je sve — prijava je od tada
+   tim email-om i lozinkom, na svakom uređaju.
+7. **Preporučeno za javni server:** kad napraviš svoje naloge, zatvori registraciju (inače svako ko nađe sajt može
+   da napravi nalog i puni disk servera):
+
+   ```bash
+   nano .env                               # dodaj red: SIGNUP='closed'
+   docker compose up -d                    # kontejner se ponovo pravi sa novim okruženjem
+   docker compose logs ritam | tail -n 3   # … registracija: zatvorena …
+   ```
+
+   Za nov nalog kasnije obriši tu liniju iz `.env` i ponovo pokreni `docker compose up -d`.
 
 **Nadogradnja:** pre nadogradnje u aplikaciji preuzmi kopiju (**Podešavanja → Preuzmi kopiju (JSON)**) ili sačuvaj
-ceo volumen (vidi "Rezervna kopija"), pa `git pull && docker compose up -d --build`. Posle nadogradnje sa verzije bez
-naloga odmah napravi svoj nalog — prvi nalog preuzima sve postojeće podatke (vidi "Nalozi"). Aplikacija koja je ostala
+ceo volumen (vidi "Rezervna kopija"), pa `git pull && docker compose up -d --build`. `APP_PASSWORD` u `.env` iz
+ranije verzije više ne treba (docker-compose.yml ga ne prosleđuje), pa ga možeš obrisati. Posle nadogradnje sa
+verzije bez naloga **odmah** otvori sajt i napravi svoj nalog — prvi nalog preuzima sve postojeće podatke, a
+registracija je otvorena (vidi "Nalozi"; `docker compose logs ritam` tada pokazuje upozorenje `PAŽNJA`). Aplikacija koja je ostala
 otvorena (npr. PWA na telefonu) može još jednom da pokaže staru prijavu samo sa lozinkom i poruku "Ritam je ažuriran.
 Osveži stranicu…": osveži je (ili zatvori i ponovo otvori aplikaciju) i prijavi se email-om.
 
@@ -204,8 +234,8 @@ i baza; obriši je kad nova verzija proradi.
 ### Izgubljen telefon
 
 Na drugom uređaju se prijavi i promeni lozinku (**Podešavanja → Nalog → Promeni lozinku**): svi ostali uređaji se
-odjavljuju odmah (access token koji je telefon već imao važi još najviše 15 minuta). Promena `APP_PASSWORD` menja samo
-kod za registraciju, a promena `SESSION_SECRET` samo traži nove access tokene — nijedna ne odjavljuje uređaje.
+odjavljuju odmah (access token koji je telefon već imao važi još najviše 15 minuta). Promena `SESSION_SECRET` samo
+traži nove access tokene i ne odjavljuje uređaje.
 
 ### Rezervna kopija
 

@@ -35,7 +35,7 @@ export interface AuthDeps {
   accounts: Accounts;
   tokens: AccessTokens;
   signup: SignupPolicy;
-  /** Kod za registraciju (SIGNUP_CODE, inače APP_PASSWORD); '' = nema koda. */
+  /** Kod za registraciju (SIGNUP_CODE) kad je signup 'code'; inače ''. */
   signupCode: string;
   refreshTtlSec: number;
   /**
@@ -241,7 +241,7 @@ export function registerAuthRoutes(api: Hono<ApiEnv>, deps: AuthDeps): void {
     registerLimiter.fail([regKey]);
 
     // Kod se proverava i za prvi nalog: nov javni server ne sme da preuzme bilo ko.
-    if (signup === 'code' && !codeMatches(input.code ?? '', signupCode)) {
+    if (signup === 'code' && !codeMatches((input.code ?? '').trim(), signupCode)) {
       console.warn(`Ritam: pogrešan kod za registraciju (adresa ${logAddress(address)}).`);
       throw new HttpError(403, 'Pogrešan kod za registraciju.', 'bad_code');
     }
@@ -255,7 +255,7 @@ export function registerAuthRoutes(api: Hono<ApiEnv>, deps: AuthDeps): void {
 
   api.post('/auth/login', async (c) => {
     const input = await body(c, loginInput);
-    // Tab koji je ostao otvoren iz verzije pre naloga šalje samo lozinku (APP_PASSWORD): umesto zbunjujućeg
+    // Tab koji je ostao otvoren iz verzije pre naloga šalje samo lozinku aplikacije: umesto zbunjujućeg
     // "Unesi ispravnu email adresu." ispod polja Lozinka, poruka kaže da osveži stranicu.
     if (input.email === undefined) throw new HttpError(400, CLIENT_OUTDATED, 'client_outdated');
     const email = normalizeEmail(input.email);

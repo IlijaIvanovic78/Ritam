@@ -181,7 +181,10 @@ transakciji svi redovi sa `user_id = 0` dobijaju njegov id (blokovi prate svoj d
 ranije verzije). Ako je baza imala podatke (kategorije, šabloni, zadaci ili dani bez vlasnika), upisuje se i
 `meta.legacy_owner` = id tog naloga: odgovori naloga (registracija, prijava, osvežavanje, promena lozinke, `me`) mu uz
 korisnika šalju `legacyOwner: true`, pa samo on na uređaju preuzima i draftove beleški iz te verzije (sekcija 6).
-Svaki sledeći nalog počinje prazan: 7 redova `weekday_templates` bez šablona i podrazumevana podešavanja. Prvi nalog i na `SIGNUP=code` mora da zna kod (nov javni server ne sme da preuzme bilo ko).
+Svaki sledeći nalog počinje prazan: 7 redova `weekday_templates` bez šablona i podrazumevana podešavanja. Preuzimanje
+ne zavisi od politike registracije: uz otvorenu registraciju (podrazumevano) podatke dobija prvi ko napravi nalog, pa
+server pri pokretanju to glasno upozorava (sekcija 5, "Registracija"), a vlasnik pravi svoj nalog odmah posle
+nadogradnje (README); uz `SIGNUP=code` i prvi nalog mora da zna kod.
 
 ### Inicijalizacija dana (lenja)
 - Dan se **ne pravi unapred**. `GET /api/days/:date`:
@@ -282,16 +285,27 @@ i šta). Namerno prihvaćeno za mali (porodični) server; neprozirni id-jevi po 
     refresh token …` → 401 `invalid_refresh`. Istekao ili nepoznat → 401 `invalid_refresh`. Uz `invalid_refresh` se
     kolačić briše.
   - Istekli tokeni se brišu usput (najviše jednom u 10 min); opozvani ostaju do isteka (krađa se otkriva i kasnije).
-- **Registracija** (env `SIGNUP` = `open` | `code` | `closed`; neispravna vrednost → izlaz 1). Kod = `SIGNUP_CODE`, a ako
-  nije postavljen `APP_PASSWORD` (docker-compose.yml ga uvek prosleđuje: to više NIJE lozinka za prijavu, nego kod za
-  registraciju). Bez `SIGNUP`: `code` kad kod postoji, inače `open`. `SIGNUP=code` bez koda → izlaz 1. Kod se poredi u
-  konstantnom vremenu (SHA-256 + `timingSafeEqual`) i traži se i za prvi nalog.
-  Podrazumevano otvorena registracija (nema koda, nema `SIGNUP`) znači da server bez `HOST` sluša samo na `127.0.0.1`
-  (log `Ritam: nema koda za registraciju — … sluša samo na 127.0.0.1 …`), a sa `HOST` koji nije loopback (`localhost`,
-  `::1`, `127.x.x.x`; npr. Docker `HOST=0.0.0.0`) se ne pokreće (izlaz 1, poruka: postavi `SIGNUP_CODE`/`APP_PASSWORD`
-  ili `SIGNUP=open` ako je namerno) — inače bi svako na mreži mogao da napravi prvi nalog i preuzme postojeće podatke.
-  Izričit `SIGNUP=open` na adresi koja nije loopback → upozorenje u logu (bez obzira na `NODE_ENV`), a ako nema naloga
-  a postoje podaci bez vlasnika, upozorenje dodaje da prvi nalog preuzima sve.
+- **Registracija** (env `SIGNUP` = `open` | `closed` | `code`, bez razlike velikih slova; neispravna vrednost → izlaz 1).
+  Nema lozinke ni koda aplikacije: prijava je samo nalogom (email + lozinka).
+  - `open` — **podrazumevano** (bez `SIGNUP` ili prazan): nalog pravi svako, samo email-om i lozinkom; `code` iz tela
+    zahteva se ignoriše. Server se pokreće na bilo kojoj adresi (`HOST`), bez posebnog uslova. Prihvaćen kompromis:
+    uz otvorenu registraciju svako može da koristi prostor na serveru (nema kvote po nalogu ni ograničenja broja
+    naloga, osim ograničenja pokušaja registracije); kontrola za to je `SIGNUP=closed` ili `SIGNUP=code`.
+  - `closed` — nove naloge niko ne pravi (403 `signup_closed`); postojeći nalozi se normalno prijavljuju. Vlasnik ga
+    postavlja kad napravi svoje naloge (docker-compose.yml prosleđuje `SIGNUP` iz `.env`, podrazumevano `open`, i
+    `SIGNUP_CODE`, podrazumevano prazan).
+  - `code` — nalog pravi samo ko pošalje `SIGNUP_CODE` (i prvi nalog). Bez `SIGNUP_CODE` (ili samo razmaci) → izlaz 1:
+    `Ritam: SIGNUP=code traži kod za registraciju — postavi SIGNUP_CODE, ili ukloni SIGNUP=code …`. Razmaci na krajevima
+    koda se ne računaju (ni u env-u ni u zahtevu; klijent ih ionako skida). Kod se poredi u konstantnom vremenu
+    (SHA-256 + `timingSafeEqual`).
+  - `SIGNUP_CODE` uz politiku koja nije `code` se ne koristi → upozorenje `Ritam: SIGNUP_CODE je postavljen, ali se ne
+    koristi (SIGNUP=…)`.
+  - `APP_PASSWORD` (lozinka aplikacije pre naloga, pa kod za registraciju) se više ne čita ni za šta. Ako je postavljen →
+    jedan informativni red `Ritam: APP_PASSWORD se više ne koristi i ignoriše se — …` (registraciju bira `SIGNUP`:
+    `closed` je zatvara, `code` + `SIGNUP_CODE` traži kod).
+  - Uz otvorenu registraciju i podatke bez vlasnika (nema naloga, sekcija 3) → upozorenje u logu da SVE te podatke dobija
+    prvi ko napravi nalog (vidi "Log pri pokretanju" ispod); uz `closed` → upozorenje da ih niko ne može preuzeti dok je
+    registracija zatvorena.
 - **Ograničenja** (u memoriji procesa, prozor 15 min): neuspele prijave po adresi klijenta (IPv6: mreža /64) i po
   email-u, po 10, plus 300 ukupno. Pokušaj se broji pre provere (paralelni zahtevi ne zaobilaze ograničenje), a uspela
   prijava se posle provere poništava (samo taj pokušaj: adresa i ukupno) i briše neuspehe tog email-a — uspele prijave
@@ -308,11 +322,12 @@ i šta). Namerno prihvaćeno za mali (porodični) server; neprozirni id-jevi po 
 
 Rute (javne: `/api/health`, `config`, `register`, `login`, `refresh`, `logout`; ostale traže Bearer):
 - `GET /api/auth/config` → `AuthConfig` `{ signup: 'open' | 'code' | 'closed' }`.
-- `POST /api/auth/register { email, password, code? }` → 201 `AuthResponse` `{ accessToken, expiresIn, user: { id, email,
+- `POST /api/auth/register { email, password, code? }` (`code` samo uz `SIGNUP=code`; uz `open` je dovoljno
+  `{ email, password }`) → 201 `AuthResponse` `{ accessToken, expiresIn, user: { id, email,
   legacyOwner? } }` (`legacyOwner: true` samo za nalog iz `meta.legacy_owner`, sekcija 3; u svim odgovorima naloga)
   + kolačić. Redom: `closed` → 403 `signup_closed` "Registracija nije otvorena."; 400 "Unesi ispravnu email adresu." /
-  "Lozinka mora imati bar 8 znakova." / "Lozinka može imati najviše 200 znakova."; 429; pogrešan ili nedostajući kod
-  (`code`) → 403 `bad_code` "Pogrešan kod za registraciju."; email već postoji → 409 "Nalog sa tom email adresom već
+  "Lozinka mora imati bar 8 znakova." / "Lozinka može imati najviše 200 znakova."; 429; uz `SIGNUP=code` pogrešan ili
+  nedostajući kod (`code`) → 403 `bad_code` "Pogrešan kod za registraciju."; email već postoji → 409 "Nalog sa tom email adresom već
   postoji." (i kad dve registracije stignu istovremeno). Prvi nalog preuzima podatke bez vlasnika (sekcija 3).
 - `POST /api/auth/login { email, password }` → 200 `AuthResponse` + kolačić (nova familija); pogrešan email ili lozinka
   (i neispravan email) → 401 "Pogrešan email ili lozinka."; 429. Telo bez `email` (tab ili PWA iz verzije pre naloga
@@ -434,19 +449,24 @@ Rute (javne: `/api/health`, `config`, `register`, `login`, `refresh`, `logout`; 
   `X-Frame-Options: DENY`, CSP: `default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline';
   script-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'`.
   Preko HTTPS-a (isto pravilo kao `Secure` kolačić) i `Strict-Transport-Security: max-age=31536000`.
-- Env: `PORT` (3000), `HOST` (`0.0.0.0` kad registracija traži kod ili je `SIGNUP` zadat; `127.0.0.1` kad je
-  registracija podrazumevano otvorena — nema koda ni `SIGNUP` — i tada adresa koja nije loopback → izlaz 1, vidi
-  "Registracija"; Docker slika postavlja `HOST=0.0.0.0`), `DATA_DIR` (`./data`,
+- Env: `PORT` (3000), `HOST` (`127.0.0.1` — bez njega server sluša samo na ovoj mašini; Docker slika postavlja
+  `HOST=0.0.0.0`, a docker-compose.yml port na serveru vezuje za `127.0.0.1:3001` iza Nginx-a), `DATA_DIR` (`./data`,
   baza je `DATA_DIR/ritam.db`, ključ `DATA_DIR/session.key`), `STATIC_DIR` (`dist/web`), `TRUST_PROXY` (broj reverse
-  proxy-ja ispred aplikacije, `1` iza Nginx-a/Caddy-ja; neispravna vrednost → izlaz 1), `SIGNUP` (`open` | `code` |
-  `closed`), `SIGNUP_CODE` i `APP_PASSWORD` (kod za registraciju, `SIGNUP_CODE` ima prednost), `SESSION_SECRET`
-  (opciono; ključ potpisa access tokena, bar 32 znaka — kraći uz upozorenje), `ACCESS_TOKEN_TTL_SEC` (900),
-  `REFRESH_TOKEN_TTL_SEC` (7776000),
-  `REFRESH_RACE_GRACE_SEC` (30). Neispravan broj → izlaz 1. `ALLOW_NO_AUTH` se više ne koristi (samo upozorenje u logu).
-- Log pri pokretanju: `Ritam: http://… (baza: …, registracija: otvorena|uz kod|zatvorena, nalozi: N)`; ako nema naloga
+  proxy-ja ispred aplikacije, `1` iza Nginx-a/Caddy-ja; neispravna vrednost → izlaz 1), `SIGNUP` (`open` podrazumevano
+  | `closed` | `code`), `SIGNUP_CODE` (kod za registraciju, samo uz `SIGNUP=code`), `SESSION_SECRET`
+  (opciono za server, obavezno u docker-compose.yml; ključ potpisa access tokena, bar 32 znaka — kraći uz upozorenje),
+  `ACCESS_TOKEN_TTL_SEC` (900), `REFRESH_TOKEN_TTL_SEC` (7776000),
+  `REFRESH_RACE_GRACE_SEC` (30). Neispravan broj → izlaz 1. `APP_PASSWORD` i `ALLOW_NO_AUTH` se više ne koriste (samo
+  red u logu).
+- Log pri pokretanju: `Ritam: http://… (baza: …, registracija: otvorena|uz kod|zatvorena, nalozi: N)`. Ako nema naloga
   a postoje podaci bez vlasnika: `Ritam: baza ima podatke iz verzije bez naloga — prvi nalog koji se registruje ih
-  preuzima.`; nov nalog: `Ritam: nov nalog (id N)[ — preuzeo je postojeće podatke].`; uz to, po potrebi, kopija baze
-  pre migracije (sekcija 3), otvorena registracija (sekcija 5, "Registracija") i prekratak `SESSION_SECRET`.
+  preuzima.`, a uz otvorenu registraciju odmah i upozorenje `Ritam: PAŽNJA — registracija je otvorena, pa SVE te
+  podatke dobija PRVI ko napravi nalog. Odmah otvori aplikaciju i napravi svoj nalog …` (uz `closed`: `Ritam:
+  registracija je zatvorena (SIGNUP=closed), pa te podatke niko ne može da preuzme — …`). Otvorena registracija bez
+  takvih podataka: `Ritam: registracija je otvorena — nalog (email + lozinka) može da napravi svako … SIGNUP=closed
+  zatvara registraciju.` Nov nalog: `Ritam: nov nalog (id N)[ — preuzeo je postojeće podatke].` Uz to, po potrebi,
+  kopija baze pre migracije (sekcija 3), `APP_PASSWORD`/`SIGNUP_CODE`/`ALLOW_NO_AUTH` koji se ne koriste ("Registracija")
+  i prekratak `SESSION_SECRET`.
 - Docker slika nema `VOLUME` instrukciju (Railway je ne dozvoljava); volumen se kači na `/data` spolja.
 - Uredno gašenje na SIGTERM/SIGINT (zatvori server i bazu).
 

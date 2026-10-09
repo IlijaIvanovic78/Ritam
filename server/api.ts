@@ -26,7 +26,7 @@ export interface ApiDeps {
   accounts: Accounts;
   tokens: AccessTokens;
   signup: SignupPolicy;
-  /** Kod za registraciju (SIGNUP_CODE, inače APP_PASSWORD); '' = nema koda. */
+  /** Kod za registraciju (SIGNUP_CODE) kad je signup 'code'; inače ''. */
   signupCode: string;
   refreshTtlSec: number;
   /**

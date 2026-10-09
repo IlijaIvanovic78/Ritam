@@ -32,40 +32,47 @@ function intEnv(name: string, fallback: number, min: number, max: number): numbe
   return n;
 }
 
-// Registracija: SIGNUP = open | code | closed. Kod je SIGNUP_CODE, a ako nije postavljen APP_PASSWORD
-// (docker-compose.yml ga uvek prosleđuje — više nije lozinka za prijavu, nego kod za registraciju).
-const signupCode = env.SIGNUP_CODE || env.APP_PASSWORD || '';
+// Registracija: SIGNUP = open (podrazumevano: nalog pravi svako, samo email + lozinka) | closed (bez novih
+// naloga) | code (nalog pravi samo ko zna SIGNUP_CODE). Kod se koristi samo uz SIGNUP=code.
 const signupRaw = (env.SIGNUP ?? '').trim().toLowerCase();
 let signup: SignupPolicy;
-if (signupRaw === '') signup = signupCode ? 'code' : 'open';
-else if (signupRaw === 'open' || signupRaw === 'code' || signupRaw === 'closed') signup = signupRaw;
+if (signupRaw === '' || signupRaw === 'open') signup = 'open';
+else if (signupRaw === 'code' || signupRaw === 'closed') signup = signupRaw;
 else {
-  console.error(`Ritam: neispravan SIGNUP "${env.SIGNUP}" (open, code ili closed).`);
+  console.error(`Ritam: neispravan SIGNUP "${env.SIGNUP}" (open, closed ili code).`);
   process.exit(1);
 }
+// Klijent šalje kod bez razmaka na krajevima, pa ih nema ni ovde.
+const signupCode = (env.SIGNUP_CODE ?? '').trim();
 if (signup === 'code' && !signupCode) {
-  console.error('Ritam: SIGNUP=code, a kod nije postavljen — postavi SIGNUP_CODE (ili APP_PASSWORD).');
+  console.error(
+    'Ritam: SIGNUP=code traži kod za registraciju — postavi SIGNUP_CODE, ili ukloni SIGNUP=code (registracija je ' +
+      'tada otvorena: nalog se pravi samo email-om i lozinkom).',
+  );
   process.exit(1);
+}
+if (signupCode && signup !== 'code') {
+  console.warn(
+    `Ritam: SIGNUP_CODE je postavljen, ali se ne koristi (SIGNUP=${signup}) — registracija ne traži kod. ` +
+      'Za registraciju uz kod postavi i SIGNUP=code.',
+  );
+}
+// APP_PASSWORD je bio lozinka aplikacije (pre naloga), pa kod za registraciju; sada se ne čita ni za šta.
+if (env.APP_PASSWORD) {
+  console.log(
+    'Ritam: APP_PASSWORD se više ne koristi i ignoriše se — prijava je samo nalogom (email + lozinka), a ' +
+      'registraciju bira SIGNUP: SIGNUP=closed je zatvara kad napraviš svoje naloge, a SIGNUP=code uz SIGNUP_CODE ' +
+      'traži kod. APP_PASSWORD možeš da obrišeš iz okruženja (.env).',
+  );
 }
 if (env.ALLOW_NO_AUTH) {
   console.warn(
     'Ritam: ALLOW_NO_AUTH se više ne koristi — prijava (nalozi) je uvek uključena; registraciju bira SIGNUP.',
   );
 }
-// Bez koda (i bez izričitog SIGNUP=open) registracija je otvorena, pa server podrazumevano sluša samo na ovoj
-// mašini: svako na mreži bi inače mogao da napravi nalog pre vlasnika, a PRVI nalog preuzima postojeće podatke.
-// Sa kodom (Docker: APP_PASSWORD) ili izričitom politikom sluša na svim adresama.
-const openByDefault = signupRaw === '' && signup === 'open';
-const host = env.HOST || (openByDefault ? '127.0.0.1' : '0.0.0.0');
-const isLoopbackHost = host === 'localhost' || host === '::1' || /^127\.\d+\.\d+\.\d+$/.test(host);
-if (openByDefault && !isLoopbackHost) {
-  console.error(
-    `Ritam: nema koda za registraciju (SIGNUP_CODE ili APP_PASSWORD), a server bi slušao na HOST=${host} — svako ` +
-      'ko vidi server mogao bi da napravi nalog, a prvi nalog preuzima postojeće podatke. Postavi SIGNUP_CODE (ili ' +
-      'APP_PASSWORD), ili SIGNUP=open ako je otvorena registracija baš namerna.',
-  );
-  process.exit(1);
-}
+// Bez HOST server sluša samo na ovoj mašini (npm start / npm run dev). Docker slika postavlja HOST=0.0.0.0, a
+// docker-compose.yml port na serveru vezuje samo za 127.0.0.1 (spolja se ide preko Nginx-a).
+const host = env.HOST || '127.0.0.1';
 // Ključ potpisa access tokena se izvodi samo iz SESSION_SECRET: svako ko ima nalog dobija potpisan token i može
 // offline da pogađa kratak (ili rečnički) SECRET, pa da lažira token za bilo koji nalog.
 if (env.SESSION_SECRET && env.SESSION_SECRET.length < 32) {
@@ -101,21 +108,25 @@ if (movedTemplateBlocks > 0) {
   console.log(`Ritam: blokovi šablona van logičkog dana premešteni na drugi kraj dana (${movedTemplateBlocks}).`);
 }
 const userCount = accounts.userIds().length;
+// Podaci iz verzije bez naloga čekaju vlasnika: PRVI nalog koji se registruje ih preuzima (sekcija 3 u SPEC.md).
 const unclaimed = userCount === 0 && accounts.hasUnclaimedData();
 if (unclaimed) {
   console.log('Ritam: baza ima podatke iz verzije bez naloga — prvi nalog koji se registruje ih preuzima.');
-}
-if (signup === 'open' && !isLoopbackHost) {
-  // Ovde je SIGNUP=open izričit (podrazumevano otvorena registracija na mreži se ne pokreće, vidi gore).
-  console.warn(
-    `Ritam: registracija je otvorena svima (SIGNUP=open, HOST=${host}) — bilo ko ko vidi server može da napravi ` +
-      'nalog. Postavi SIGNUP_CODE (ili APP_PASSWORD) da registracija traži kod, ili SIGNUP=closed kad napraviš svoje naloge.' +
-      (unclaimed ? ' PAŽNJA: prvi ko napravi nalog preuzima SVE postojeće podatke — odmah napravi svoj nalog.' : ''),
-  );
-} else if (openByDefault) {
+  if (signup === 'open') {
+    console.warn(
+      'Ritam: PAŽNJA — registracija je otvorena, pa SVE te podatke dobija PRVI ko napravi nalog. Odmah otvori ' +
+        'aplikaciju i napravi svoj nalog ("Napravi nalog": email + lozinka); posle po želji SIGNUP=closed.',
+    );
+  } else if (signup === 'closed') {
+    console.warn(
+      'Ritam: registracija je zatvorena (SIGNUP=closed), pa te podatke niko ne može da preuzme — privremeno ukloni ' +
+        'SIGNUP=closed, napravi svoj nalog, pa je ponovo zatvori.',
+    );
+  }
+} else if (signup === 'open') {
   console.log(
-    `Ritam: nema koda za registraciju — registracija je otvorena, pa server sluša samo na ${host}. Za pristup sa ` +
-      'telefona ili druge mašine postavi SIGNUP_CODE (kod za registraciju).',
+    'Ritam: registracija je otvorena — nalog (email + lozinka) može da napravi svako ko otvori aplikaciju, a svaki ' +
+      'nalog ima svoje podatke. Kad napraviš svoje naloge, SIGNUP=closed zatvara registraciju.',
   );
 }
 // Ključ za potpis access tokena: SESSION_SECRET ili nasumičan ključ uz bazu (DATA_DIR/session.key).
@@ -123,7 +134,17 @@ const sessionKey = env.SESSION_SECRET || loadSessionKey(join(dataDir, 'session.k
 const tokens = createAccessTokens(sessionKey, accessTtlSec);
 // Heš za prijavu sa nepostojećim emailom se pravi unapred (ni prva takva prijava ne traje duže).
 void dummyPasswordHash();
-const app = createApp({ db, repos, accounts, tokens, signup, signupCode, refreshTtlSec, staticDir, proxyHops });
+const app = createApp({
+  db,
+  repos,
+  accounts,
+  tokens,
+  signup,
+  signupCode: signup === 'code' ? signupCode : '',
+  refreshTtlSec,
+  staticDir,
+  proxyHops,
+});
 
 const SIGNUP_LABEL: Record<SignupPolicy, string> = { open: 'otvorena', code: 'uz kod', closed: 'zatvorena' };
 
