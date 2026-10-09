@@ -9,13 +9,17 @@
 // - Slobodno vreme na kraju dopunjava dan do 24h; poslednji blok sme da pređe kraj okvira (preko ponoći).
 //   Blok koji POČINJE posle kraja okvira je dozvoljen (prikaz ga označava), ali nijedan blok ne sme da izađe iz
 //   `isValidRange` (početak < 2880, trajanje ≤ 24h) — takvu izmenu operacija odbija (vraća null).
-// - Mreža je 15 min, najkraći blok 15 min (stari podaci van mreže ostaju kakvi jesu dok ih korisnik ne menja).
+// - Mreža je 5 min, najkraći blok 5 min (stari podaci van mreže ostaju kakvi jesu dok ih korisnik ne menja).
+//   Dugmad "Kraće"/"Duže" (i Shift+↑↓) i dalje menjaju trajanje za 15 min (`LEN_STEP_MIN`).
 //
 // Pravilo talasa: duže / ubacivanje gura stavke posle sebe samo do prvog slobodnog vremena, koje upija razliku;
 // kraće / "završi sad" / zatvaranje praznine povlače stavke posle sebe, a sledeće slobodno vreme raste; brisanje
 // ostavlja slobodno vreme na istom mestu (ništa se ne pomera). Ništa se ne preuređuje samo od sebe.
+// Gornja ivica (početak bloka) je ogledalo: raniji početak prvo troši slobodno vreme odmah pre bloka, pa gura
+// ranije stavke ranije do slobodnog vremena koje upija razliku (nikad pre početka okvira); kasniji početak ostavlja
+// slobodno vreme pre bloka. Kraj bloka i sve posle njega ostaju.
 //
-// Sidrenje (samo danas, A = { now, nows }; nows = now zaokruženo naviše na 15 min): stavke koje su počele
+// Sidrenje (samo danas, A = { now, nows }; nows = now zaokruženo naviše na mrežu): stavke koje su počele
 // (start ≤ now) zadržavaju početak, prošao blok (kraj ≤ now) zadržava i kraj, tekući blok menja samo kraj (ne pre
 // nows), ništa novo se ne stavlja pre nows. Počet blok bez ocene sme da napusti prošlost (ostavlja slobodno vreme i
 // postaje 'pending'); ocenjen ne sme da se pomeri (sme da se oceni, podeli, preimenuje i obriše). `pastOk(prev, next,
@@ -28,9 +32,11 @@ import type { Block, BlockInput, BlockStatus, DayBlockInput } from './types.ts';
 import { DAY_MIN, isValidRange } from './time.ts';
 
 /** Mreža (minuti): pomeranja, trajanja i rezovi se zaokružuju na nju. */
-export const SNAP_MIN = 15;
+export const SNAP_MIN = 5;
 /** Najkraći blok (minuti). */
-export const MIN_BLOCK_MIN = 15;
+export const MIN_BLOCK_MIN = 5;
+/** Korak dugmadi "Kraće"/"Duže" i Shift+↑↓ (minuti); kraj se i dalje poravnava na mrežu. */
+export const LEN_STEP_MIN = 15;
 /** Koliko koraka unazad pamti istorija izmena jednog prikaza. */
 export const HISTORY_LIMIT = 200;
 /** Ponovljena ista izmena (npr. "Kraće" više puta) u ovom roku je jedan korak istorije. */
@@ -70,7 +76,7 @@ export interface Frame {
   end: number;
 }
 
-/** "Sada" za sidrenje (samo danas): `now` = logički minut (sa decimalama), `nows` = now naviše na 15 min. */
+/** "Sada" za sidrenje (samo danas): `now` = logički minut (sa decimalama), `nows` = now naviše na mrežu. */
 export interface Anchor {
   now: number;
   nows: number;
@@ -100,9 +106,9 @@ export type MoveTarget =
 export type BlockFields = Partial<Pick<StackBlock, 'title' | 'categoryId' | 'status' | 'actualMin' | 'note'>>;
 
 export interface StackOptions {
-  /** Mreža (podrazumevano 15). */
+  /** Mreža (podrazumevano SNAP_MIN). */
   snap?: number;
-  /** Najkraći blok (podrazumevano 15). */
+  /** Najkraći blok (podrazumevano MIN_BLOCK_MIN). */
   minDur?: number;
   /** Generator klijentskih id-jeva (testovi); podrazumevano `newItemId`. */
   newId?: (prefix: 'n' | 'f') => string;
@@ -254,6 +260,28 @@ export function createBlockStack(frameOrDayStart: Frame | number, opts: StackOpt
     return l;
   }
 
+  /**
+   * Ogledalo `absorbIn` za gornju ivicu stavke `i`: slobodna vremena pre nje (od najbližeg ka početku dana) daju do
+   * `delta` minuta. Danas staje na stavci koja je počela; slobodno vreme daje samo deo posle nows (ako je sada tačno na
+   * mreži, posle sledećeg koraka: stavka koja počinje u `now` je već počela). Vraća neupijen ostatak.
+   */
+  function absorbBeforeIn(l: StackItem[], i: number, delta: number, A: Anchor | null): number {
+    const st = startsOf(l);
+    const floor = A ? (A.nows > A.now ? A.nows : A.nows + SNAP) : 0;
+    let rest = delta;
+    for (let k = i - 1; k >= 0 && rest > 0; k--) {
+      const f = l[k];
+      if (f.kind === 'free') {
+        const room = A ? clamp(st[k] + f.dur - Math.max(st[k], floor), 0, f.dur) : f.dur;
+        const take = Math.min(room, rest);
+        l[k] = { ...f, dur: f.dur - take };
+        rest -= take;
+      }
+      if (A && st[k] <= A.now) break;
+    }
+    return rest;
+  }
+
   function info(list: Stack, A: Anchor | null): StackInfo {
     const st = startsOf(list);
     let cur = -1;
@@ -326,6 +354,12 @@ export function createBlockStack(frameOrDayStart: Frame | number, opts: StackOpt
     return i >= ff || i === cur;
   }
 
+  /** Bloku sme da se menja početak (gornja ručica): samo blok koji još nije počeo. */
+  function canResizeStart(list: Stack, i: number, A: Anchor | null): boolean {
+    if (list[i]?.kind !== 'block') return false;
+    return !A || i >= info(list, A).ff;
+  }
+
   /** Najkraće trajanje stavke `i`: tekuća ne može da se završi pre nows. */
   function minDurAt(list: Stack, i: number, A: Anchor | null): number {
     if (!A) return MIN;
@@ -353,7 +387,7 @@ export function createBlockStack(frameOrDayStart: Frame | number, opts: StackOpt
 
   /**
    * Trajanje posle koraka `delta` ("Kraće"/"Duže", Shift+↑↓): kraj bloka se poravnava na mrežu (naviše za kraće,
-   * naniže za duže), najmanje `minDurAt`, najviše 24h. Slobodno vreme: ±delta, 15 min..24h. null = ne sme.
+   * naniže za duže), najmanje `minDurAt`, najviše 24h. Slobodno vreme: ±delta, MIN..24h. null = ne sme.
    */
   function stepDur(list: Stack, id: ItemId, delta: number, A: Anchor | null): number | null {
     const i = idxOf(list, id);
@@ -369,6 +403,40 @@ export function createBlockStack(frameOrDayStart: Frame | number, opts: StackOpt
   function opResizeBy(list: Stack, id: ItemId, delta: number, A: Anchor | null): StackItem[] | null {
     const dur = stepDur(list, id, delta, A);
     return dur == null ? null : opResize(list, id, dur);
+  }
+
+  /**
+   * Najraniji i najkasniji početak bloka za gornju ručicu (kraj ostaje): najranije koliko slobodnog vremena pre njega
+   * sme da se potroši, najkasnije kraj − MIN. null = početak ne sme da se menja.
+   */
+  function startRange(list: Stack, id: ItemId, A: Anchor | null): { min: number; max: number } | null {
+    const i = idxOf(list, id);
+    if (i < 0 || !canResizeStart(list, i, A)) return null;
+    const st = startsOf(list)[i];
+    const end = st + list[i].dur;
+    const room = LEN - absorbBeforeIn(list.slice(), i, LEN, A);
+    return { min: Math.max(st - room, end - DAY_MIN), max: Math.max(st, end - MIN) };
+  }
+
+  /**
+   * Nov početak bloka, kraj ostaje (gornja ručica). Raniji: prvo se troši slobodno vreme odmah pre bloka, pa se ranije
+   * stavke guraju ranije do slobodnog vremena koje upija razliku (nikad pre početka okvira; danas ništa što je počelo
+   * i ništa pre nows). Kasniji: pre bloka ostaje slobodno vreme. Stvarno vreme duže od novog trajanja se briše.
+   */
+  function opResizeStart(list: Stack, id: ItemId, start: number, A: Anchor | null): StackItem[] | null {
+    const i = idxOf(list, id);
+    if (i < 0 || !Number.isInteger(start) || !canResizeStart(list, i, A)) return null;
+    const c = list[i] as StackBlock;
+    const d = startsOf(list)[i] - start;
+    const dur = c.dur + d;
+    if (!d || (d < 0 && dur < MIN) || dur > DAY_MIN) return null;
+    const l = list.slice();
+    l[i] = c.actualMin != null && c.actualMin > dur ? { ...c, dur, actualMin: null } : { ...c, dur };
+    if (d > 0) {
+      if (absorbBeforeIn(l, i, d, A) > 0) return null;
+    } else l.splice(i, 0, makeFree(-d, nid('f')));
+    const next = finish(l);
+    return next && pastOk(list, next, A) ? next : null;
   }
 
   /** "Završi sad": tekući blok se završava u nows, sledeće stavke idu ranije. */
@@ -486,8 +554,8 @@ export function createBlockStack(frameOrDayStart: Frame | number, opts: StackOpt
   }
 
   /**
-   * Priprema list "Novi blok": u slobodnom vremenu pomeraj ide na [nows, kraj − 15 min], trajanje = min(1h, ostatak
-   * slobodnog vremena) na mreži (15 min..3h); na šavu 1h. null = tu ne sme ništa novo (prošlost).
+   * Priprema list "Novi blok": u slobodnom vremenu pomeraj ide na [nows, kraj − MIN], trajanje = min(1h, ostatak
+   * slobodnog vremena) na mreži (MIN..3h); na šavu 1h. null = tu ne sme ništa novo (prošlost).
    */
   function prepareInsert(list: Stack, spec: InsertSpec, A: Anchor | null): { spec: InsertSpec; dur: number } | null {
     if (spec.mode === 'free') {
@@ -567,7 +635,7 @@ export function createBlockStack(frameOrDayStart: Frame | number, opts: StackOpt
   }
 
   /**
-   * Deli blok na rezovima `cuts` (minuti od početka bloka, rastući, svaki deo ≥ 15 min). Pravilo kao na serveru:
+   * Deli blok na rezovima `cuts` (minuti od početka bloka, rastući, svaki deo ≥ MIN). Pravilo kao na serveru:
    * prvi deo zadržava id, status i belešku (stvarno vreme se briše ako je duže od dela); ostali delovi su novi
    * nezavisni blokovi sa istim nazivom i kategorijom, 'pending', bez stvarnog vremena i beleške. Vreme se ne pomera.
    */
@@ -592,8 +660,8 @@ export function createBlockStack(frameOrDayStart: Frame | number, opts: StackOpt
   }
 
   /**
-   * `n` jednakih delova na mreži: floor(slotova / n), ostatak ide prvim delovima (2h / 3 = 45 + 45 + 30); minuti van
-   * mreže idu poslednjem delu. null = blok je prekratak (svaki deo bar 15 min).
+   * `n` jednakih delova na mreži: floor(slotova / n), ostatak ide prvim delovima (70m / 3 = 25 + 25 + 20); minuti van
+   * mreže idu poslednjem delu. null = blok je prekratak (svaki deo bar jedan korak mreže).
    */
   function cuts15(dur: number, n: number): number[] | null {
     const slots = Math.floor(dur / SNAP);
@@ -612,13 +680,13 @@ export function createBlockStack(frameOrDayStart: Frame | number, opts: StackOpt
   /** Rez na mreži: `raw` minuta od početka bloka koji počinje u `blockStart` → najbliži minut na mreži dana. */
   const snapCut = (blockStart: number, raw: number): number => Math.round((blockStart + raw) / SNAP) * SNAP - blockStart;
 
-  /** Dodaje rez (bar 15 min od krajeva i od drugih rezova); null = tu ne može. */
+  /** Dodaje rez (bar MIN od krajeva i od drugih rezova); null = tu ne može. */
   function cutAdd(dur: number, cuts: readonly number[], m: number): number[] | null {
     if (!Number.isInteger(m) || m < MIN || m > dur - MIN || cuts.some((x) => Math.abs(x - m) < MIN)) return null;
     return [...cuts, m].sort((a, b) => a - b);
   }
 
-  /** Pomera rez `k` na `m`, ograničeno susednim rezovima (bar 15 min razmaka) i krajevima bloka. */
+  /** Pomera rez `k` na `m`, ograničeno susednim rezovima (bar MIN razmaka) i krajevima bloka. */
   function cutMove(dur: number, cuts: readonly number[], k: number, m: number): number[] {
     const sorted = [...cuts].sort((a, b) => a - b);
     if (k < 0 || k >= sorted.length) return sorted;
@@ -629,7 +697,7 @@ export function createBlockStack(frameOrDayStart: Frame | number, opts: StackOpt
     return sorted;
   }
 
-  /** Blok klizi 15 min kroz susedno slobodno vreme (dir −1 gore, +1 dole); ništa drugo se ne pomera. */
+  /** Blok klizi jedan korak mreže kroz susedno slobodno vreme (dir −1 gore, +1 dole); ništa drugo se ne pomera. */
   function opNudge(list: Stack, id: ItemId, dir: -1 | 1): StackItem[] | null {
     const i = idxOf(list, id);
     const c = list[i];
@@ -718,10 +786,13 @@ export function createBlockStack(frameOrDayStart: Frame | number, opts: StackOpt
     isTrailing,
     canLift,
     canResize,
+    canResizeStart,
     minDurAt,
     opResize,
     stepDur,
     opResizeBy,
+    startRange,
+    opResizeStart,
     opEndNow,
     opMoveTo,
     opMoveBy,

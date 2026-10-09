@@ -18,6 +18,7 @@ import {
   historyRecord,
   historyRedo,
   historyUndo,
+  LEN_STEP_MIN,
   makeBlock,
   makeFree,
   newItemId,
@@ -137,6 +138,8 @@ interface Pending {
 
 interface ResizeState {
   id: ItemId;
+  /** Ivica koja se vuče: 'end' = donja ručica (kraj), 'start' = gornja (početak; kraj ostaje). */
+  edge: 'start' | 'end';
   base: StackItem[];
   d0: number;
   st: number;
@@ -145,6 +148,10 @@ interface ResizeState {
   cur: number;
   h0: number;
   min: number;
+  /** Gornja ručica: najraniji / najkasniji početak i donja ivica bloka na ekranu (ostaje na mestu). */
+  lo: number;
+  hi: number;
+  b0: number;
   /**
    * Automatski skrol tokom ovog poteza (px, ± najviše RS_AUTO_MAX_PX) i vreme poslednjeg koraka — samo uz miš (prst
    * nad trakom akcija bi produžavao blok satima).
@@ -153,10 +160,10 @@ interface ResizeState {
   autoAt: number;
 }
 
-/** Ručica + miš na ivici vidljivog dela: jedan korak (15 min) na ovoliko ms… */
-const RS_AUTO_MS = 190;
+/** Ručica + miš na ivici vidljivog dela: jedan korak mreže (5 min) na ovoliko ms… */
+const RS_AUTO_MS = 65;
 /** …najviše ±2h po potezu. */
-const RS_AUTO_MAX_PX = 8 * STEP_PX;
+const RS_AUTO_MAX_PX = 24 * STEP_PX;
 
 export interface NewBlockState {
   spec: InsertSpec;
@@ -946,6 +953,40 @@ export class StackController {
     this.resizeTo(id, dur, { coalesce: `len:${id}` });
   }
 
+  /** Gornja ručica sa tastature: početak ±`delta` na mrežu (kraj ostaje). */
+  resizeStartBy(id: ItemId, delta: number) {
+    const list = this.items;
+    const i = this.M.idxOf(list, id);
+    if (list[i]?.kind !== 'block') return;
+    if (this.cfg.locked) {
+      this.shake(id);
+      this.message(this.lockedMsg());
+      return;
+    }
+    const range = this.cfg.pastDay ? null : this.M.startRange(list, id, this.anch());
+    if (!range) {
+      this.shake(id);
+      this.message(this.t('blocks.msg.past'));
+      return;
+    }
+    const SNAP = this.M.SNAP;
+    const st = this.M.startsOf(list)[i];
+    const raw = st + delta;
+    const start = clamp(delta < 0 ? Math.ceil(raw / SNAP) * SNAP : Math.floor(raw / SNAP) * SNAP, range.min, range.max);
+    const next = start === st ? null : this.M.opResizeStart(list, id, start, this.anch());
+    if (!next) {
+      this.shake(id);
+      this.message(this.t(delta < 0 ? 'blocks.msg.noFreeUp' : 'blocks.msg.minLen'));
+      return;
+    }
+    const dur = next[this.M.idxOf(next, id)].dur;
+    this.commit(next, {
+      target: id,
+      coalesce: `start:${id}`,
+      msg: this.t('blocks.msg.resized', { name: this.nameOf(list[i]), range: this.rangeIn(next, id) }) + ' · ' + fmtDuration(dur),
+    });
+  }
+
   endNow(id: ItemId) {
     const next = this.M.opEndNow(this.items, id, this.anch());
     if (!next) return;
@@ -1305,10 +1346,10 @@ export class StackController {
         this.endNow(c.id);
         break;
       case 'shorter':
-        this.resizeBy(c.id, -this.M.SNAP);
+        this.resizeBy(c.id, -LEN_STEP_MIN);
         break;
       case 'longer':
-        this.resizeBy(c.id, this.M.SNAP);
+        this.resizeBy(c.id, LEN_STEP_MIN);
         break;
       case 'delete':
         this.del(c.id);
@@ -1389,8 +1430,9 @@ export class StackController {
     if (!row || row.classList.contains('is-ghost')) return;
     const id = this.idOfRow(row);
     if (id == null) return;
-    if (tg.closest('.blk-grip')) {
-      this.startResize(e, id);
+    const grip = tg.closest<HTMLElement>('.blk-grip');
+    if (grip) {
+      this.startResize(e, id, grip.classList.contains('is-start') ? 'start' : 'end');
       return;
     }
     const cut = tg.closest<HTMLElement>('.cut-drag');
@@ -1719,7 +1761,7 @@ export class StackController {
 
   /**
    * Ručica uz miš (dodir nema automatski skrol): tek kad je pokazivač iza ivice vidljivog dela (preko trake akcija ili
-   * iznad trake), jedan korak (15 min) na RS_AUTO_MS, bez obzira na dubinu, i najviše ±2h po potezu.
+   * iznad trake), jedan korak mreže na RS_AUTO_MS, bez obzira na dubinu, i najviše ±2h po potezu.
    */
   private resizeAutoScroll() {
     const rs = this.rs;
@@ -1797,15 +1839,18 @@ export class StackController {
     this.after(() => this.flip(first));
   }
 
-  // --- Trajanje: ručica izabranog bloka (kreće od prvog pomeranja, 20 px = 15 min) ---
+  // --- Trajanje: ručice izabranog bloka (kreću od prvog pomeranja, STEP_PX = jedan korak mreže) ---
 
-  private startResize(e: PointerEvent, id: ItemId) {
+  private startResize(e: PointerEvent, id: ItemId, edge: 'start' | 'end' = 'end') {
     e.preventDefault();
     const list = this.items;
     const A = this.anch();
     const i = this.M.idxOf(list, id);
     const c = list[i];
-    if (!c || c.kind === 'free' || this.cfg.pastDay || this.cfg.locked || !this.M.canResize(list, i, A)) return;
+    if (!c || c.kind === 'free' || this.cfg.pastDay || this.cfg.locked) return;
+    // Gornja ručica: samo na već izabranom bloku koji još nije počeo.
+    const range = edge === 'start' && this.sel === id ? this.M.startRange(list, id, A) : null;
+    if (edge === 'start' ? !range : !this.M.canResize(list, i, A)) return;
     try {
       (e.target as HTMLElement).setPointerCapture(e.pointerId);
     } catch {
@@ -1818,16 +1863,21 @@ export class StackController {
       this.moveSt = null;
     }
     const box = this.boxOf(id);
+    const r = box?.getBoundingClientRect();
     this.rs = {
       id,
+      edge,
       base: list,
       d0: c.dur,
       st: this.M.startsOf(list)[i],
       y0: e.clientY,
       s0: window.scrollY,
       cur: c.dur,
-      h0: box?.getBoundingClientRect().height ?? heightOf(c.dur),
+      h0: r?.height ?? heightOf(c.dur),
       min: this.M.minDurAt(list, i, A),
+      lo: range?.min ?? 0,
+      hi: range?.max ?? 0,
+      b0: r?.bottom ?? 0,
       auto: 0,
       autoAt: 0,
     };
@@ -1839,12 +1889,17 @@ export class StackController {
     this.emit();
     cancelAnimationFrame(this.raf);
     // Dodir: trajanje prati samo prst (opseg je u traci i na oznaci kraja); dalje od ekrana = Duže ili prevlačenje.
-    if (e.pointerType === 'mouse') this.raf = requestAnimationFrame(this.autoScroll);
+    // Gornja ručica nema automatski skrol (donja ivica bloka stoji, skrol je drži na mestu).
+    if (e.pointerType === 'mouse' && edge === 'end') this.raf = requestAnimationFrame(this.autoScroll);
   }
 
   resizeMove(clientY: number) {
     const rs = this.rs;
     if (!rs) return;
+    if (rs.edge === 'start') {
+      this.resizeStartMove(rs, clientY);
+      return;
+    }
     const dy = clientY - rs.y0 + (window.scrollY - rs.s0);
     const steps = Math.round(dy / STEP_PX);
     const SNAP = this.M.SNAP;
@@ -1857,6 +1912,31 @@ export class StackController {
     this.preview = next;
     this.emit();
     vibrate(3);
+  }
+
+  /** Gornja ručica: nov početak na mreži (kraj ostaje); donja ivica bloka ostaje na istom mestu na ekranu. */
+  private resizeStartMove(rs: ResizeState, clientY: number) {
+    const SNAP = this.M.SNAP;
+    const steps = Math.round((clientY - rs.y0) / STEP_PX);
+    const start = clamp(Math.round((rs.st + steps * SNAP) / SNAP) * SNAP, rs.lo, rs.hi);
+    const dur = rs.st + rs.d0 - start;
+    if (dur === rs.cur) return;
+    const next = dur === rs.d0 ? rs.base : this.M.opResizeStart(rs.base, rs.id, start, this.anch());
+    if (!next) return;
+    rs.cur = dur;
+    this.preview = next;
+    this.emit();
+    this.keepBottom(rs.id, rs.b0);
+    vibrate(3);
+  }
+
+  /** Posle crtanja: skrol tako da je donja ivica bloka na `b0` (gornja ivica tada prati prst). */
+  private keepBottom(id: ItemId, b0: number) {
+    this.after(() => {
+      const box = this.boxOf(id);
+      const dy = box ? box.getBoundingClientRect().bottom - b0 : 0;
+      if (Math.abs(dy) >= 0.5) window.scrollBy(0, dy);
+    });
   }
 
   /** Visina bloka koji se upravo produžava (prati prst u koracima od 20 px). */
@@ -1876,9 +1956,10 @@ export class StackController {
       return;
     }
     const r = box.getBoundingClientRect();
+    const top = rs.edge === 'start';
     pill.hidden = false;
-    pill.textContent = fmtClock(rs.st + rs.cur);
-    pill.style.top = `${r.bottom + window.scrollY - this.bsTop()}px`;
+    pill.textContent = fmtClock(top ? rs.st + rs.d0 - rs.cur : rs.st + rs.cur);
+    pill.style.top = `${(top ? r.top : r.bottom) + window.scrollY - this.bsTop()}px`;
   }
 
   private endResize(cancel: boolean) {
@@ -1893,10 +1974,14 @@ export class StackController {
       return;
     }
     const c = r.base.find((x) => x.id === r.id);
-    this.commit(next, {
-      target: r.id,
-      msg: this.t('blocks.msg.resized', { name: c ? this.nameOf(c) : '', range: this.rangeIn(next, r.id) }) + ' · ' + fmtDuration(r.cur),
-    });
+    if (
+      this.commit(next, {
+        target: r.id,
+        msg: this.t('blocks.msg.resized', { name: c ? this.nameOf(c) : '', range: this.rangeIn(next, r.id) }) + ' · ' + fmtDuration(r.cur),
+      }) &&
+      r.edge === 'start'
+    )
+      this.keepBottom(r.id, r.b0);
   }
 
   // --- Rezovi ---
@@ -2058,7 +2143,11 @@ export class StackController {
     if (grip && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
       e.preventDefault();
       const id = this.idOfRow(grip.closest('.blk'));
-      if (id != null) this.resizeBy(id, e.key === 'ArrowUp' ? -this.M.SNAP : this.M.SNAP);
+      const d = e.key === 'ArrowUp' ? -this.M.SNAP : this.M.SNAP;
+      if (id != null) {
+        if (grip.classList.contains('is-start')) this.resizeStartBy(id, d);
+        else this.resizeBy(id, d);
+      }
       return;
     }
     const vert = e.key === 'ArrowUp' || e.key === 'ArrowDown';
@@ -2098,7 +2187,7 @@ export class StackController {
     } else if (vert && e.shiftKey) {
       e.preventDefault();
       if (c.kind === 'block') ensureSel();
-      this.resizeBy(id, dir * this.M.SNAP);
+      this.resizeBy(id, dir * LEN_STEP_MIN);
       refocus();
     } else if (vert) {
       e.preventDefault();

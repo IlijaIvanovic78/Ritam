@@ -236,6 +236,7 @@ export function BlockStack({
       targetFrom: tgt ? (tgt.start ?? null) : null,
       canRate: mode === 'day' && !free && started && !ghost,
       canResize: !free && !ghost && !pastDay && !locked && M.canResize(list, i, A),
+      canResizeStart: !free && !ghost && !pastDay && !locked && M.canResizeStart(list, i, A),
       canInsTop: !free && !locked && (!A || i >= inf.ff),
       canInsBot: !free && !locked && (!A || i + 1 >= inf.ff),
       noLift: pastDay || locked || !M.canLift(list, i, A),

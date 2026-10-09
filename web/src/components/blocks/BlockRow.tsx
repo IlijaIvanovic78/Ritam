@@ -34,6 +34,8 @@ export interface RowView {
   targetFrom: number | null;
   canRate: boolean;
   canResize: boolean;
+  /** Gornja ručica (početak): blok koji još nije počeo. */
+  canResizeStart: boolean;
   canInsTop: boolean;
   canInsBot: boolean;
   noLift: boolean;
@@ -184,6 +186,7 @@ export function BlockRow({ v, statusWord }: { v: RowView; statusWord: (s: BlockS
         v.targetFrom != null && 'is-target',
         !free && `is-${status}`,
         v.canResize && 'can-resize',
+        v.canResizeStart && 'can-resize-start',
         v.canInsTop && 'can-ins-top',
         v.canInsBot && 'can-ins-bot',
         v.noLift && 'no-lift',
@@ -261,8 +264,15 @@ export function BlockRow({ v, statusWord }: { v: RowView; statusWord: (s: BlockS
             </button>
             <button
               type="button"
+              className="blk-grip is-start"
+              aria-label={t('blocks.gripStart')}
+              tabIndex={v.selected && v.canResizeStart ? 0 : -1}
+              data-no-swipe
+            />
+            <button
+              type="button"
               className="blk-grip"
-              aria-label={t('blocks.grip', { name })}
+              aria-label={t('blocks.grip')}
               tabIndex={v.selected && v.canResize ? 0 : -1}
               data-no-swipe
             />

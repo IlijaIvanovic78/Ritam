@@ -209,9 +209,9 @@ describe('scenariji korisnika', () => {
     assert.deepEqual(M.movedBlocks(l, next), []);
     // Slobodno vreme pre sada nema mesta za ništa novo; tekuće slobodno vreme počinje od nows.
     const past = M.normalize([blk('A', 720), makeFree(120), blk('B', 60)]);
-    const B = M.anchor(12 * 60 + 5);
-    assert.equal(M.freeRoom(past, 1, B), 15);
-    assert.deepEqual(must(M.prepareInsert(past, { mode: 'free', freeId: past[1].id, off: 0 }, B)).spec, { mode: 'free', freeId: past[1].id, off: 15 });
+    const B = M.anchor(12 * 60 + 3);
+    assert.equal(M.freeRoom(past, 1, B), 5);
+    assert.deepEqual(must(M.prepareInsert(past, { mode: 'free', freeId: past[1].id, off: 0 }, B)).spec, { mode: 'free', freeId: past[1].id, off: 5 });
     assert.equal(M.prepareInsert(past, { mode: 'seam', at: 0 }, B), null);
   });
 
@@ -241,11 +241,11 @@ describe('scenariji korisnika', () => {
     assert.deepEqual(toBlocks(l, M.frame).invalid, []);
   });
 
-  test('dayStart 60 i "sada" posle ponoći (00:30 = minut 1470)', () => {
+  test('dayStart 60 i "sada" posle ponoći (00:41 = minut 1481)', () => {
     const M = createBlockStack(60);
     const l = M.normalize([blk('Sleep', 420, 'done'), makeFree(840), blk('Late', 90)]);
     assert.deepEqual(lines(M, l), ['01:00-08:00 Sleep [done]', '08:00-22:00 ·free', '22:00-23:30 Late', '23:30-01:00 ·free']);
-    const A = must(M.anchor(1470.5));
+    const A = must(M.anchor(1481.5));
     assert.equal(A.nows, 1485);
     // Late (22:00–23:30) je prošao; slobodno 23:30–01:00 je tekuće.
     const { cur, ff } = M.info(l, A);
@@ -266,41 +266,41 @@ describe('scenariji korisnika', () => {
 
 describe('sidrenje: prošlost se ne pomera', () => {
   const M = createBlockStack(0);
-  const A = must(M.anchor(13 * 60 + 10));
+  const A = must(M.anchor(13 * 60 + 8));
 
-  test('info: tekući Lunch, prvi slobodan Deep work, nows 13:15', () => {
+  test('info: tekući Lunch, prvi slobodan Deep work, nows 13:10', () => {
     const l = sampleDay(M);
-    assert.equal(A.nows, 795);
+    assert.equal(A.nows, 790);
     const inf = M.info(l, A);
     assert.equal(l[inf.cur].kind === 'block' && (l[inf.cur] as StackBlock).title, 'Lunch');
     assert.equal(inf.ff, idx(M, l, 'Deep work'));
   });
 
-  test('Završi sad: Lunch 12:30–13:15, sledeći blokovi idu ranije (ne pre sada)', () => {
+  test('Završi sad: Lunch 12:30–13:10, sledeći blokovi idu ranije (ne pre sada)', () => {
     const l = sampleDay(M);
     const lunch = byTitle(l, 'Lunch');
     const next = must(M.opEndNow(l, lunch.id, A));
     assert.ok(M.pastOk(l, next, A));
-    assert.ok(has(M, next, '12:30-13:15 Lunch') && has(M, next, '13:15-16:15 Deep work'));
+    assert.ok(has(M, next, '12:30-13:10 Lunch') && has(M, next, '13:10-16:10 Deep work'));
     assert.equal(M.opEndNow(l, byTitle(l, 'Deep work').id, A), null);
-    assert.equal(M.minDurAt(l, idx(M, l, 'Lunch'), A), 45);
+    assert.equal(M.minDurAt(l, idx(M, l, 'Lunch'), A), 40);
     // "Kraće" ne ide ispod nows; ocenjen tekući blok sme da se završi sad.
-    assert.equal(M.stepDur(l, lunch.id, -30, A), 45);
+    assert.equal(M.stepDur(l, lunch.id, -30, A), 40);
     const rated = must(M.opRate(l, lunch.id, 'done'));
-    assert.ok(has(M, must(M.opEndNow(rated, lunch.id, A)), '12:30-13:15 Lunch [done]'));
+    assert.ok(has(M, must(M.opEndNow(rated, lunch.id, A)), '12:30-13:10 Lunch [done]'));
   });
 
-  test('tekući blok premešten kasnije: ostavlja slobodno do 13:15, ostalo ide ranije do 13:15', () => {
+  test('tekući blok premešten kasnije: ostavlja slobodno do 13:10, ostalo ide ranije do 13:10', () => {
     const l = sampleDay(M);
     const lunch = byTitle(l, 'Lunch');
     const spots = M.moveTargets(l, lunch.id, A);
-    assert.equal(spots[0].start, 13 * 60 + 15);
+    assert.equal(spots[0].start, 13 * 60 + 10);
     const next = must(M.opMoveTo(l, lunch.id, idx(M, l, 'Deep work') + 1, A));
     assert.ok(M.pastOk(l, next, A));
-    assert.ok(has(M, next, '12:00-13:15 ·free') && has(M, next, '13:15-16:15 Deep work') && has(M, next, '16:15-17:15 Lunch'));
+    assert.ok(has(M, next, '12:00-13:10 ·free') && has(M, next, '13:10-16:10 Deep work') && has(M, next, '16:10-17:10 Lunch'));
     assert.equal(byTitle(next, 'Lunch').status, 'pending');
     const st = M.startsOf(next);
-    assert.ok(next.every((c, i) => c.kind === 'free' || !(st[i] > 790 && st[i] < 795)), 'nijedan blok ne počinje između sada i 13:15');
+    assert.ok(next.every((c, i) => c.kind === 'free' || !(st[i] > 788 && st[i] < 790)), 'nijedan blok ne počinje između sada i 13:10');
   });
 
   test('prošao blok bez ocene ide u slobodno vreme (20:00); njegovo vreme ostaje slobodno', () => {
@@ -352,7 +352,7 @@ describe('sidrenje: prošlost se ne pomera', () => {
   test('tekuće slobodno vreme se zatvara samo do nows', () => {
     const l = M.normalize([blk('A', 780, 'done'), makeFree(60), blk('B', 60)]);
     const next = must(M.opCloseGap(l, l[1].id, A));
-    assert.deepEqual(lines(M, next).slice(0, 3), ['00:00-13:00 A [done]', '13:00-13:15 ·free', '13:15-14:15 B']);
+    assert.deepEqual(lines(M, next).slice(0, 3), ['00:00-13:00 A [done]', '13:00-13:10 ·free', '13:10-14:10 B']);
   });
 
   test('raniji dan (anchor Infinity): ništa se ne pomera, ocene i brisanje rade', () => {
@@ -392,39 +392,40 @@ describe('deljenje', () => {
   });
 
   test('cuts15: jednaki delovi na mreži, ostatak prvim delovima', () => {
-    assert.deepEqual(M.cuts15(120, 3), [45, 90]);
+    assert.deepEqual(M.cuts15(120, 3), [40, 80]);
+    assert.deepEqual(M.cuts15(70, 3), [25, 50]); // 25 + 25 + 20
     assert.deepEqual(M.cuts15(120, 4), [30, 60, 90]);
     assert.deepEqual(M.cuts15(30, 2), [15]);
-    assert.deepEqual(M.cuts15(50, 2), [30]); // minuti van mreže idu poslednjem delu (30 + 20)
-    assert.equal(M.cuts15(25, 2), null);
+    assert.deepEqual(M.cuts15(52, 2), [25]); // minuti van mreže idu poslednjem delu (25 + 27)
+    assert.equal(M.cuts15(8, 2), null);
     assert.equal(M.cuts15(60, 1), null);
-    assert.equal(M.cuts15(45, 4), null);
+    assert.equal(M.cuts15(15, 4), null);
   });
 
-  test('proizvoljni rezovi: na mreži, bar 15 min, rastući', () => {
+  test('proizvoljni rezovi: na mreži, bar 5 min, rastući', () => {
     const l = M.normalize([blk('Work', 120, 'pending', null, '', 7)]);
-    assert.equal(M.opSplit(l, 7, [10]), null);
+    assert.equal(M.opSplit(l, 7, [3]), null);
     assert.equal(M.opSplit(l, 7, [60, 60]), null);
     assert.equal(M.opSplit(l, 7, [60, 50]), null);
-    assert.equal(M.opSplit(l, 7, [110]), null);
+    assert.equal(M.opSplit(l, 7, [117]), null);
     assert.equal(M.opSplit(l, 7, []), null);
     assert.equal(M.opSplit(l, 7, [30.5]), null);
     const r = must(M.opSplit(l, 7, [30, 60, 75]));
     assert.deepEqual(r.list.filter((c) => c.kind === 'block').map((c) => c.dur), [30, 30, 15, 45]);
     // Uređivač rezova.
-    assert.equal(M.snapCut(13 * 60 + 30, 37), 30);
-    assert.equal(M.snapCut(13 * 60 + 10, 37), 35); // blok van mreže: rez na mreži dana (13:45)
+    assert.equal(M.snapCut(13 * 60 + 30, 37), 35);
+    assert.equal(M.snapCut(13 * 60 + 12, 37), 38); // blok van mreže: rez na mreži dana (13:50)
     assert.deepEqual(M.cutAdd(120, [60], 30), [30, 60]);
-    assert.equal(M.cutAdd(120, [60], 50), null);
-    assert.equal(M.cutAdd(120, [60], 110), null);
-    assert.deepEqual(M.cutMove(120, [30, 60], 0, 55), [45, 60]);
-    assert.deepEqual(M.cutMove(120, [30, 60], 1, 200), [30, 105]);
+    assert.equal(M.cutAdd(120, [60], 58), null);
+    assert.equal(M.cutAdd(120, [60], 117), null);
+    assert.deepEqual(M.cutMove(120, [30, 60], 0, 58), [55, 60]);
+    assert.deepEqual(M.cutMove(120, [30, 60], 1, 200), [30, 115]);
   });
 
-  test('blok kraći od 30 min se ne deli na pola', () => {
-    const l = M.normalize([blk('Short', 25, 'pending', null, '', 9)]);
-    assert.equal(M.cuts15(25, 2), null);
-    assert.equal(M.opSplit(l, 9, [15]), null);
+  test('blok kraći od 10 min se ne deli na pola', () => {
+    const l = M.normalize([blk('Short', 8, 'pending', null, '', 9)]);
+    assert.equal(M.cuts15(8, 2), null);
+    assert.equal(M.opSplit(l, 9, [4]), null);
   });
 });
 
@@ -476,12 +477,12 @@ describe('brisanje, praznine, klizanje, trajanje', () => {
     assert.equal(M.opCloseGap(next, next[next.length - 1].id, null), null);
   });
 
-  test('klizanje 15 min kroz slobodno vreme (Alt+Shift+↑↓)', () => {
+  test('klizanje jedan korak mreže (5 min) kroz slobodno vreme (Alt+Shift+↑↓)', () => {
     const l = M.normalize([blk('A', 60, 'pending', null, '', 1), makeFree(30), blk('B', 60, 'pending', null, '', 2)]);
     const up = must(M.opNudge(l, 2, -1));
-    assert.deepEqual(lines(M, up).slice(0, 4), ['00:00-01:00 A', '01:00-01:15 ·free', '01:15-02:15 B', '02:15-00:00 ·free']);
+    assert.deepEqual(lines(M, up).slice(0, 4), ['00:00-01:00 A', '01:00-01:25 ·free', '01:25-02:25 B', '02:25-00:00 ·free']);
     const down = must(M.opNudge(l, 1, 1));
-    assert.deepEqual(lines(M, down).slice(0, 3), ['00:00-00:15 ·free', '00:15-01:15 A', '01:15-01:30 ·free']);
+    assert.deepEqual(lines(M, down).slice(0, 3), ['00:00-00:05 ·free', '00:05-01:05 A', '01:05-01:30 ·free']);
     assert.equal(M.opNudge(l, 1, -1), null);
     assert.equal(M.total(up), 1440);
   });
@@ -495,12 +496,12 @@ describe('brisanje, praznine, klizanje, trajanje', () => {
     assert.equal(M.opMoveBy(l, 1, -1, null), null);
   });
 
-  test('Kraće/Duže poravnava kraj na mrežu; najkraće 15 min; najduže 24h', () => {
-    const l = M.normalize([makeFree(10), blk('Off', 40, 'pending', null, '', 1)]); // 00:10–00:50
-    assert.equal(M.stepDur(l, 1, 15, null), 50); // kraj 01:05 → 01:00
-    assert.equal(M.stepDur(l, 1, -15, null), 35); // kraj 00:35 → 00:45
+  test('Kraće/Duže (±15 min) poravnava kraj na mrežu od 5 min; najkraće 5 min; najduže 24h', () => {
+    const l = M.normalize([makeFree(12), blk('Off', 40, 'pending', null, '', 1)]); // 00:12–00:52
+    assert.equal(M.stepDur(l, 1, 15, null), 53); // kraj 01:07 → 01:05
+    assert.equal(M.stepDur(l, 1, -15, null), 28); // kraj 00:37 → 00:40
     const short = M.normalize([blk('S', 15, 'pending', null, '', 2)]);
-    assert.equal(M.stepDur(short, 2, -15, null), 15);
+    assert.equal(M.stepDur(short, 2, -15, null), 5);
     assert.equal(M.opResize(short, 2, 1441), null);
     assert.equal(M.opResize(short, 2, 0), null);
     assert.equal(M.opResize(short, 2, 15), null);
@@ -523,6 +524,66 @@ describe('brisanje, praznine, klizanje, trajanje', () => {
     assert.equal(M2.opResize(l, 2, 1080), null);
     assert.equal(M2.opInsert(l, 2, makeBlock({ title: 'X', dur: 30 })), null);
     assert.equal(M2.opResize(l, 1, 1441), null);
+  });
+});
+
+// ---------------- Gornja ivica (početak bloka) ----------------
+
+describe('gornja ručica: početak bloka', () => {
+  const M = createBlockStack(0);
+
+  test('5 min slobodno pre bloka: početak 5 min ranije, ništa drugo se ne pomera', () => {
+    const l = M.normalize([blk('A', 60, 'pending', null, '', 1), makeFree(5), blk('B', 60, 'pending', null, '', 2), blk('C', 30, 'pending', null, '', 3)]);
+    assert.deepEqual(M.startRange(l, 2, null), { min: 60, max: 120 });
+    const next = must(M.opResizeStart(l, 2, 60, null));
+    assert.deepEqual(lines(M, next).slice(0, 3), ['00:00-01:00 A', '01:00-02:05 B', '02:05-02:35 C']);
+    assert.deepEqual(M.movedBlocks(l, next, 2), []);
+    assert.equal(M.total(next), 1440);
+  });
+
+  test('bez slobodnog vremena pre bloka: raniji blok ide ranije dok slobodno vreme ne upije razliku', () => {
+    const l = M.normalize([makeFree(30), blk('A', 60, 'pending', null, '', 1), blk('B', 60, 'pending', null, '', 2)]);
+    assert.deepEqual(M.startRange(l, 2, null), { min: 60, max: 145 });
+    const next = must(M.opResizeStart(l, 2, 75, null));
+    assert.deepEqual(lines(M, next).slice(0, 3), ['00:00-00:15 ·free', '00:15-01:15 A', '01:15-02:30 B']);
+    // Nema dovoljno slobodnog vremena (početak bi bio pre početka okvira).
+    assert.equal(M.opResizeStart(l, 2, 55, null), null);
+    // Prvo se troši najbliže slobodno vreme, pa sledeće (i blok između ide ranije).
+    const l2 = M.normalize([blk('A', 60, 'pending', null, '', 1), makeFree(10), blk('B', 30, 'pending', null, '', 2), makeFree(20), blk('C', 60, 'pending', null, '', 3)]);
+    const n2 = must(M.opResizeStart(l2, 3, 95, null));
+    assert.deepEqual(lines(M, n2).slice(0, 4), ['00:00-01:00 A', '01:00-01:05 ·free', '01:05-01:35 B', '01:35-03:00 C']);
+  });
+
+  test('prošlost se ne pomera: danas ni pre nows, počet blok ne menja početak', () => {
+    const A = must(M.anchor(13 * 60 + 8)); // nows 13:10
+    const l = M.normalize([blk('Past', 780, 'done', null, '', 1), makeFree(20), blk('Next', 60, 'pending', null, '', 2)]);
+    assert.deepEqual(M.startRange(l, 2, A), { min: 790, max: 855 });
+    const next = must(M.opResizeStart(l, 2, 790, A));
+    assert.deepEqual(lines(M, next).slice(0, 3), ['00:00-13:00 Past [done]', '13:00-13:10 ·free', '13:10-14:20 Next']);
+    assert.ok(M.pastOk(l, next, A));
+    assert.equal(M.opResizeStart(l, 2, 785, A), null);
+    assert.equal(M.opResizeStart(l, 1, 700, A), null);
+    assert.equal(M.canResizeStart(l, 0, A), false);
+    // Bez slobodnog vremena pre bloka, a raniji blok je prošao: ne sme ranije.
+    const tight = M.normalize([blk('Past', 790, 'done', null, '', 1), blk('Next', 60, 'pending', null, '', 2)]);
+    assert.equal(M.startRange(tight, 2, A)?.min, 790);
+    assert.equal(M.opResizeStart(tight, 2, 785, A), null);
+    // Šablon (bez sidra) isto pravilo, ali bez prošlosti.
+    assert.ok(M.opResizeStart(l, 2, 785, null));
+    // Raniji dan: ništa.
+    assert.equal(M.startRange(l, 2, M.anchor(Number.POSITIVE_INFINITY)), null);
+  });
+
+  test('kasniji početak: pre bloka ostaje slobodno vreme; najkraće 5 min', () => {
+    const l = M.normalize([blk('A', 60, 'pending', null, '', 1), blk('B', 60, 'pending', null, '', 2), blk('C', 30, 'pending', null, '', 3)]);
+    const next = must(M.opResizeStart(l, 2, 80, null));
+    assert.deepEqual(lines(M, next).slice(0, 4), ['00:00-01:00 A', '01:00-01:20 ·free', '01:20-02:00 B', '02:00-02:30 C']);
+    assert.deepEqual(M.movedBlocks(l, next, 2), []);
+    assert.ok(M.opResizeStart(l, 2, 115, null));
+    assert.equal(M.opResizeStart(l, 2, 116, null), null);
+    // Spaja se sa slobodnim vremenom koje je već pre bloka.
+    const l2 = M.normalize([blk('A', 60, 'pending', null, '', 1), makeFree(10), blk('B', 60, 'pending', null, '', 2)]);
+    assert.deepEqual(lines(M, must(M.opResizeStart(l2, 2, 85, null))).slice(0, 3), ['00:00-01:00 A', '01:00-01:25 ·free', '01:25-02:10 B']);
   });
 });
 
@@ -696,13 +757,14 @@ const OPS = [
   'split',
   'splitCustom',
   'nudge',
+  'resizeStart',
   'targets',
   'rate',
   'update',
 ] as const;
 
 describe('nasumični test (seme)', () => {
-  test('≥ 50 000 izmena: bez preklapanja, u okviru dana, trajanja ≥ 15m, zbirovi, jedinstveni id-jevi, prošlost', () => {
+  test('≥ 50 000 izmena: bez preklapanja, u okviru dana, trajanja ≥ 5m, zbirovi, jedinstveni id-jevi, prošlost', () => {
     const R = rng(20261009);
     let applied = 0;
     let refused = 0;
@@ -732,6 +794,27 @@ describe('nasumični test (seme)', () => {
         }
         out.set(x.id, k < from ? ps[k] : d > 0 ? ps[k] + Math.max(0, d - freeSeen) : freeSeen > 0 ? ps[k] : ps[k] + d);
       });
+      return out;
+    };
+    /**
+     * Ogledalo talasa za gornju ivicu bloka `i` (početak se pomera za −d, kraj ostaje): blokovi posle njega ostaju;
+     * d > 0: blok pre njega ide ranije za max(0, d − slobodno između njih); d < 0: ništa pre njega se ne pomera.
+     * `before` = false: blokovi pre `i` se ne proveravaju (danas slobodno vreme pre nows ne daje vreme).
+     */
+    const rippleUp = (M: BlockStackModel, prev: Stack, i: number, d: number, before: boolean): Map<ItemId, number> => {
+      const ps = M.startsOf(prev);
+      const out = new Map<ItemId, number>();
+      let freeSeen = 0;
+      for (let k = prev.length - 1; k >= 0; k--) {
+        const x = prev[k];
+        if (x.kind === 'free') {
+          if (k < i) freeSeen += x.dur;
+          continue;
+        }
+        if (k > i || (k < i && d < 0)) out.set(x.id, ps[k]);
+        else if (k === i) out.set(x.id, ps[k] - d);
+        else if (before) out.set(x.id, ps[k] - Math.max(0, d - freeSeen));
+      }
       return out;
     };
 
@@ -785,7 +868,7 @@ describe('nasumični test (seme)', () => {
               switch (op) {
                 case 'resize':
                   if (c.kind === 'block' && M.canResize(l, i, A)) {
-                    const d = Math.max(M.minDurAt(l, i, A), c.dur + R.pick([-30, -15, 15, 45, 90]));
+                    const d = Math.max(M.minDurAt(l, i, A), c.dur + R.pick([-30, -15, -5, 5, 15, 45, 90]));
                     next = M.opResize(l, c.id, d);
                     delta = d - c.dur;
                     expect = ripple(M, l, i + 1, d - c.dur);
@@ -885,6 +968,18 @@ describe('nasumični test (seme)', () => {
                   expect = still(M, l);
                   exceptId = c.id;
                   break;
+                case 'resizeStart': {
+                  const r = M.startRange(l, c.id, A);
+                  if (r) {
+                    const st = inf.st[i];
+                    const start = Math.min(r.max, Math.max(r.min, st + R.pick([-90, -30, -15, -5, 5, 15, 45])));
+                    next = M.opResizeStart(l, c.id, start, A);
+                    if (start !== st && !next) fail(`resizeStart odbijen u opsegu ${r.min}..${r.max}: ${st} → ${start} (ds${dayStart} A${A ? A.now : '-'} ${sd.grid ? 'grid' : 'off'})`);
+                    delta = st - start;
+                    expect = rippleUp(M, l, i, st - start, !A);
+                  } else if (c.kind === 'block' && M.opResizeStart(l, c.id, inf.st[i] - 5, A)) fail('resizeStart van opsega');
+                  break;
+                }
                 case 'targets':
                   if (M.canLift(l, i, A)) {
                     const ts = M.moveTargets(l, c.id, A);
@@ -922,8 +1017,8 @@ describe('nasumični test (seme)', () => {
               if (!M.fits(l)) fail(`neispravan opseg (${tag})`);
               const prevDur = new Map(prev.map((x) => [x.id, x.dur]));
               for (const x of l) {
-                if (x.kind === 'block' && x.dur < 15 && prevDur.get(x.id) !== x.dur) fail(`blok kraći od 15 min (${tag})`);
-                if (sd.grid && x.dur % 15 !== 0) fail(`trajanje van mreže (${tag}: ${x.kind} ${x.dur})`);
+                if (x.kind === 'block' && x.dur < M.MIN && prevDur.get(x.id) !== x.dur) fail(`blok kraći od ${M.MIN} min (${tag})`);
+                if (sd.grid && x.dur % M.SNAP !== 0) fail(`trajanje van mreže (${tag}: ${x.kind} ${x.dur})`);
               }
               if (delta != null && blockSum(l) !== blockSum(prev) + delta) fail(`zbir blokova ${blockSum(prev)} → ${blockSum(l)}, očekivano ${delta} (${tag})`);
 

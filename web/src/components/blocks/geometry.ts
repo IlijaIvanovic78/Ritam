@@ -8,8 +8,8 @@ export const LONG_PRESS_MS = 420;
 export const TOUCH_SLOP = 8;
 /** Miš: prevlačenje počinje posle ovoliko piksela (bez držanja). */
 export const MOUSE_SLOP = 5;
-/** Ručica trajanja: 20 px = 15 min. */
-export const STEP_PX = 20;
+/** Ručica trajanja: 12 px = jedan korak mreže (5 min). */
+export const STEP_PX = 12;
 /** Razmak između redova (px), isto kao --gap u blocks.css. */
 export const ROW_GAP = 4;
 /** Visina podignutog bloka ("čip" pod prstom). */

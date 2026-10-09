@@ -853,7 +853,7 @@
   }
 }
 
-/* Ručica trajanja (donja ivica izabranog bloka) i "+" na njegovim šavovima */
+/* Ručice trajanja (donja ivica = kraj, gornja = početak izabranog bloka) i "+" na njegovim šavovima */
 .blk-grip,
 .blk-ins {
   display: none;
@@ -869,6 +869,11 @@
   height: 36px;
   margin-left: -44px;
   cursor: ns-resize;
+}
+
+.blk-grip.is-start {
+  top: -18px;
+  bottom: auto;
 }
 
 .blk-grip::before {
@@ -927,7 +932,8 @@
   bottom: calc(-22px - var(--gap) / 2 - 1px);
 }
 
-.blk.is-selected.can-resize:not(.is-splitting) .blk-grip {
+.blk.is-selected.can-resize:not(.is-splitting) .blk-grip:not(.is-start),
+.blk.is-selected.can-resize-start:not(.is-splitting) .blk-grip.is-start {
   display: block;
 }
 
@@ -937,11 +943,11 @@
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .blk-section:not(.is-dragging):not(.is-moving) .blk.can-resize:not(.is-splitting):hover .blk-grip {
+  .blk-section:not(.is-dragging):not(.is-moving) .blk.can-resize:not(.is-splitting):hover .blk-grip:not(.is-start) {
     display: block;
   }
 
-  .blk-section:not(.is-dragging) .blk.can-resize:not(.is-splitting):not(.is-selected):hover .blk-grip::before {
+  .blk-section:not(.is-dragging) .blk.can-resize:not(.is-splitting):not(.is-selected):hover .blk-grip:not(.is-start)::before {
     opacity: 0.55;
   }
 

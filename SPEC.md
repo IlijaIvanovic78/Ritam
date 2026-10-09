@@ -239,20 +239,24 @@ dele ga klijent, server (`layoutBase`) i testovi (`npm test`) — i prenos je te
   (preko ponoći), a blok koji počinje posle kraja dana je dozvoljen (prikaz ga označava). Nijedna izmena ne pravi blok
   van `isValidRange` (takvu izmenu operacija odbija — vraća null). Id: broj = blok sa servera (negativan = pregled iz
   šablona), string = nov blok (`n…`) ili slobodno vreme (`f…`); obrisan blok postaje slobodno vreme sa istim id-jem.
-- Mreža 15 min, najkraći blok 15 min. Stari podaci van mreže ostaju kakvi jesu dok ih korisnik ne menja ("Kraće" /
-  "Duže" poravnavaju kraj na mrežu).
+- Mreža 5 min, najkraći blok 5 min (`SNAP_MIN`, `MIN_BLOCK_MIN`). Stari podaci van mreže ostaju kakvi jesu dok ih
+  korisnik ne menja ("Kraće" / "Duže" menjaju trajanje za 15 min — `LEN_STEP_MIN` — i poravnavaju kraj na mrežu).
 - Pravilo talasa: duže i ubacivanje guraju stavke posle sebe samo do prvog slobodnog vremena, koje upija razliku;
   kraće, "Završi sad" i zatvaranje praznine povlače stavke do prvog slobodnog vremena, koje raste; brisanje ostavlja
   slobodno vreme na istom mestu (ništa se ne pomera). Ništa se ne preuređuje samo od sebe.
-- Sidrenje (samo danas; `anchor(logičko sada)`, nows = sada zaokruženo naviše na 15 min): počeli blokovi zadržavaju
+- Gornja ivica (`opResizeStart`, `startRange`; kraj bloka ostaje): raniji početak prvo troši slobodno vreme odmah pre
+  bloka, pa gura ranije stavke ranije do slobodnog vremena koje upija razliku (ogledalo talasa; nikad pre početka
+  okvira); kasniji početak ostavlja slobodno vreme pre bloka (najkraći blok važi). Samo blok koji još nije počeo; danas
+  ništa što je počelo se ne pomera i nijedan blok ne počinje pre nows.
+- Sidrenje (samo danas; `anchor(logičko sada)`, nows = sada zaokruženo naviše na mrežu): počeli blokovi zadržavaju
   početak, prošli i kraj; tekući blok menja samo kraj (ne pre nows); ništa novo se ne stavlja pre nows. Počet blok bez
   ocene sme da napusti prošlost: prošao ostavlja slobodno vreme svoje dužine, tekući slobodno vreme od početka do nows
   (ostatak dana ide ranije, do nows), a premešten blok postaje `pending`. Ocenjen blok ne može da se pomeri ni da mu se
   promeni trajanje, ali može da se oceni, podeli, preimenuje, obriše i menja u detaljima. `pastOk(pre, posle)` to proverava
   posle svake izmene (deljenje ne pomera vreme). Raniji dan: `anchor(Infinity)` — ništa se ne pomera; budući dan i
   šablon: bez sidra.
-- Deljenje (`opSplit`; rezovi u minutima od početka bloka, svaki deo ≥ 15 min; `cuts15(trajanje, n)` = n jednakih delova
-  na mreži, ostatak ide prvim delovima: 2h / 3 = 45 + 45 + 30): prvi deo zadržava id, status i belešku (stvarno vreme se
+- Deljenje (`opSplit`; rezovi u minutima od početka bloka, svaki deo ≥ 5 min; `cuts15(trajanje, n)` = n jednakih delova
+  na mreži, ostatak ide prvim delovima: 70m / 3 = 25 + 25 + 20): prvi deo zadržava id, status i belešku (stvarno vreme se
   briše ako je duže od dela), ostali delovi su novi nezavisni blokovi istog naziva i kategorije, `pending`, bez stvarnog
   vremena i beleške — isto pravilo kao `POST /api/blocks/:id/split`.
 - Konverzije: `fromBlocks(blokovi, dayStart)` → `{ items, frame, overlaps }`: po start, end, id; razmaci (i razmak od
@@ -765,7 +769,7 @@ minut dok je tab vidljiv a nijedan sheet nije otvoren; stanje se menja samo ako 
     ne bira blok, ne otvara traku i ne pomera ništa; ide u istoriju (poništi). Prevlačenje koje počne na dugmetu je skrol.
     Tastatura: 1 2 3. Šalje se odmah `PATCH /api/blocks/:id` (blok koji server već ima), inače sa rasporedom.
   - **Izbor i traka akcija**: dodir na blok ga bira (okvir, traka akcija iznad donje trake — desktop: na dnu kolone niza
-    — i skrol između njih); izabran blok ima ručicu trajanja na donjoj ivici i "+" na šavovima. Ponovni dodir (posle
+    — i skrol između njih); izabran blok ima ručice na donjoj (kraj) i gornjoj ivici (početak) i "+" na šavovima. Ponovni dodir (posle
     300 ms, bez izmene između) otvara Detalje. Akcije: budući blok Podeli · Premesti · Kraće · Duže · Obriši · Detalji;
     tekući i "Završi sad"; prošao neocenjen Podeli · Premesti · Obriši · Detalji (+ "Već je prošlo…"); ocenjen bez
     Premesti. Zatvara se sa ×, Esc, dodirom pored blokova ili prvim dodirom na slobodno vreme.
@@ -776,18 +780,21 @@ minut dok je tab vidljiv a nijedan sheet nije otvoren; stanje se menja samo ako 
     mesto pokazuje gde pada; iznad slobodnog vremena blok ide u njega od vremena pod gornjom ivicom i ništa drugo se ne
     pomera), automatski skrol uz ivice. Bez prevlačenja: "Premesti" → mesta "+ Ovde · od 15:30" i slobodno vreme kao cilj
     ("U slobodno vreme · od 20:15"; čitač ekrana: "U slobodno vreme, od 20:15"; slobodno vreme koje nije cilj tada nije u
-    Tab redosledu) (tastatura: M, ↑↓, Enter). Alt+↑↓ jedno mesto, Alt+Shift+↑↓ ±15 min kroz slobodno vreme. Prošlost
+    Tab redosledu) (tastatura: M, ↑↓, Enter). Alt+↑↓ jedno mesto, Alt+Shift+↑↓ ±5 min kroz slobodno vreme. Prošlost
     se ne pomera (sidrenje, sekcija 3): drž/prevlačenje ocenjenog prošlog bloka ga trese uz "Prošlost se ne pomera…".
   - **Deljenje**: "Podeli" deli na pola odmah (jedan korak istorije), drugi deo je izabran, traka nudi "Podeli na [2] [3]
     [4] [Ručno…]" (ponovno deljenje istog bloka); "Ručno…" — blok se izduži, rezovi su isprekidane linije sa oznakom
-    vremena koja se vuče (↑↓ ±15; fokus odmah na prvoj oznaci), × uklanja, dodir dodaje rez, "Podeli na N delova" / Enter.
+    vremena koja se vuče (↑↓ ±5; fokus odmah na prvoj oznaci), × uklanja, dodir dodaje rez, "Podeli na N delova" / Enter.
     Izduženi blok staje ceo između trake i trake akcija (vrh odmah ispod trake; na telefonu je visok najviše koliko tu
-    staje, ali ne niži od 168px). Blok kraći od 30 min se ne deli.
-  - **Trajanje**: ručica (20px = 15 min, prati prst, posle se smiri na srazmernu visinu), Kraće/Duže ±15 (više dodira u
-    4 s = jedan korak), "Završi sad" (tekući blok se završava u sada, sledeći idu ranije), Shift+↑↓. Ručica prstom nema
+    staje, ali ne niži od 168px). Blok kraći od 10 min se ne deli.
+  - **Trajanje**: ručica na donjoj ivici ("Promeni kraj"; 12px = 5 min, prati prst, posle se smiri na srazmernu
+    visinu; ↑↓ ±5), Kraće/Duže ±15 (više dodira u 4 s = jedan korak), "Završi sad" (tekući blok se završava u sada,
+    sledeći idu ranije), Shift+↑↓ ±15. Ručica na gornjoj ivici ("Promeni početak"; samo izabran blok koji još nije
+    počeo, i u šablonu): vuče se odmah, korak 5 min, kraj ostaje (donja ivica stoji, skrol je drži), oznaka pokazuje nov
+    početak, isto čuvanje i poništavanje kao donja ručica (pravilo gornje ivice, sekcija 3); ↑↓ ±5. Ručica prstom nema
     automatski skrol (trajanje prati samo prst; opseg je u traci akcija i na oznaci kraja — dalje od ekrana: Duže ili
-    prevlačenje); uz miš, tek kad je pokazivač preko trake akcija ili iznad trake, jedan korak (15 min) na 190 ms,
-    najviše ±2h po potezu. U traci akcija tekućeg bloka (7 akcija) oznaka sme u dva reda.
+    prevlačenje); uz miš, tek kad je pokazivač preko trake akcija ili iznad trake, jedan korak (5 min) na 65 ms,
+    najviše ±2h po potezu (samo donja ručica). U traci akcija tekućeg bloka (7 akcija) oznaka sme u dva reda.
   - **Nov blok** ("+" u traci, "+" na šavu, dodir na slobodno vreme — od početka praznine; samo u praznini dužoj od 2h
     dodir ispod natpisa "+ Slobodno" bira vreme pod prstom —, N, meni ⋯; list `NewBlockSheet`, svetlija pozadina,
     na desktopu uz desnu ivicu): naziv prvo (fokus odmah, Enter = Dodaj), do 6 predloga od korisnikovih naziva (dan +
