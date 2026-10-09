@@ -1,6 +1,4 @@
 // Sheet za novu ili postojeću kategoriju: naziv, boja iz palete, da li se računa u ispunjenost.
-// Kratka verzija (quick) samo pravi novu kategoriju iz izbora u editoru šablona (bez brisanja);
-// kategorija sa istim nazivom koja već postoji se tada samo izabere.
 
 import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import type { Category, CategoryInput } from '../../../../shared/types.ts';
@@ -15,19 +13,7 @@ import { CATEGORY_NAME_MAX, PALETTE, nextFreeColor, sameColor } from './util.ts'
 /** Raspored stariji od ovoga se pri otvaranju sheet-a tiho osveži. */
 const STALE_MS = 5_000;
 
-export function CategorySheet({
-  category,
-  onClose,
-  onCreated,
-  quick = false,
-}: {
-  category: Category | null;
-  onClose: () => void;
-  /** Nova kategorija je napravljena (id), pre zatvaranja sheet-a. */
-  onCreated?: (id: number) => void;
-  /** Nova kategorija iz izbora u editoru šablona (postojeća sa istim nazivom se samo izabere). */
-  quick?: boolean;
-}) {
+export function CategorySheet({ category, onClose }: { category: Category | null; onClose: () => void }) {
   const t = useT();
   const { categories, archivedCategories, templates } = useScheduleData();
   const isNew = category == null;
@@ -125,9 +111,8 @@ export function CategorySheet({
         }
         payload = await api.patchCategory(category.id, patch);
       } else {
-        const { id, reused } = await createCategory(trimmed, { color, counts, reuseExisting: quick });
-        toast.success(reused ? t('schedule.categoryInline.reused') : t('schedule.category.added'));
-        if (id != null) onCreated?.(id);
+        await createCategory(trimmed, { color, counts });
+        toast.success(t('schedule.category.added'));
         onClose();
         return;
       }

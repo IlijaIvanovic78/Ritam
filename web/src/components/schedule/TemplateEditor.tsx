@@ -1,622 +1,362 @@
-// Editor šablona (sheet "lg"): naziv, lista blokova, pregled na traci, dupliranje i brisanje.
-// Izmene su lokalne dok se ne klikne "Sačuvaj"; zatvaranje sa nesačuvanim izmenama traži potvrdu.
+// Uređivač šablona (Raspored → šablon, ruta /raspored/sablon/:id): isti niz blokova kao Danas — BlockStack u režimu
+// 'template' (deli, premešta, menja trajanje, ubacuje, briše, poništava; predlozi naziva samo od korisnikovih
+// blokova), bez ocena i bez "sada". Izmene se čuvaju same (useTemplateBlocks). Zaglavlje: nazad na Raspored, naziv,
+// dani u nedelji koji ga koriste i meni ⋯ (Preimenuj…, Dupliraj, Obriši šablon).
 
-import { useEffect, useMemo, useRef, useState } from 'react';
-import type { Category, Template, TemplateBlockInput } from '../../../../shared/types.ts';
-import {
-  DAY_MIN,
-  fmtClock,
-  fmtDuration,
-  isValidRange,
-  normalizeRange,
-  parseClock,
-  toClock,
-  weekdayShort,
-} from '../../../../shared/time.ts';
-import { ApiError, api, errorMessage, isCachedPayload } from '../../api.ts';
-import { useLang, useT, type TFunction } from '../../i18n/index.ts';
-import { categoryColor, scheduleStore, useCategoryMap, useScheduleData } from '../../lib/store.ts';
-import { jumpHint, normalizeNear } from '../../lib/timeRange.ts';
+import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type MutableRefObject } from 'react';
+import type { Template } from '../../../../shared/types.ts';
+import { logicalNow } from '../../../../shared/time.ts';
+import { ApiError, api, errorMessage } from '../../api.ts';
+import { useLang, useT } from '../../i18n/index.ts';
+import { enqueue } from '../../lib/queue.ts';
+import { Link, navigate, paths } from '../../lib/router.tsx';
+import { scheduleStore, useCategoryMap, useScheduleData } from '../../lib/store.ts';
 import { useUnsavedGuard } from '../../lib/useUnsavedGuard.ts';
-import {
-  Button,
-  CategoryDot,
-  CategoryStroke,
-  Field,
-  Icon,
-  IconButton,
-  Select,
-  Sheet,
-  TextInput,
-  TimeInput,
-  confirmDialog,
-  confirmDiscard,
-  cx,
-  guardSelectKeys,
-  toast,
-} from '../../ui/index.ts';
-import { CategorySheet } from './CategorySheet.tsx';
-import { MiniTimeline, type TimelineSegment } from './MiniTimeline.tsx';
-import {
-  BLOCK_TITLE_MAX,
-  MAX_TEMPLATE_BLOCKS,
-  TEMPLATE_NAME_MAX,
-  copyName,
-  maxId,
-  weekdayList,
-  weekdaysUsing,
-} from './util.ts';
+import { Button, Field, Icon, PageHeader, Sheet, TextInput, confirmDialog, confirmDiscard, toast } from '../../ui/index.ts';
+import { BlockStack, KeysCard } from '../blocks/BlockStack.tsx';
+import { useTemplateBlocks } from '../blocks/useTemplateBlocks.ts';
+import { DayMenu, type MenuItem } from '../day/DayMenu.tsx';
+import { peekDay } from '../day/useDay.ts';
+import { TEMPLATE_NAME_MAX, copyName, maxId, weekdayList, weekdaySpan, weekdaysUsing } from './util.ts';
 
-/** Red u editoru: vremena su zidni sat "HH:MM" kao u TimeInput-u. */
-interface Row {
-  key: string;
-  start: string;
-  end: string;
-  title: string;
-  categoryId: number | null;
-  /** Sačuvani početak (minuti dana) za blok koji već postoji u šablonu; novi red nema. */
-  origStart?: number;
-}
-
-interface RowCheck {
-  /** Normalizovan opseg (minuti dana) ili null ako vreme nije ispravno. */
-  range: { start: number; end: number } | null;
-  timeError: string | null;
-  titleError: string | null;
-  /** Izmena vremena je prebacila postojeći blok na suprotni kraj dana (upozorenje, ne greška). */
-  jump: string | null;
-}
-
-/** Poslednja stavka u izboru kategorije reda: otvara mali sheet za novu kategoriju. */
-const NEW_CATEGORY = 'new';
-
-let rowSeq = 0;
-const newKey = () => `r${++rowSeq}`;
-
-function toRows(t: Template): Row[] {
-  return t.blocks.map((b) => ({
-    key: newKey(),
-    start: fmtClock(b.start),
-    end: fmtClock(b.end),
-    title: b.title,
-    categoryId: b.categoryId,
-    origStart: b.start,
-  }));
-}
-
-/** Otisak sadržaja za proveru nesačuvanih izmena (ključevi redova se ne računaju). */
-function snapshot(name: string, rows: Row[]): string {
-  return JSON.stringify([name.trim(), rows.map((r) => [r.start, r.end, r.title.trim(), r.categoryId])]);
-}
-
-/**
- * Otisak šablona kakav je na serveru (naziv i blokovi, nezavisno od redosleda i id-jeva), za
- * proveru da li ga je drugi uređaj u međuvremenu promenio.
- */
-function serverPrint(t: Template): string {
-  const blocks = t.blocks
-    .map((b) => [b.start, b.end, b.title, b.categoryId] as const)
-    .sort((a, b) => a[0] - b[0] || a[1] - b[1] || a[2].localeCompare(b[2]) || (a[3] ?? -1) - (b[3] ?? -1));
-  return JSON.stringify([t.name, blocks]);
-}
-
-/** Raspored stariji od ovoga se pri otvaranju editora tiho osveži. */
+/** Oznaka u istoriji: uređivač je otvoren sa Rasporeda, pa je "nazad" korak nazad (ne nov korak). */
+const BACK_KEY = 'ritamFromSchedule';
+/** Raspored stariji od ovoga se pri otvaranju uređivača tiho osveži. */
 const STALE_MS = 5_000;
 
-/** Provera reda; poruke su na jeziku `t` (jumpHint na trenutnom jeziku — `t` se menja sa njim). */
-function checkRow(r: Row, dayStart: number, t: TFunction): RowCheck {
-  const title = r.title.trim();
-  const titleError = !title
-    ? t('schedule.editor.titleRequired')
-    : title.length > BLOCK_TITLE_MAX
-      ? t('schedule.editor.titleTooLong')
-      : null;
-  const s = parseClock(r.start);
-  const e = parseClock(r.end);
-  if (s == null || e == null) {
-    return { range: null, timeError: t('schedule.editor.timeRequired'), titleError, jump: null };
+function fromSchedule(): boolean {
+  try {
+    return !!(window.history.state as Record<string, unknown> | null)?.[BACK_KEY];
+  } catch {
+    return false;
   }
-  // normalizeRange bi isti početak i kraj pretvorio u blok od 24h — to je skoro uvek greška.
-  if (s === e) return { range: null, timeError: t('schedule.editor.timeSame'), titleError, jump: null };
-  // Postojeći blok ostaje na svom kraju dana (npr. 01:00–09:00 pomeren na 00:30 ostaje ujutru),
-  // ali samo dok se preklapa sa logičkim danom; nepromenjen red zadržava tačno sačuvani opseg.
-  // Novi red ide po pravilu dana. Tako isto vreme nikad ne završi van dana (skriveno na traci).
-  const range =
-    r.origStart != null ? normalizeNear(s, e, r.origStart, dayStart) : normalizeRange(s, e, dayStart);
-  if (!isValidRange(range.start, range.end)) {
-    return { range: null, timeError: t('schedule.editor.timeInvalid'), titleError, jump: null };
-  }
-  const jump = r.origStart != null ? jumpHint(range, r.origStart, dayStart) : null;
-  return { range, timeError: null, titleError, jump };
 }
 
-type Placed = { row: Row; start: number; end: number };
-
-/** Parovi blokova koji se preklapaju (upozorenje, ne sprečava čuvanje). */
-function findOverlaps(rows: Row[], checks: RowCheck[]): Array<[Placed, Placed]> {
-  const placed: Placed[] = rows
-    .flatMap((row, i) => {
-      const rg = checks[i].range;
-      return rg ? [{ row, ...rg }] : [];
-    })
-    .sort((a, b) => a.start - b.start || a.end - b.end);
-  const pairs: Array<[Placed, Placed]> = [];
-  for (let i = 0; i < placed.length; i++) {
-    for (let j = i + 1; j < placed.length && placed[j].start < placed[i].end; j++) {
-      pairs.push([placed[i], placed[j]]);
-    }
+/** Otvori šablon u uređivaču (sa Rasporeda; `replace` = umesto trenutnog uređivača, npr. posle dupliranja). */
+export function openTemplate(id: number, opts: { replace?: boolean } = {}) {
+  const back = opts.replace ? fromSchedule() : true;
+  navigate(paths.template(id), { replace: opts.replace });
+  try {
+    window.history.replaceState({ ...((window.history.state as object | null) ?? {}), [BACK_KEY]: back }, '');
+  } catch {
+    // istorija nije dostupna: "nazad" onda zamenjuje adresu
   }
-  return pairs;
 }
 
-/**
- * Predlog za novi blok: počinje gde se završava poslednji u listi i traje 60 minuta.
- * Ako bi se tako preklopio sa postojećim, uzima prvu slobodnu prazninu (>= 15 min) u danu.
- */
-function suggestNewBlock(rows: Row[], checks: RowCheck[], dayStart: number): { start: number; end: number } {
-  const last = rows[rows.length - 1];
-  const lastEnd = last ? parseClock(last.end) : null;
-  const startClock = lastEnd ?? toClock(dayStart);
-  const preferred = normalizeRange(startClock, toClock(startClock + 60), dayStart);
-
-  const ranges = checks.flatMap((c) => (c.range ? [c.range] : [])).sort((a, b) => a.start - b.start);
-  const overlaps = ranges.some((r) => r.start < preferred.end && preferred.start < r.end);
-  if (!overlaps) return preferred;
-
-  let cursor = dayStart;
-  for (const r of ranges) {
-    if (r.start - cursor >= 15) return { start: cursor, end: Math.min(cursor + 60, r.start) };
-    cursor = Math.max(cursor, r.end);
-  }
-  if (dayStart + DAY_MIN - cursor >= 15) return { start: cursor, end: Math.min(cursor + 60, dayStart + DAY_MIN) };
-  return preferred;
+/** Nazad na Raspored: korak nazad u istoriji ako je uređivač otvoren sa Rasporeda, inače zameni adresu. */
+function backToSchedule() {
+  if (fromSchedule()) window.history.back();
+  else navigate(paths.schedule, { replace: true });
 }
 
-const placedLabel = (p: Placed, t: TFunction) =>
-  `${p.row.title.trim() || t('schedule.editor.untitled')} ${fmtClock(p.start)}–${fmtClock(p.end)}`;
+export function TemplateEditor({ templateId }: { templateId: number }) {
+  const t = useT();
+  const { templates } = useScheduleData();
+  const live = templates.find((x) => x.id === templateId) ?? null;
+  // Šablon obrisan na drugom uređaju: do odlaska se crta poslednja poznata verzija.
+  const last = useRef<Template | null>(null);
+  if (live) last.current = live;
+  /** Uređivač se zatvara sam (brisanje): nestanak šablona tada nije tuđa izmena. */
+  const leaving = useRef(false);
 
-export function TemplateEditor({
-  template,
-  onClose,
-  onOpenTemplate,
-}: {
-  template: Template;
-  onClose: () => void;
-  /** Otvori drugi šablon u editoru (posle dupliranja). */
-  onOpenTemplate: (id: number) => void;
-}) {
+  useEffect(() => {
+    if (live || leaving.current) return;
+    leaving.current = true;
+    // Obrisan na drugom uređaju (ili adresa šablona koji ne postoji): nazad na Raspored.
+    if (last.current) toast(t('schedule.editor.goneElsewhere'));
+    backToSchedule();
+  }, [live, t]);
+
+  const template = live ?? last.current;
+  return template ? <EditorView template={template} leaving={leaving} /> : null;
+}
+
+function EditorView({ template, leaving }: { template: Template; leaving: MutableRefObject<boolean> }) {
   const t = useT();
   const lang = useLang();
-  const { categories, weekdays, settings } = useScheduleData();
+  const { categories, templates, weekdays, settings } = useScheduleData();
   const catMap = useCategoryMap();
-  const dayStart = settings.dayStart;
-
-  const [name, setName] = useState(template.name);
-  const [rows, setRows] = useState<Row[]>(() => toRows(template));
-  const [initial, setInitial] = useState(() => snapshot(template.name, toRows(template)));
-  /**
-   * Šablon nad kojim se radi (kakav je bio na serveru pri otvaranju). Čuvanje zamenjuje sve blokove,
-   * pa se pre slanja proverava da ga drugi uređaj u međuvremenu nije promenio.
-   */
-  const [base, setBase] = useState(template);
-  const [submitted, setSubmitted] = useState(false);
-  const [busy, setBusy] = useState<'save' | 'dup' | 'del' | null>(null);
-  // Greška se prikazuje i u podnožju: toast ostaje ispod otvorenog modala.
-  const [failure, setFailure] = useState<string | null>(null);
-  const [focusKey, setFocusKey] = useState<string | null>(null);
-  /** Red za koji se upravo pravi nova kategorija (izbor "+ Nova kategorija…"). */
-  const [newCatRow, setNewCatRow] = useState<string | null>(null);
-  const rootRef = useRef<HTMLDivElement>(null);
-
-  const checks = useMemo(() => rows.map((r) => checkRow(r, dayStart, t)), [rows, dayStart, t]);
-  const overlaps = useMemo(() => findOverlaps(rows, checks), [rows, checks]);
-  const preview: TimelineSegment[] = rows.flatMap((r, i) => {
-    const rg = checks[i].range;
-    return rg ? [{ ...rg, title: r.title, categoryId: r.categoryId }] : [];
-  });
-  const totalMin = preview.reduce((sum, b) => sum + (b.end - b.start), 0);
-  const usedBy = weekdaysUsing(weekdays, template.id);
-
-  const nameError = !name.trim() ? t('schedule.editor.nameRequired') : null;
-  const dirty = snapshot(name, rows) !== initial;
-
-  /** Forma kreće ispočetka od verzije `t` (izmena sa drugog uređaja dok ovde ništa nije menjano). */
-  function resetTo(t: Template) {
-    const fresh = toRows(t);
-    setRows(fresh);
-    setName(t.name);
-    setInitial(snapshot(t.name, fresh));
-    setBase(t);
-  }
-
-  // Raspored osvežen u pozadini doneo je drugu verziju ovog šablona: ako ovde još ništa nije
-  // menjano, prikaži nju (inače provera pri čuvanju javlja sukob).
-  if (template !== base && !dirty && busy == null && serverPrint(template) !== serverPrint(base)) resetTo(template);
+  const [busy, setBusy] = useState<'dup' | 'del' | null>(null);
+  const [renaming, setRenaming] = useState(false);
+  const [dayNames, setDayNames] = useState<Array<{ title: string; categoryId: number | null }>>([]);
 
   // Raspored je možda u međuvremenu menjan na drugom uređaju.
   useEffect(() => {
     if (scheduleStore.age() > STALE_MS) void scheduleStore.refresh();
   }, []);
 
-  const updateRow = (key: string, patch: Partial<Row>) =>
-    setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...patch } : r)));
+  // Predlozi naziva: i blokovi današnjeg dana (samo korisnikovi podaci; obrisana kategorija se ne predlaže).
+  useEffect(() => {
+    let alive = true;
+    peekDay(logicalNow(settings.dayStart).date).then(
+      (d) => {
+        if (alive) setDayNames(d.blocks.map((b) => ({ title: b.title, categoryId: b.categoryId != null && catMap.has(b.categoryId) ? b.categoryId : null })));
+      },
+      () => {},
+    );
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings.dayStart]);
 
-  const removeRow = (key: string) => setRows((rs) => rs.filter((r) => r.key !== key));
+  const extraNames = useMemo(
+    () => [
+      ...templates.filter((x) => x.id !== template.id).flatMap((x) => x.blocks.map((b) => ({ title: b.title, categoryId: b.categoryId }))),
+      ...dayNames,
+    ],
+    [templates, template.id, dayNames],
+  );
 
-  function begin(kind: 'save' | 'dup' | 'del') {
-    setFailure(null);
-    setBusy(kind);
-  }
+  const stack = useTemplateBlocks({
+    template,
+    dayStart: settings.dayStart,
+    catMap,
+    extraNames,
+    t,
+    lang,
+    onLostChanges: () => toast.error(t('schedule.editor.notSaved', { name: template.name })),
+  });
+  const ctl = stack.ctl;
 
-  function fail(e: unknown) {
-    const msg = errorMessage(e);
-    toast.error(msg);
-    setFailure(msg);
-    setBusy(null);
-  }
-
-  function addRow() {
-    const { start, end } = suggestNewBlock(rows, checks, dayStart);
-    const key = newKey();
-    setRows((rs) => [...rs, { key, start: fmtClock(start), end: fmtClock(end), title: '', categoryId: null }]);
-    setFocusKey(key);
-  }
-
-  /** true ako je editor zatvoren. */
-  async function requestClose(): Promise<boolean> {
-    if (busy) return false;
-    if (dirty && !(await confirmDiscard(t('schedule.editor.discardBody')))) return false;
-    onClose();
+  /** Izmena koja čeka (blok posle kraja dana) se odbacuje tek uz potvrdu. true = odbačena. */
+  const discardHeld = async (): Promise<boolean> => {
+    if (!(await confirmDiscard(t('schedule.editor.discardBody')))) return false;
+    stack.discard();
     return true;
-  }
+  };
+  // "Nazad" u browseru i zatvaranje taba dok izmena čeka.
+  useUnsavedGuard(stack.held && busy == null, discardHeld);
 
-  // Nesačuvane izmene: pitaj i pri "nazad" u browseru (miš, Alt+←) i pri zatvaranju/osvežavanju taba.
-  useUnsavedGuard(dirty, requestClose);
-
-  async function save() {
-    if (busy) return;
-    setSubmitted(true);
-    if (nameError || checks.some((c) => c.timeError || c.titleError)) {
-      // Fokus na prvo neispravno polje (aria-invalid se pojavljuje posle ovog rendera).
-      requestAnimationFrame(() => {
-        rootRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus();
-      });
+  const goBack = async () => {
+    // Iz istorije: "nazad" (useUnsavedGuard pita ako izmena čeka).
+    if (fromSchedule()) {
+      window.history.back();
       return;
     }
+    if (stack.isHeld() && !(await discardHeld())) return;
+    navigate(paths.schedule, { replace: true });
+  };
 
-    const blocks: TemplateBlockInput[] = rows
-      .flatMap((r, i) => {
-        const rg = checks[i].range;
-        if (!rg) return [];
-        const categoryId = r.categoryId != null && catMap.has(r.categoryId) ? r.categoryId : null;
-        return [{ start: rg.start, end: rg.end, title: r.title.trim(), categoryId }];
-      })
-      .sort((a, b) => a.start - b.start || a.end - b.end);
-    const trimmedName = name.trim();
-
-    begin('save');
-    try {
-      // Čuvanje zamenjuje ceo šablon: ako ga je drugi uređaj u međuvremenu promenio, ne gazi tu
-      // izmenu naslepo. Ova verzija postaje osnova, pa ponovni klik na Sačuvaj svesno zamenjuje tu.
-      const fresh = await api.schedule();
-      const current = isCachedPayload(fresh) ? null : fresh.templates.find((tpl) => tpl.id === template.id);
-      if (current && serverPrint(current) !== serverPrint(base)) {
-        scheduleStore.set(fresh);
-        setBase(current);
-        fail(new Error(t('schedule.editor.changedElsewhere')));
-        return;
-      }
-      let payload = await api.putTemplateBlocks(template.id, blocks);
-      scheduleStore.set(payload);
-      // Naziv samo ako je ovde promenjen (ne vraća naziv promenjen na drugom uređaju).
-      if (trimmedName !== base.name) {
-        payload = await api.patchTemplate(template.id, { name: trimmedName });
-        scheduleStore.set(payload);
-      }
-      toast.success(t('schedule.editor.saved'));
-      onClose();
-    } catch (e) {
-      // Server koji i sam proverava verziju šablona javlja sukob sa 409.
-      if (e instanceof ApiError && e.status === 409) void scheduleStore.refresh();
-      fail(e);
-    }
-  }
-
-  async function duplicate() {
+  const duplicate = async () => {
     if (busy) return;
-    if (dirty) {
+    if (stack.isHeld()) {
       const ok = await confirmDialog({
         title: t('schedule.editor.duplicateTitle'),
         body: t('schedule.editor.duplicateBody'),
         confirmText: t('schedule.editor.duplicate'),
       });
       if (!ok) return;
+      stack.discard();
     }
-    begin('dup');
+    setBusy('dup');
     try {
-      const payload = await api.addTemplate({ name: copyName(template.name), copyFrom: template.id });
+      // Kopija dobija i poslednju izmenu (red zahteva: prvo čuvanje, pa kopija).
+      await stack.settle();
+      const payload = await enqueue(() => api.addTemplate({ name: copyName(template.name), copyFrom: template.id }));
       scheduleStore.set(payload);
       toast.success(t('schedule.editor.duplicated'));
       const id = maxId(payload.templates);
-      if (id != null) onOpenTemplate(id);
-      else onClose();
+      if (id != null && id !== template.id) openTemplate(id, { replace: true });
+      else setBusy(null);
     } catch (e) {
-      fail(e);
+      toast.error(errorMessage(e));
+      setBusy(null);
     }
-  }
+  };
 
-  async function remove() {
+  const remove = async () => {
     if (busy) return;
+    const usedBy = weekdaysUsing(weekdays, template.id);
     const ok = await confirmDialog({
       title: t('schedule.editor.deleteTitle', { name: template.name }),
-      body: usedBy.length
-        ? t('schedule.editor.deleteBodyUsed', { days: weekdayList(usedBy, lang) })
-        : t('schedule.editor.deleteBodyUnused'),
+      body: usedBy.length ? t('schedule.editor.deleteBodyUsed', { days: weekdayList(usedBy, lang) }) : t('schedule.editor.deleteBodyUnused'),
       confirmText: t('common.delete'),
       danger: true,
     });
     if (!ok) return;
-    begin('del');
+    setBusy('del');
+    stack.discard();
+    leaving.current = true;
     try {
-      const payload = await api.deleteTemplate(template.id);
+      const payload = await enqueue(() => api.deleteTemplate(template.id));
       scheduleStore.set(payload);
       toast.success(t('schedule.editor.deleted'));
-      onClose();
+      backToSchedule();
     } catch (e) {
-      fail(e);
+      leaving.current = false;
+      toast.error(errorMessage(e));
+      setBusy(null);
+    }
+  };
+
+  const menu: MenuItem[] = [
+    { label: t('schedule.editor.rename'), icon: 'edit', onSelect: () => setRenaming(true), disabled: busy != null },
+    { label: t('schedule.editor.duplicate'), icon: 'copy', onSelect: () => void duplicate(), disabled: busy != null },
+    { label: t('schedule.editor.delete'), icon: 'trash', onSelect: () => void remove(), disabled: busy != null },
+  ];
+
+  const usedBy = weekdaysUsing(weekdays, template.id);
+  const sub = t('schedule.editor.sub', { days: usedBy.length ? weekdaySpan(usedBy, lang) : t('schedule.editor.unassigned') });
+
+  // Trake ispod trake šablona: preklapanja iz starijih podataka, prazan šablon.
+  const ov = stack.overlaps[0];
+  const titleOf = (id: number) => template.blocks.find((b) => b.id === id)?.title ?? '';
+  const empty = !ctl.items.some((c) => c.kind === 'block');
+  const notice = (
+    <>
+      {ov && (
+        <div className="blk-notice is-warn" role="alert">
+          <span className="blk-notice-text">{t('blocks.overlap.banner', { a: titleOf(ov.a), b: titleOf(ov.b) })}</span>
+          <Button size="sm" onClick={stack.fixOverlaps}>
+            {t('blocks.overlap.fix')}
+          </Button>
+        </div>
+      )}
+      {empty && (
+        <div className="blk-notice">
+          <span className="blk-notice-text">{t('schedule.editor.noBlocks')}</span>
+          <Button size="sm" icon="plus" onClick={() => ctl.openNew()}>
+            {t('day.addBlock')}
+          </Button>
+        </div>
+      )}
+    </>
+  );
+
+  return (
+    <div className="page blk-page sched-ed-page">
+      <div className="sched-ed-top">
+        <Link
+          to={paths.schedule}
+          className="sched-back"
+          aria-label={t('schedule.editor.back')}
+          onClick={(e) => {
+            e.preventDefault();
+            void goBack();
+          }}
+        >
+          <Icon name="chevron-left" size={18} />
+          <span>{t('shell.page.schedule')}</span>
+        </Link>
+        <PageHeader className="sched-ed-head" title={template.name} sub={sub} actions={<DayMenu items={menu} />} />
+      </div>
+      <div className="sched-ed-grid">
+        <div className="sched-ed-main">
+          <BlockStack ctl={ctl} categories={categories} title={template.name} notice={notice} />
+        </div>
+        <aside className="sched-ed-side">
+          <section className="card sched-ed-note">
+            <p>
+              <strong>{t('blocks.tpl.noteLead')}</strong> {t('blocks.tpl.note')}
+            </p>
+          </section>
+          <KeysCard mode="template" />
+        </aside>
+      </div>
+      {renaming && <RenameSheet template={template} onClose={() => setRenaming(false)} />}
+    </div>
+  );
+}
+
+/** Mali sheet: novi naziv šablona (jedinstven — 409 ide uz polje). */
+function RenameSheet({ template, onClose }: { template: Template; onClose: () => void }) {
+  const t = useT();
+  const formId = useId();
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [name, setName] = useState(template.name);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  // Greška se prikazuje i u podnožju (kao u ostalim sheet-ovima Rasporeda).
+  const [failure, setFailure] = useState<string | null>(null);
+  const dirty = name.trim() !== template.name;
+
+  // Efekat roditelja se izvršava posle Sheet-ovog showModal(), pa fokus ovde radi.
+  useEffect(() => {
+    const el = inputRef.current;
+    el?.focus();
+    el?.select();
+  }, []);
+
+  async function requestClose(): Promise<boolean> {
+    if (saving) return false;
+    if (dirty && !(await confirmDiscard())) return false;
+    onClose();
+    return true;
+  }
+  useUnsavedGuard(dirty && !saving, requestClose);
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    if (saving) return;
+    const trimmed = name.trim();
+    if (!trimmed) {
+      setError(t('schedule.editor.nameRequired'));
+      inputRef.current?.focus();
+      return;
+    }
+    if (trimmed === template.name) {
+      onClose();
+      return;
+    }
+    setFailure(null);
+    setSaving(true);
+    try {
+      const payload = await enqueue(() => api.patchTemplate(template.id, { name: trimmed }));
+      scheduleStore.set(payload);
+      onClose();
+    } catch (err) {
+      setSaving(false);
+      const msg = errorMessage(err);
+      // Naziv koji već postoji (409): greška ide uz polje za naziv.
+      if (err instanceof ApiError && err.status === 409) {
+        setError(msg);
+        inputRef.current?.focus();
+        return;
+      }
+      toast.error(msg);
+      setFailure(msg);
     }
   }
 
   return (
-    <>
-      <Sheet
-        open
-        onClose={requestClose}
-        title={t('schedule.editor.title')}
-        size="lg"
-        footer={
-          <>
-            {failure && (
-              <p className="sched-foot-error" role="alert">
-                {failure}
-              </p>
-            )}
-            <Button variant="ghost" onClick={requestClose} disabled={busy != null}>
-              {t('common.cancel')}
-            </Button>
-            <Button variant="primary" onClick={save} loading={busy === 'save'} disabled={busy != null}>
-              {t('common.save')}
-            </Button>
-          </>
-        }
-      >
-        <div className="sched-ed" ref={rootRef}>
-          <Field label={t('schedule.nameLabel')} error={submitted ? nameError : null}>
-            <TextInput
-              value={name}
-              maxLength={TEMPLATE_NAME_MAX}
-              onChange={(e) => setName(e.target.value)}
-              aria-invalid={submitted && !!nameError}
-            />
-          </Field>
-
-          <div className="sched-ed-preview">
-            <MiniTimeline blocks={preview} dayStart={dayStart} catMap={catMap} large />
-            <p className="sched-ed-sum">
-              {t('common.blocks', { n: preview.length })} · {fmtDuration(totalMin)}
-              {' · '}
-              {usedBy.length ? usedBy.map((d) => weekdayShort(d, lang)).join(', ') : t('schedule.editor.unassigned')}
+    <Sheet
+      open
+      onClose={() => void requestClose()}
+      title={t('schedule.editor.renameTitle')}
+      size="sm"
+      footer={
+        <>
+          {failure && (
+            <p className="sched-foot-error" role="alert">
+              {failure}
             </p>
-          </div>
-
-          <section className="sched-ed-blocks" aria-label={t('schedule.editor.blocks')}>
-            <h3 className="sched-ed-h">{t('schedule.editor.blocks')}</h3>
-            {rows.length > 0 && (
-              <div className="sched-ed-head" aria-hidden="true">
-                <span>{t('schedule.editor.colTime')}</span>
-                <span>{t('schedule.editor.colTitle')}</span>
-                <span>{t('schedule.editor.colCategory')}</span>
-              </div>
-            )}
-            <ul className="sched-ed-list">
-              {rows.map((r, i) => (
-                <EditorRow
-                  key={r.key}
-                  row={r}
-                  index={i}
-                  check={checks[i]}
-                  showErrors={submitted}
-                  categories={categories}
-                  catMap={catMap}
-                  autoFocus={r.key === focusKey}
-                  disabled={busy != null}
-                  onChange={(patch) => updateRow(r.key, patch)}
-                  onNewCategory={() => setNewCatRow(r.key)}
-                  onRemove={() => removeRow(r.key)}
-                />
-              ))}
-            </ul>
-            {rows.length === 0 && <p className="sched-muted">{t('schedule.editor.noBlocks')}</p>}
-            <div className="sched-ed-addrow">
-              <Button
-                variant="secondary"
-                size="sm"
-                icon="plus"
-                onClick={addRow}
-                disabled={busy != null || rows.length >= MAX_TEMPLATE_BLOCKS}
-              >
-                {t('schedule.editor.addBlock')}
-              </Button>
-              {rows.length >= MAX_TEMPLATE_BLOCKS && (
-                <span className="sched-muted">{t('schedule.editor.maxBlocks', { max: MAX_TEMPLATE_BLOCKS })}</span>
-              )}
-            </div>
-          </section>
-
-          {overlaps.length > 0 && (
-            <div className="sched-ed-warn" role="status">
-              <Icon name="info" size={18} />
-              <div>
-                <p>{t('schedule.editor.overlap')}</p>
-                <ul>
-                  {overlaps.slice(0, 3).map(([a, b]) => (
-                    <li key={`${a.row.key}-${b.row.key}`}>
-                      {t('schedule.editor.overlapPair', { a: placedLabel(a, t), b: placedLabel(b, t) })}
-                    </li>
-                  ))}
-                </ul>
-                {overlaps.length > 3 && <p>{t('schedule.editor.overlapMore', { count: overlaps.length - 3 })}</p>}
-              </div>
-            </div>
           )}
-
-          <div className="sched-ed-more">
-            <Button variant="ghost" size="sm" icon="copy" onClick={duplicate} loading={busy === 'dup'} disabled={busy != null}>
-              {t('schedule.editor.duplicate')}
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              icon="trash"
-              className="sched-danger"
-              onClick={remove}
-              loading={busy === 'del'}
-              disabled={busy != null}
-            >
-              {t('schedule.editor.delete')}
-            </Button>
-          </div>
-        </div>
-      </Sheet>
-      {/* Pored editora, ne u njemu: Esc i klikovi u malom sheet-u ne stižu do editora. */}
-      {newCatRow != null && (
-        <CategorySheet
-          category={null}
-          quick
-          onCreated={(id) => updateRow(newCatRow, { categoryId: id })}
-          onClose={() => setNewCatRow(null)}
-        />
-      )}
-    </>
-  );
-}
-
-function EditorRow({
-  row,
-  index,
-  check,
-  showErrors,
-  categories,
-  catMap,
-  autoFocus,
-  disabled,
-  onChange,
-  onNewCategory,
-  onRemove,
-}: {
-  row: Row;
-  index: number;
-  check: RowCheck;
-  showErrors: boolean;
-  categories: Category[];
-  catMap: Map<number, Category>;
-  autoFocus: boolean;
-  disabled: boolean;
-  onChange: (patch: Partial<Row>) => void;
-  onNewCategory: () => void;
-  onRemove: () => void;
-}) {
-  const t = useT();
-  const n = index + 1;
-  const timeError = showErrors ? check.timeError : null;
-  const titleError = showErrors ? check.titleError : null;
-  const catKnown = row.categoryId != null && catMap.has(row.categoryId);
-  const color = categoryColor(catMap, catKnown ? row.categoryId : null);
-  const errorText = [timeError, titleError].filter(Boolean).join(' ');
-  // Blok koji traje posle ponoći pripada ovom danu (prikazuje se na njegovom kraju).
-  const rg = check.range;
-  const night =
-    rg && rg.end > DAY_MIN
-      ? rg.start >= DAY_MIN
-        ? t('schedule.editor.afterMidnight')
-        : t('schedule.editor.overMidnight', { time: fmtClock(rg.end) })
-      : null;
-
-  return (
-    <li className={cx('sched-ed-row', errorText && 'is-invalid')}>
-      <CategoryStroke className="sched-ed-bar" color={color} />
-      <div className="sched-ed-time">
-        <TimeInput
-          aria-label={t('schedule.editor.rowStart', { n })}
-          value={row.start}
-          onChange={(e) => onChange({ start: e.target.value })}
-          aria-invalid={!!timeError}
-          disabled={disabled}
-        />
-        <span className="sched-ed-dash" aria-hidden="true">
-          –
-        </span>
-        <TimeInput
-          aria-label={t('schedule.editor.rowEnd', { n })}
-          value={row.end}
-          onChange={(e) => onChange({ end: e.target.value })}
-          aria-invalid={!!timeError}
-          disabled={disabled}
-        />
-      </div>
-      <TextInput
-        className="sched-ed-title"
-        aria-label={t('schedule.editor.rowTitle', { n })}
-        placeholder={t('schedule.editor.colTitle')}
-        value={row.title}
-        maxLength={BLOCK_TITLE_MAX}
-        onChange={(e) => onChange({ title: e.target.value })}
-        aria-invalid={!!titleError}
-        autoFocus={autoFocus}
-        disabled={disabled}
-      />
-      <div className="sched-ed-cat">
-        <CategoryDot color={color} />
-        <Select
-          aria-label={t('schedule.editor.rowCategory', { n })}
-          // Ceo naziv i kad je kolona uska (slični nazivi se inače ne razlikuju).
-          title={catKnown ? catMap.get(row.categoryId as number)?.name : t('common.noCategory')}
-          value={catKnown ? String(row.categoryId) : ''}
-          // "+ Nova kategorija…" otvara sheet: strelice na zatvorenom izboru ne smeju da ga otvore same.
-          onKeyDown={(e) => guardSelectKeys(e, NEW_CATEGORY)}
-          onChange={(e) => {
-            const v = e.target.value;
-            // Izbor ostaje na dosadašnjoj kategoriji dok nova ne bude napravljena.
-            if (v === NEW_CATEGORY) onNewCategory();
-            else onChange({ categoryId: v ? Number(v) : null });
-          }}
-          disabled={disabled}
-        >
-          <option value="">{t('common.noCategory')}</option>
-          {categories.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.name}
-            </option>
-          ))}
-          <option value={NEW_CATEGORY}>{t('schedule.editor.newCategory')}</option>
-        </Select>
-      </div>
-      <IconButton
-        className="sched-ed-del"
-        icon="trash"
-        label={t('schedule.editor.rowRemove', { n })}
-        onClick={onRemove}
-        disabled={disabled}
-      />
-      {errorText ? (
-        <p className="sched-ed-err">{errorText}</p>
-      ) : check.jump ? (
-        <p className="sched-ed-hint is-warn" role="status">
-          {check.jump}
-        </p>
-      ) : (
-        night && <p className="sched-ed-hint">{night}</p>
-      )}
-    </li>
+          <Button variant="ghost" onClick={() => void requestClose()} disabled={saving}>
+            {t('common.cancel')}
+          </Button>
+          <Button variant="primary" type="submit" form={formId} loading={saving}>
+            {t('common.save')}
+          </Button>
+        </>
+      }
+    >
+      <form id={formId} className="stack" onSubmit={submit} noValidate>
+        <Field label={t('schedule.nameLabel')} error={error}>
+          <TextInput
+            ref={inputRef}
+            value={name}
+            maxLength={TEMPLATE_NAME_MAX}
+            placeholder={t('schedule.newTemplate.namePlaceholder')}
+            enterKeyHint="done"
+            onChange={(e) => {
+              setName(e.target.value);
+              if (error) setError(null);
+            }}
+            aria-invalid={!!error}
+          />
+        </Field>
+      </form>
+    </Sheet>
   );
 }

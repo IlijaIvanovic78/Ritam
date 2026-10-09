@@ -1,9 +1,11 @@
 // Prevlačenje prstom levo/desno na telefonu → sledeći/prethodni dan.
 // Reaguje samo na jasan, brz horizontalan potez koji nije počeo u polju za unos,
 // kontroli ili elementu koji se sam horizontalno skroluje, ni uz samu ivicu ekrana (sistemski
-// "nazad" na Androidu/iOS-u), i ne dok je otvoren dijalog (sheet, potvrda) ili meni.
+// "nazad" na Androidu/iOS-u), i ne dok je otvoren dijalog (sheet, potvrda) ili meni. Potez tokom kog je
+// blok podignut, menjano mu trajanje, pomeran rez ili prevlačena mapa dana nikad ne menja dan.
 
 import { useEffect, useRef, type RefObject } from 'react';
+import { blockGestureSince } from '../blocks/geometry.ts';
 
 const MIN_DX = 70; // px
 const MAX_MS = 700;
@@ -47,7 +49,7 @@ export function useSwipeNav(ref: RefObject<HTMLElement | null>, onPrev: () => vo
     const onEnd = (e: TouchEvent) => {
       const s = start;
       start = null;
-      if (!s || e.changedTouches.length !== 1 || overlayOpen()) return;
+      if (!s || e.changedTouches.length !== 1 || overlayOpen() || blockGestureSince(s.t)) return;
       const t = e.changedTouches[0];
       const dx = t.clientX - s.x;
       const dy = t.clientY - s.y;

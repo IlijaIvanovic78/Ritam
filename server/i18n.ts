@@ -63,6 +63,8 @@ const en = {
   'day.noteConflict': 'The note was changed on another device in the meantime.',
   'day.noteTooLong': 'Note can be at most 20000 characters.',
   'day.ratingRange': 'Rating must be from 1 to 5.',
+  'day.tooManyBlocks': 'A day can have at most 100 blocks.',
+  'day.blocksChanged': 'The day was changed on another device in the meantime.',
 
   // ---- Blokovi ----
   'block.notFound': 'Block doesn’t exist.',
@@ -79,6 +81,9 @@ const en = {
   'block.swapPick': 'Choose a block to swap with.',
   'block.swapSelf': 'A block can’t be swapped with itself.',
   'block.swapOtherDay': 'You can only swap blocks from the same day.',
+  'block.duplicate': 'The same block is listed more than once.',
+  'block.overlap': 'Blocks overlap: “{a}” and “{b}”.',
+  'block.actualTooLong': 'Actual time can’t be longer than the block ({max} min).',
 
   // ---- Zadaci ----
   'task.notFound': 'Task doesn’t exist.',
@@ -102,6 +107,7 @@ const en = {
   'template.nameTooLong': 'Template name can be at most 60 characters.',
   'template.nameTaken': 'A template with that name already exists.',
   'template.tooManyBlocks': 'A template can have at most 100 blocks.',
+  'template.blocksChanged': 'The template was changed on another device in the meantime.',
 
   // ---- Podešavanja i raspored ----
   'settings.dayStartInt': 'Day start must be a whole number of minutes.',
@@ -167,6 +173,8 @@ const sr = {
   'day.noteConflict': 'Beleška je u međuvremenu promenjena na drugom uređaju.',
   'day.noteTooLong': 'Beleška može imati najviše 20000 znakova.',
   'day.ratingRange': 'Ocena mora biti od 1 do 5.',
+  'day.tooManyBlocks': 'Dan može imati najviše 100 blokova.',
+  'day.blocksChanged': 'Dan je u međuvremenu promenjen na drugom uređaju.',
 
   'block.notFound': 'Blok ne postoji.',
   'block.minuteInt': 'Vreme mora biti ceo broj minuta.',
@@ -182,6 +190,9 @@ const sr = {
   'block.swapPick': 'Izaberi blok za zamenu.',
   'block.swapSelf': 'Blok ne može da se zameni sam sa sobom.',
   'block.swapOtherDay': 'Možeš da zameniš samo blokove istog dana.',
+  'block.duplicate': 'Isti blok je naveden više puta.',
+  'block.overlap': 'Blokovi se preklapaju: „{a}“ i „{b}“.',
+  'block.actualTooLong': 'Stvarno vreme ne može biti duže od bloka ({max} min).',
 
   'task.notFound': 'Zadatak ne postoji.',
   'task.titleRequired': 'Naziv zadatka je obavezan.',
@@ -202,6 +213,7 @@ const sr = {
   'template.nameTooLong': 'Naziv šablona može imati najviše 60 znakova.',
   'template.nameTaken': 'Šablon sa tim nazivom već postoji.',
   'template.tooManyBlocks': 'Šablon može imati najviše 100 blokova.',
+  'template.blocksChanged': 'Šablon je u međuvremenu promenjen na drugom uređaju.',
 
   'settings.dayStartInt': 'Početak dana mora biti ceo broj minuta.',
   'settings.dayStartRange': 'Dan može da počne između 00:00 i 06:00.',

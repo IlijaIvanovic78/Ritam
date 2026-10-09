@@ -21,6 +21,8 @@ type SheetProps = {
    * (npr. red pregleda dana zamenjen sačuvanim blokom).
    */
   returnFocus?: () => HTMLElement | null;
+  /** Dodatna klasa za <dialog> (npr. svetlija pozadina iza sheet-a novog bloka). */
+  className?: string;
 };
 
 /** Otvoren je ili zatvoren neki sheet (Toaster prati najgornji otvoren dijalog). */
@@ -35,7 +37,7 @@ function isTypingField(el: Element | null): el is HTMLElement {
   return el instanceof HTMLInputElement && !['checkbox', 'radio', 'button', 'submit', 'file'].includes(el.type);
 }
 
-export function Sheet({ open, onClose, title, children, footer, size = 'md', returnFocus }: SheetProps) {
+export function Sheet({ open, onClose, title, children, footer, size = 'md', returnFocus, className }: SheetProps) {
   const t = useT();
   const ref = useRef<HTMLDialogElement>(null);
   const onCloseRef = useRef(onClose);
@@ -70,7 +72,10 @@ export function Sheet({ open, onClose, title, children, footer, size = 'md', ret
       }
       window.dispatchEvent(new Event(DIALOGS_EVENT));
       // Fokus nazad na ono što je otvorilo sheet. Dijalog koji je React već uklonio iz DOM-a
-      // (forma se zatvara unmount-om) to sam ne uradi, pa bi fokus pao na <body>.
+      // (forma se zatvara unmount-om) to sam ne uradi, pa bi fokus pao na <body>. Fokus koji je
+      // vlasnik sheet-a već namerno postavio van njega (npr. nov blok u nizu) ostaje gde jeste.
+      const now = document.activeElement;
+      if (now && now !== document.body && !d.contains(now)) return;
       const back = opener?.isConnected ? opener : (returnFocusRef.current?.() ?? null);
       if (back && back.isConnected && !back.closest('dialog:not([open])')) back.focus({ preventScroll: true });
     };
@@ -79,7 +84,7 @@ export function Sheet({ open, onClose, title, children, footer, size = 'md', ret
   return (
     <dialog
       ref={ref}
-      className={cx('sheet', `sheet-${size}`)}
+      className={cx('sheet', `sheet-${size}`, className)}
       onCancel={(e) => {
         // Esc / "nazad". Kad događaj ne može da se otkaže (Chrome posle više uzastopnih
         // pritisaka bez dodira), browser sam zatvara dijalog — to hvata onClose ispod.

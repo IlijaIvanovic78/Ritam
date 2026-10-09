@@ -1,7 +1,7 @@
 // Pomoćne funkcije za stranicu Raspored (bez React-a).
 
 import type { Category, SchedulePayload, Weekday, WeekdayMap } from '../../../../shared/types.ts';
-import { weekdayName } from '../../../../shared/time.ts';
+import { weekdayName, weekdayShort } from '../../../../shared/time.ts';
 import { joinAnd, t, type Lang } from '../../i18n/index.ts';
 
 export const WEEKDAYS: Weekday[] = [1, 2, 3, 4, 5, 6, 7];
@@ -23,6 +23,23 @@ export function weekdaysUsing(weekdays: WeekdayMap, templateId: number): Weekday
 /** en "Monday, Tuesday and Friday", sr "ponedeljak, utorak i petak". */
 export function weekdayList(days: Weekday[], lang: Lang): string {
   return joinAnd(days.map((d) => weekdayName(d, lang)), lang);
+}
+
+/**
+ * Kratko: uzastopni dani (3 i više) kao opseg — en "Mon–Fri", "Mon, Wed, Fri", "Mon–Thu, Sat"; sr "pon–pet".
+ * Dani su redom (1 = ponedeljak … 7 = nedelja).
+ */
+export function weekdaySpan(days: Weekday[], lang: Lang): string {
+  const sorted = [...days].sort((a, b) => a - b);
+  const parts: string[] = [];
+  for (let i = 0; i < sorted.length; ) {
+    let j = i;
+    while (j + 1 < sorted.length && sorted[j + 1] === sorted[j] + 1) j++;
+    if (j - i >= 2) parts.push(`${weekdayShort(sorted[i], lang)}–${weekdayShort(sorted[j], lang)}`);
+    else for (let k = i; k <= j; k++) parts.push(weekdayShort(sorted[k], lang));
+    i = j + 1;
+  }
+  return parts.join(', ');
 }
 
 /** Najveći id u listi (novi šablon je onaj sa najvećim id-jem). */

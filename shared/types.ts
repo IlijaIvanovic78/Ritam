@@ -145,6 +145,27 @@ export interface CategoryInput {
 export type TemplateBlockInput = BlockInput;
 
 /**
+ * Jedan blok u `PUT /api/days/:date/blocks` (ceo raspored dana odjednom). `id` = blok tog dana iz poslednjeg
+ * DayPayload-a (zadržava id, pa i ocenu, stvarno vreme i belešku); bez `id` = nov blok. `status`, `actualMin` i
+ * `note` koji nisu poslati ostaju kakvi su sačuvani (nov blok: 'pending', null, ''). Pravi ga `toBlocks` iz
+ * shared/blockStack.ts.
+ */
+export interface DayBlockInput extends BlockInput {
+  id?: number;
+  status?: BlockStatus;
+  actualMin?: number | null;
+  note?: string;
+}
+
+/** Telo `PUT /api/days/:date/blocks`. */
+export interface DayBlocksPut {
+  /** Svi blokovi dana (najviše 100, bez preklapanja); blokovi dana koji nisu navedeni se brišu. */
+  blocks: DayBlockInput[];
+  /** `layoutBase(...)` liste na koju se izmena oslanja (opciono); ako se dan u međuvremenu promenio → 409. */
+  base?: string;
+}
+
+/**
  * `POST /api/schedule/reset` ("Raspored ispočetka"): briše sve kategorije, šablone i dodelu šablona
  * danima u nedelji. Sačuvani dani, blokovi, zadaci, beleške i ocene ostaju (i njihova ispunjenost).
  */

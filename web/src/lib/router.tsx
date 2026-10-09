@@ -7,7 +7,7 @@ export type Route =
   | { name: 'day'; date: string | null } // null = danas
   | { name: 'progress' }
   | { name: 'journal' }
-  | { name: 'schedule' }
+  | { name: 'schedule'; templateId: number | null } // templateId = šablon otvoren u uređivaču
   | { name: 'settings' }
   | { name: 'notfound' };
 
@@ -17,6 +17,7 @@ export const paths = {
   progress: '/napredak',
   journal: '/dnevnik',
   schedule: '/raspored',
+  template: (id: number) => `/raspored/sablon/${id}`,
   settings: '/podesavanja',
 };
 
@@ -39,7 +40,9 @@ export function parseRoute(pathname: string): Route {
   if (m && isValidISODate(m[1])) return { name: 'day', date: m[1] };
   if (p === paths.progress) return { name: 'progress' };
   if (p === paths.journal) return { name: 'journal' };
-  if (p === paths.schedule) return { name: 'schedule' };
+  if (p === paths.schedule) return { name: 'schedule', templateId: null };
+  const tm = /^\/raspored\/sablon\/([1-9]\d{0,14})$/.exec(p);
+  if (tm) return { name: 'schedule', templateId: Number(tm[1]) };
   if (p === paths.settings) return { name: 'settings' };
   return { name: 'notfound' };
 }

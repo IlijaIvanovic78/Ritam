@@ -13,6 +13,7 @@ import type {
   BlockSummary,
   Category,
   CategoryInput,
+  DayBlockInput,
   DayPatch,
   DayPayload,
   JournalEntry,
@@ -31,6 +32,7 @@ import type {
 import { isLang } from '../shared/i18n.ts';
 import { DAY_MIN, eachDay, isoWeekday, isValidRange } from '../shared/time.ts';
 import { computeStreak, mergeCategoryTimes, sortBlocks, summarizeBlocks } from '../shared/summary.ts';
+import { layoutBase, templateBase } from '../shared/blockStack.ts';
 import { statementCache, tx } from './db.ts';
 import { DEFAULT_SETTINGS } from './defaults.ts';
 import {
@@ -409,10 +411,15 @@ export class Repo {
   /**
    * Zamenjuje sve blokove šablona. Ulaz je već validiran (opseg, naslov). Blok koji je ceo van logičkog
    * dana prelazi na drugi kraj dana (`intoLogicalDay`), da ne bi bio skriven na traci i u danu.
+   * `base` (opciono) = `templateBase` blokova na koje se klijent oslanja; sačuvani blokovi su drugačiji (izmena sa
+   * drugog uređaja) → 409 i ništa se ne menja.
    */
-  putTemplateBlocks(id: number, blocks: BlockInput[]): void {
+  putTemplateBlocks(id: number, blocks: BlockInput[], base?: string): void {
     tx(this.db, () => {
       this.templateOr404(id);
+      if (base !== undefined && templateBase(this.templateBlocks(id)) !== base) {
+        throw new HttpError(409, 'template.blocksChanged');
+      }
       for (const b of blocks) this.assertCategoryRef(b.categoryId);
       const { dayStart } = this.getSettings();
       this.q('DELETE FROM template_blocks WHERE template_id = ?').run(id);
@@ -490,8 +497,11 @@ export class Repo {
     return r ? numOrNull(r.template_id) : null;
   }
 
-  /** Kopira blokove iz šablona (null = prazan dan) i označava dan kao inicijalizovan. Briše postojeće blokove. */
-  initDay(date: string, templateId: number | null): void {
+  /**
+   * Kopira blokove iz šablona (null = prazan dan) i označava dan kao inicijalizovan. Briše postojeće blokove.
+   * `copyBlocks = false`: samo oznaka (dan dobija šablon, a blokove upisuje pozivalac — `putDayBlocks`).
+   */
+  initDay(date: string, templateId: number | null, copyBlocks = true): void {
     tx(this.db, () => {
       this.q(
         `INSERT INTO days (user_id, date, initialized, template_id, updated_at) VALUES (?, ?, 1, ?, ?)
@@ -499,7 +509,7 @@ export class Repo {
            updated_at = excluded.updated_at`,
       ).run(this.uid, date, templateId, nowISO());
       this.q('DELETE FROM blocks WHERE user_id = ? AND date = ?').run(this.uid, date);
-      if (templateId != null) {
+      if (templateId != null && copyBlocks) {
         this.q(
           `INSERT INTO blocks (user_id, date, start_min, end_min, title, category_id)
            SELECT ?, ?, tb.start_min, tb.end_min, tb.title, tb.category_id FROM ${OWN_TEMPLATE_BLOCKS}
@@ -629,6 +639,77 @@ export class Repo {
         input.title,
         input.categoryId ?? null,
       );
+      this.touchDay(date);
+    });
+  }
+
+  /**
+   * Ceo raspored dana odjednom (`PUT /api/days/:date/blocks`, uređivač "niz blokova"), u jednoj transakciji.
+   * Ulaz je već validiran (opseg, naslov, najviše 100). Redom:
+   * - isti id dva puta → 400; stvarno vreme duže od bloka → 400; preklapanje (kraj = početak sledećeg je u redu) → 400
+   *   sa nazivima oba bloka;
+   * - `base` (opciono) = `layoutBase` liste na koju se klijent oslanja (sačuvani blokovi, ili pregled iz šablona
+   *   za neinicijalizovan dan) — trenutna lista je drugačija → 409 i ništa se ne menja;
+   * - neinicijalizovan dan se inicijalizuje (šablon dana u nedelji; njegovi blokovi se ne kopiraju jer ih telo
+   *   zamenjuje);
+   * - id mora biti blok tog dana i tog naloga (inače 400 "Blok ne postoji.", kao svaka veza u telu); zadržani blok
+   *   zadržava id, a status/stvarno vreme/beleška koji nisu poslati ostaju sačuvani. Kao u PATCH-u: poslat status
+   *   koji nije done/partial bez stvarnog vremena ga briše; sačuvano stvarno vreme duže od novog trajanja se briše
+   *   (kao pri deljenju). Blokovi dana koji nisu u telu se brišu, ostali se dodaju (redom po vremenu);
+   * - kategorija: ista koju blok već ima, ili koju već ima neki blok tog dana (i obrisana — npr. delovi podeljenog
+   *   bloka), inače mora biti neobrisana kategorija naloga (400).
+   */
+  putDayBlocks(date: string, input: DayBlockInput[], base?: string): void {
+    const ids = new Set<number>();
+    for (const b of input) {
+      if (b.id === undefined) continue;
+      if (ids.has(b.id)) throw badRequest('block.duplicate');
+      ids.add(b.id);
+    }
+    for (const b of input) {
+      if (b.actualMin != null && b.actualMin > b.end - b.start) throw badRequest('block.actualTooLong', { max: b.end - b.start });
+    }
+    const sorted = [...input].sort((a, b) => a.start - b.start || a.end - b.end);
+    let last: DayBlockInput | null = null;
+    for (const b of sorted) {
+      if (last && b.start < last.end) throw badRequest('block.overlap', { a: last.title, b: b.title });
+      if (!last || b.end > last.end) last = b;
+    }
+    tx(this.db, () => {
+      const initialized = this.dayRow(date)?.initialized ?? false;
+      const weekdayTpl = initialized ? null : this.weekdayTemplateId(date);
+      if (base !== undefined) {
+        const current = initialized ? this.blocksForDate(date) : this.previewBlocks(date, weekdayTpl);
+        if (layoutBase(current) !== base) throw new HttpError(409, 'day.blocksChanged');
+      }
+      if (!initialized) this.initDay(date, weekdayTpl, false);
+      const stored = new Map(this.blocksForDate(date).map((b) => [b.id, b]));
+      for (const id of ids) if (!stored.has(id)) throw badRequest('block.notFound');
+      const dayCategories = new Set([...stored.values()].map((b) => b.categoryId));
+      for (const b of input) {
+        if (b.categoryId == null || dayCategories.has(b.categoryId)) continue;
+        this.assertCategoryRef(b.categoryId);
+      }
+      const del = this.q('DELETE FROM blocks WHERE id = ? AND user_id = ?');
+      for (const id of stored.keys()) if (!ids.has(id)) del.run(id, this.uid);
+      const upd = this.q(
+        `UPDATE blocks SET start_min = ?, end_min = ?, title = ?, category_id = ?, status = ?, actual_min = ?, note = ?
+         WHERE id = ? AND user_id = ?`,
+      );
+      const ins = this.q(
+        `INSERT INTO blocks (user_id, date, start_min, end_min, title, category_id, status, actual_min, note)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      );
+      for (const b of sorted) {
+        const cur = b.id !== undefined ? stored.get(b.id) : undefined;
+        const status: BlockStatus = b.status ?? cur?.status ?? 'pending';
+        let actualMin = b.actualMin !== undefined ? b.actualMin : (cur?.actualMin ?? null);
+        if (b.status !== undefined && b.actualMin === undefined && status !== 'done' && status !== 'partial') actualMin = null;
+        if (b.actualMin === undefined && actualMin != null && actualMin > b.end - b.start) actualMin = null;
+        const note = b.note ?? cur?.note ?? '';
+        if (cur) upd.run(b.start, b.end, b.title, b.categoryId, status, actualMin, note, cur.id, this.uid);
+        else ins.run(this.uid, date, b.start, b.end, b.title, b.categoryId, status, actualMin, note);
+      }
       this.touchDay(date);
     });
   }

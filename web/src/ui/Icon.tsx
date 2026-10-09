@@ -118,6 +118,13 @@ const paths = {
     </>
   ),
   dot: <circle cx="12" cy="12" r="3" fill="currentColor" stroke="none" />,
+  // Akcije bloka (components/blocks): premesti, završi sad, kraće, duže, zatvori prazninu, poništi.
+  move: <path d="M12 3v18M3 12h18M9 6l3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3" />,
+  'end-now': <path d="M4 12h10M10 7.5l4.5 4.5-4.5 4.5M19 5v14" />,
+  shorter: <path d="M5 4h14M5 20h14M12 7.5v3.5M9 9l3 2.5L15 9M12 16.5V13M9 15l3-2.5 3 2.5" />,
+  longer: <path d="M5 12h14M12 3v6.5M9 6l3-3 3 3M12 21v-6.5M9 18l3 3 3-3" />,
+  collapse: <path d="M5 12h14M12 3.5v5M9.5 6.5l2.5 2.5 2.5-2.5M12 20.5v-5M9.5 17.5l2.5-2.5 2.5 2.5" />,
+  undo: <path d="M9 14L4.5 9.5 9 5M4.5 9.5H15a4.5 4.5 0 0 1 0 9h-3" />,
 } satisfies Record<string, ReactNode>;
 
 export type IconName = keyof typeof paths;

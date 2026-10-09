@@ -27,7 +27,6 @@ export function MiniTimeline({
   dayStart,
   catMap,
   axis = true,
-  large,
   className,
 }: {
   blocks: TimelineSegment[];
@@ -35,14 +34,13 @@ export function MiniTimeline({
   catMap: Map<number, Category>;
   /** Oznake sati ispod trake. */
   axis?: boolean;
-  large?: boolean;
   className?: string;
 }) {
   const ticks = sixHourTicks(dayStart);
   const pos = (m: number) => clamp01((m - dayStart) / DAY_MIN) * 100;
 
   return (
-    <span className={cx('sched-tl', large && 'sched-tl-lg', className)} aria-hidden="true">
+    <span className={cx('sched-tl', className)} aria-hidden="true">
       <span className="sched-tl-bar">
         {blocks.map((b, i) => {
           const left = pos(b.start);

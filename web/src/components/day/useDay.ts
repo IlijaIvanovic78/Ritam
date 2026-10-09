@@ -15,7 +15,7 @@
 //   na ekranu ili u kešu u memoriji — ona je starija od svake izmene posle nje.
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { BlockInput, BlockPatch, BlockStatus, DayPayload, Task, TaskPatch } from '../../../../shared/types.ts';
+import type { DayPayload, Task, TaskPatch } from '../../../../shared/types.ts';
 import { api, ApiError, errorMessage, isCachedPayload, serverStaleStore } from '../../api.ts';
 import { t } from '../../i18n/index.ts';
 import { listNoteDraftDates, isNoteOpen, readNoteDraft, removeNoteDraft } from '../../lib/noteDrafts.ts';
@@ -33,7 +33,7 @@ export interface DayState {
   fresh: boolean;
 }
 
-interface MutateOpts {
+export interface MutateOpts {
   /** Izmena koja se odmah prikaže (pre odgovora servera). */
   optimistic?: (d: DayPayload) => DayPayload;
   /** Datum na koji se mutacija odnosi (podrazumevano: dan na ekranu). */
@@ -159,8 +159,6 @@ const POLL_MS = 60_000;
 const POLL_STALE_MS = 15_000;
 const POLL_CHECK_MS = 15_000;
 
-export const isActiveStatus = (s: BlockStatus) => s === 'done' || s === 'partial';
-
 export function useDay(date: string, ensure: boolean) {
   const [state, setState] = useState<DayState>(() => ({
     date,
@@ -182,7 +180,6 @@ export function useDay(date: string, ensure: boolean) {
    * ekranu možda i dalje svež dan — povremeno osvežavanje tada ide češće.
    */
   const lastFailed = useRef(false);
-  const initRef = useRef<{ date: string; promise: Promise<DayPayload | null> } | null>(null);
   /**
    * Dan na ekranu nema stanje koje je server potvrdio (otvoren iz keša service worker-a), a
    * optimistička izmena nije uspela dok je posle nje već čekalo osvežavanje: stanje pre (prve)
@@ -370,27 +367,6 @@ export function useDay(date: string, ensure: boolean) {
   );
 
   const actions = useMemo(() => {
-    /** Inicijalizuj dan iz šablona (pregled → sačuvani blokovi). Paralelni pozivi dele isti zahtev. */
-    const ensureInit = (): Promise<DayPayload | null> => {
-      const d = dateRef.current;
-      const cur = stateRef.current;
-      if (cur.date === d && cur.day?.initialized) return Promise.resolve(cur.day);
-      if (initRef.current?.date === d) return initRef.current.promise;
-      const promise = mutate(async () => {
-        try {
-          return await api.initDay(d);
-        } catch (e) {
-          // Već inicijalizovan (npr. sa drugog uređaja) — samo učitaj.
-          if (e instanceof ApiError && e.status === 409) return api.day(d, true);
-          throw e;
-        }
-      }).finally(() => {
-        if (initRef.current?.promise === promise) initRef.current = null;
-      });
-      initRef.current = { date: d, promise };
-      return promise;
-    };
-
     return {
       reload() {
         const d = dateRef.current;
@@ -411,44 +387,11 @@ export function useDay(date: string, ensure: boolean) {
         load(dateRef.current, ensureRef.current);
       },
 
-      ensureInit,
-
-      setStatus: (id: number, status: BlockStatus) =>
-        mutate(() => api.patchBlock(id, { status }), {
-          optimistic: (d) => ({
-            ...d,
-            blocks: d.blocks.map((b) =>
-              b.id === id ? { ...b, status, actualMin: isActiveStatus(status) ? b.actualMin : null } : b,
-            ),
-          }),
-        }),
-
-      addBlock: (input: BlockInput) => {
-        const d = dateRef.current;
-        return mutate(() => api.addBlock(d, input));
-      },
-      patchBlock: (id: number, patch: BlockPatch) => mutate(() => api.patchBlock(id, patch)),
-      deleteBlock: (id: number) => mutate(() => api.deleteBlock(id)),
-      splitBlock: (id: number, at: number) => mutate(() => api.splitBlock(id, at)),
-      /** Naslov i kategorija dva bloka menjaju mesta (npr. dve aktivnosti menjaju termine); vreme i status ostaju. */
-      swapBlocks: (id: number, withId: number) =>
-        mutate(() => api.swapBlocks(id, withId), {
-          optimistic: (d) => {
-            const a = d.blocks.find((b) => b.id === id);
-            const b = d.blocks.find((x) => x.id === withId);
-            if (!a || !b) return d;
-            return {
-              ...d,
-              blocks: d.blocks.map((x) =>
-                x.id === id
-                  ? { ...x, title: b.title, categoryId: b.categoryId }
-                  : x.id === withId
-                    ? { ...x, title: a.title, categoryId: a.categoryId }
-                    : x,
-              ),
-            };
-          },
-        }),
+      /**
+       * Izmena dana kroz isti red i ista pravila (odgovor zamenjuje dan, greška vraća potvrđeno stanje i ponovo
+       * učitava dan): niz blokova šalje ceo raspored (PUT) i ocene (PATCH) ovuda.
+       */
+      run: (fn: () => Promise<DayPayload>, opts?: MutateOpts) => mutate(fn, opts),
 
       /** undefined = šablon za dan u nedelji, null = prazan dan, broj = taj šablon. */
       applyTemplate: (templateId?: number | null) => {

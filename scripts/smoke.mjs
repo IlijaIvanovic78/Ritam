@@ -33,6 +33,8 @@
 // Isti kod kojim stranica dana računa ispunjenost i klijent pretvara zidno vreme u minute dana
 // (Node 24 učitava .ts direktno).
 import { summarizeBlocks } from '../shared/summary.ts';
+// Model dana kao niza blokova (isti kod kao uređivač na klijentu): raspored za PUT /api/days/:date/blocks.
+import { createBlockStack, fromBlocks, layoutBase, makeBlock, makeFree, templateBase, toBlocks, toTemplateBlocks } from '../shared/blockStack.ts';
 import { fmtDateRange, normalizeRange, parseClock, weekdayNameAcc } from '../shared/time.ts';
 // Katalozi poruka (server i web) i podešavanja sačuvana pre jezika — provere u sekciji "language".
 import { MESSAGES as SERVER_MESSAGES, langFromAcceptLanguage, msg as serverMsg } from '../server/i18n.ts';
@@ -1269,6 +1271,182 @@ async function main() {
     check('neuspela zamena ne menja drugi dan', same(d13.blocks, [other]), d13.blocks);
   });
 
+  // ---- PUT ceo raspored dana (uređivač "niz blokova", shared/blockStack.ts) ----
+  await section('day blocks put', async () => {
+    const P1 = '2095-05-02'; // pregled iz šablona → sačuvan dan
+    const P2 = '2095-05-03'; // zadržani id-jevi i ocene
+    const P3 = '2095-05-04'; // greške: ništa se ne menja
+    const P4 = '2095-05-05'; // obrisana kategorija
+    const ds = schedule.settings.dayStart;
+    const putDay = (date, body, o) => put(`/api/days/${date}/blocks`, body, o);
+    const rows = (bs) => bs.map((b) => [b.start, b.end, b.title, b.categoryId, b.status, b.actualMin, b.note]);
+
+    // Pregled iz šablona: raspored napravljen istim kodom kao klijent (podeli prvi blok, obriši poslednji, dodaj blok).
+    const tpl = weekdayTpl(P1);
+    check('PUT: P1 ima šablon sa blokovima', !!tpl && tpl.blocks.length >= 3, tpl);
+    const pv = await expectOk('PUT: pregled P1', get(`/api/days/${P1}`));
+    check('PUT: P1 je pregled (negativni id-jevi)', pv.initialized === false && pv.blocks.length > 0 && pv.blocks.every((b) => b.id < 0));
+    const fr = fromBlocks(pv.blocks, ds);
+    check('PUT: pregled bez preklapanja, okvir od početka dana', fr.overlaps.length === 0 && fr.frame.start === ds, fr);
+    const M = createBlockStack(fr.frame);
+    const first = fr.items.find((c) => c.kind === 'block');
+    const last = [...fr.items].reverse().find((c) => c.kind === 'block');
+    let items = M.opSplit(fr.items, first.id, M.cuts15(first.dur, 2)).list;
+    items = M.opDelete(items, last.id);
+    const gap = items.find((c) => c.kind === 'free' && c.dur >= 60);
+    items = M.opInsertInFree(items, gap.id, 0, makeBlock({ title: 'Smoke niz', dur: 30, categoryId: fx.catB.id }));
+    const out = toBlocks(items, fr.frame, { confirmed: pv.blocks });
+    check('PUT: toBlocks bez neispravnih opsega, bez id-jeva pregleda', out.invalid.length === 0 && out.blocks.every((b) => b.id === undefined), out);
+    await expectError('PUT: zastareo base → 409', putDay(P1, { blocks: out.blocks, base: 'zastareo' }), 409, 'Dan je u međuvremenu promenjen na drugom uređaju.');
+    const still = await expectOk('PUT: P1 posle 409', get(`/api/days/${P1}`));
+    check('PUT: 409 ne inicijalizuje dan', still.initialized === false && same(still.blocks, pv.blocks), still);
+    let d = await expectOk('PUT: pregled → sačuvan dan (base = pregled)', putDay(P1, { blocks: out.blocks, base: layoutBase(pv.blocks) }));
+    check('PUT: dan inicijalizovan sa šablonom dana u nedelji', d.initialized === true && d.templateId === tpl?.id && d.templateName === tpl?.name, [d.initialized, d.templateId]);
+    check('PUT: blokovi tačno kao u telu (vreme, naziv, kategorija)', same(d.blocks.map(shape), out.blocks.map(shape)), d.blocks.map(shape));
+    check('PUT: novi pozitivni id-jevi, svi pending', d.blocks.every((b) => b.id > 0 && b.status === 'pending' && b.actualMin === null && b.note === ''));
+    check('PUT: nema preklapanja', d.blocks.every((b, i, a) => i === 0 || a[i - 1].end <= b.start));
+    const again = await expectOk('PUT: GET P1', get(`/api/days/${P1}`));
+    check('PUT: GET vraća isto', same(again, d));
+    check('PUT: base sačuvanog dana', layoutBase(again.blocks) === layoutBase(d.blocks) && layoutBase(d.blocks) !== layoutBase(pv.blocks));
+
+    // Zadržani id-jevi: ocena, stvarno vreme i beleška ostaju; izostavljen blok se briše; nov se dodaje.
+    await expectOk('PUT: P2 prazan dan', post(`/api/days/${P2}/init`, { reset: true, templateId: null }));
+    await expectOk('PUT: P2 rad', post(`/api/days/${P2}/blocks`, { start: 480, end: 600, title: 'Rad', categoryId: fx.catA.id }));
+    await expectOk('PUT: P2 odmor', post(`/api/days/${P2}/blocks`, { start: 600, end: 660, title: 'Odmor', categoryId: fx.catN.id }));
+    d = await expectOk('PUT: P2 šetnja', post(`/api/days/${P2}/blocks`, { start: 700, end: 760, title: 'Šetnja', categoryId: null }));
+    const [rad, odmor, setnja] = d.blocks;
+    await expectOk('PUT: P2 rad urađen', patch(`/api/blocks/${rad.id}`, { status: 'done', actualMin: 100, note: 'dobro' }));
+    d = await expectOk('PUT: P2 odmor delimično', patch(`/api/blocks/${odmor.id}`, { status: 'partial', actualMin: 20 }));
+    const conf = d.blocks;
+    // Klijent: Odmor ide pre Rada, Šetnja se briše, Trening je nov (toBlocks šalje samo promenjena polja ocene).
+    const f2 = fromBlocks(conf, ds);
+    const M2 = createBlockStack(f2.frame);
+    let it2 = M2.opMoveTo(f2.items, odmor.id, M2.idxOf(f2.items, rad.id), null);
+    it2 = M2.opDelete(it2, setnja.id);
+    it2 = M2.opInsert(it2, M2.idxOf(it2, rad.id) + 1, makeBlock({ title: 'Trening', dur: 60, categoryId: fx.catB.id }));
+    const body2 = toBlocks(it2, f2.frame, { confirmed: conf }).blocks;
+    check('PUT: toBlocks ne šalje nepromenjene ocene', body2.every((b) => !('status' in b) && !('actualMin' in b) && !('note' in b)), body2);
+    d = await expectOk('PUT: P2 premeštanje', putDay(P2, { blocks: body2, base: layoutBase(conf) }));
+    check(
+      'PUT: id-jevi i ocene zadržani, šetnja obrisana, trening nov',
+      same(rows(d.blocks), [
+        [480, 540, 'Odmor', fx.catN.id, 'partial', 20, ''],
+        [540, 660, 'Rad', fx.catA.id, 'done', 100, 'dobro'],
+        [660, 720, 'Trening', fx.catB.id, 'pending', null, ''],
+      ]) && d.blocks[0].id === odmor.id && d.blocks[1].id === rad.id && d.blocks[2].id > setnja.id,
+      d.blocks,
+    );
+    await expectStatus('PUT: obrisan blok → 404 za PATCH', patch(`/api/blocks/${setnja.id}`, { status: 'done' }), 404);
+    const trening = d.blocks[2];
+    d = await expectOk('PUT: poslate ocene važe', putDay(P2, { blocks: [
+      { id: odmor.id, start: 480, end: 540, title: 'Odmor', categoryId: fx.catN.id, status: 'skipped' },
+      { id: rad.id, start: 540, end: 630, title: 'Rad', categoryId: fx.catA.id, note: 'kraće' },
+      { id: trening.id, start: 660, end: 720, title: 'Trening', categoryId: fx.catB.id, status: 'done', actualMin: 45 },
+    ] }));
+    check(
+      'PUT: skipped briše stvarno vreme; kraće od stvarnog vremena → null; poslato stvarno vreme važi',
+      same(rows(d.blocks), [
+        [480, 540, 'Odmor', fx.catN.id, 'skipped', null, ''],
+        [540, 630, 'Rad', fx.catA.id, 'done', null, 'kraće'],
+        [660, 720, 'Trening', fx.catB.id, 'done', 45, ''],
+      ]),
+      d.blocks,
+    );
+    // Posle ponoći (dan počinje u 01:00): blok preko ponoći i blok 00:00–01:00 na kraju dana.
+    d = await expectOk('PUT: posle ponoći', putDay(P2, { blocks: [
+      ...d.blocks.map(({ id, start, end, title, categoryId }) => ({ id, start, end, title, categoryId })),
+      { start: 1380, end: 1440, title: 'Kasno', categoryId: null },
+      { start: 1440, end: 1500, title: 'Posle ponoći', categoryId: null },
+    ] }));
+    check('PUT: blokovi posle ponoći sačuvani', same(d.blocks.slice(-2).map((b) => [b.start, b.end]), [[1380, 1440], [1440, 1500]]), d.blocks);
+    const f3 = fromBlocks(d.blocks, ds);
+    check('PUT: dan posle ponoći je tačno 24h u nizu', f3.overlaps.length === 0 && createBlockStack(f3.frame).total(f3.items) === 1440, f3.frame);
+    d = await expectOk('PUT: blok preko ponoći', putDay(P2, { blocks: [{ start: 1410, end: 1530, title: 'Preko ponoći', categoryId: null }] }));
+    check('PUT: prazan raspored + jedan blok preko ponoći', same(d.blocks.map((b) => [b.start, b.end]), [[1410, 1530]]), d.blocks);
+
+    // Greške: 400/404/403 i ništa se ne menja (jedna transakcija).
+    await expectOk('PUT: P3 prazan dan', post(`/api/days/${P3}/init`, { reset: true, templateId: null }));
+    d = await expectOk('PUT: P3 blok', post(`/api/days/${P3}/blocks`, { start: 600, end: 660, title: 'Postojeći', categoryId: null }));
+    const p3 = d.blocks[0];
+    const before = await expectOk('PUT: P3 pre grešaka', get(`/api/days/${P3}`));
+    const ok = { id: p3.id, start: 600, end: 660, title: 'Postojeći', categoryId: null };
+    const nova = { start: 700, end: 760, title: 'Nova', categoryId: null };
+    await expectError('PUT: preklapanje → 400', putDay(P3, { blocks: [ok, { start: 650, end: 720, title: 'Preklapa', categoryId: null }] }), 400, 'Blokovi se preklapaju: „Postojeći“ i „Preklapa“.');
+    await expectError('PUT: isti id dva puta → 400', putDay(P3, { blocks: [ok, { ...ok, start: 800, end: 860 }] }), 400, 'Isti blok je naveden više puta.');
+    await expectError('PUT: nepostojeći id → 400 (i nov blok iz istog zahteva se ne upisuje)', putDay(P3, { blocks: [nova, { id: 99999999, start: 800, end: 860, title: 'X', categoryId: null }] }), 400, 'Blok ne postoji.');
+    await expectError('PUT: blok drugog dana → 400', putDay(P3, { blocks: [ok, { id: rad.id, start: 800, end: 860, title: 'Rad', categoryId: null }] }), 400, 'Blok ne postoji.');
+    await expectStatus('PUT: id pregleda (negativan) → 400', putDay(P3, { blocks: [{ ...nova, id: -1 }] }), 400);
+    await expectStatus('PUT: id neceo broj → 400', putDay(P3, { blocks: [{ ...ok, id: 1.5 }] }), 400);
+    await expectError('PUT: kraj pre početka → 400', putDay(P3, { blocks: [{ ...nova, start: 760, end: 700 }] }), 400, 'Neispravno vreme bloka.');
+    await expectError('PUT: duže od 24h → 400', putDay(P3, { blocks: [{ ...nova, start: 0, end: 1441 }] }), 400, 'Neispravno vreme bloka.');
+    await expectError('PUT: početak ≥ 2880 → 400', putDay(P3, { blocks: [{ ...nova, start: 2880, end: 2900 }] }), 400, 'Neispravno vreme bloka.');
+    await expectError('PUT: bez naslova → 400', putDay(P3, { blocks: [{ ...nova, title: '  ' }] }), 400, 'Naslov bloka je obavezan.');
+    await expectError('PUT: nepostojeća kategorija → 400', putDay(P3, { blocks: [{ ...nova, categoryId: 99999999 }] }), 400, 'Kategorija ne postoji.');
+    await expectError('PUT: stvarno vreme duže od bloka → 400', putDay(P3, { blocks: [{ ...ok, status: 'done', actualMin: 61 }] }), 400, 'Stvarno vreme ne može biti duže od bloka (60 min).');
+    await expectError('PUT: neispravan status → 400', putDay(P3, { blocks: [{ ...ok, status: 'gotovo' }] }), 400, 'Neispravan status.');
+    await expectError('PUT: više od 100 blokova → 400', putDay(P3, { blocks: Array.from({ length: 101 }, (_, i) => ({ start: i * 15, end: i * 15 + 15, title: `B${i}`, categoryId: null })) }), 400, 'Dan može imati najviše 100 blokova.');
+    await expectStatus('PUT: blocks nije niz → 400', putDay(P3, { blocks: 'svi' }), 400);
+    await expectStatus('PUT: bez blocks → 400', putDay(P3, {}), 400);
+    await expectStatus('PUT: base nije tekst → 400', putDay(P3, { blocks: [ok], base: 5 }), 400);
+    await expectStatus('PUT: neispravan datum → 400', putDay('2095-02-30', { blocks: [] }), 400);
+    await expectStatus('PUT: bez X-Ritam → 403', putDay(P3, { blocks: [] }, { csrf: false }), 403);
+    const after = await expectOk('PUT: P3 posle grešaka', get(`/api/days/${P3}`));
+    check('PUT: neuspeli zahtevi ne menjaju ništa', same(after, before), after);
+    d = await expectOk('PUT: 100 blokova (granica)', putDay(P3, { blocks: Array.from({ length: 100 }, (_, i) => ({ start: 60 + i * 14, end: 74 + i * 14, title: `B${i}`, categoryId: null })) }));
+    check('PUT: 100 blokova sačuvano, postojeći obrisan', d.blocks.length === 100 && !d.blocks.some((b) => b.id === p3.id), d.blocks.length);
+    d = await expectOk('PUT: kraj = početak sledećeg nije preklapanje', putDay(P3, { blocks: [{ start: 600, end: 660, title: 'A', categoryId: null }, { start: 660, end: 720, title: 'B', categoryId: null }] }));
+    check('PUT: susedni blokovi', d.blocks.length === 2);
+
+    // Obrisana kategorija: blok koji je ima je zadržava; deo podeljenog bloka je dobija; nov blok drugog dana ne.
+    let s = await expectOk('PUT: kategorija za brisanje', post('/api/categories', { name: 'Smoke niz briši', color: '#556677', counts: true }));
+    const catGone = s.categories.find((c) => c.name === 'Smoke niz briši');
+    await expectOk('PUT: P4 prazan dan', post(`/api/days/${P4}/init`, { reset: true, templateId: null }));
+    d = await expectOk('PUT: P4 blok u kategoriji', post(`/api/days/${P4}/blocks`, { start: 480, end: 600, title: 'Stari posao', categoryId: catGone.id }));
+    const old = d.blocks[0];
+    await expectOk('PUT: obriši kategoriju', del(`/api/categories/${catGone.id}`));
+    const f4 = fromBlocks(d.blocks, ds);
+    const M4 = createBlockStack(f4.frame);
+    const split4 = M4.opSplit(f4.items, old.id, M4.cuts15(old.end - old.start, 2));
+    d = await expectOk('PUT: deljenje bloka u obrisanoj kategoriji', putDay(P4, { blocks: toBlocks(split4.list, f4.frame, { confirmed: d.blocks }).blocks }));
+    check('PUT: oba dela zadržavaju obrisanu kategoriju', same(d.blocks.map((b) => [b.start, b.end, b.categoryId]), [[480, 540, catGone.id], [540, 600, catGone.id]]) && d.blocks[0].id === old.id, d.blocks);
+    await expectError('PUT: nov blok sa obrisanom kategorijom (drugi dan) → 400', putDay(P3, { blocks: [{ start: 480, end: 540, title: 'X', categoryId: catGone.id }] }), 400, 'Kategorija ne postoji.');
+
+    // Šablon iz uređivača: toTemplateBlocks(niz) → PUT šablona → isti raspored nazad (bez ocena i id-jeva).
+    s = await expectOk('PUT: šablon za niz', post('/api/templates', { name: 'Smoke niz šablon' }));
+    const nt = s.templates.find((t) => t.name === 'Smoke niz šablon');
+    const MT = createBlockStack(ds);
+    const tItems = MT.normalize([
+      makeBlock({ title: 'Spavanje', dur: 420, categoryId: fx.catN.id }),
+      makeFree(60),
+      makeBlock({ title: 'Rad', dur: 480, categoryId: fx.catA.id }),
+      makeFree(420),
+      makeBlock({ title: 'Čitanje', dur: 90, categoryId: null }),
+    ]);
+    const tOut = toTemplateBlocks(tItems, MT.frame);
+    check('PUT: šablon iz niza (blok preko ponoći na kraju)', tOut.invalid.length === 0 && tOut.blocks.at(-1).end === ds + 1440 + 30, tOut.blocks);
+    s = await expectOk('PUT: blokovi šablona iz niza', put(`/api/templates/${nt.id}/blocks`, { blocks: tOut.blocks }));
+    let saved = s.templates.find((t) => t.id === nt.id).blocks;
+    check('PUT: šablon sačuvan tačno', same(saved.map(shape), tOut.blocks.map(shape)), saved.map(shape));
+    const back = fromBlocks(saved, ds);
+    check('PUT: šablon nazad u niz isti', back.overlaps.length === 0 && same(toTemplateBlocks(back.items, back.frame).blocks, tOut.blocks));
+    const withExtras = toBlocks(tItems, MT.frame).blocks.map((b, i) => ({ ...b, id: 1000 + i, status: 'done', actualMin: 5, note: 'x' }));
+    s = await expectOk('PUT: šablon ignoriše polja dana (id, status, beleška)', put(`/api/templates/${nt.id}/blocks`, { blocks: withExtras }));
+    saved = s.templates.find((t) => t.id === nt.id).blocks;
+    check('PUT: šablon bez polja dana (ocena, beleška)', same(saved.map(shape), tOut.blocks.map(shape)) && saved.every((b) => Object.keys(b).sort().join() === 'categoryId,end,id,start,templateId,title'), saved);
+    // Uređivač šablona čuva sam (autosave) uz base = otisak sadržaja na koji se oslanja (bez id-jeva).
+    const tBase = templateBase(saved);
+    check('PUT: templateBase sačuvanog = templateBase poslatog', tBase === templateBase(tOut.blocks));
+    s = await expectOk('PUT: šablon sa ispravnim base-om', put(`/api/templates/${nt.id}/blocks`, { blocks: tOut.blocks.slice(0, 2), base: tBase }));
+    saved = s.templates.find((t) => t.id === nt.id).blocks;
+    check('PUT: šablon sa base-om sačuvan', same(saved.map(shape), tOut.blocks.slice(0, 2).map(shape)), saved.map(shape));
+    await expectError('PUT: šablon sa zastarelim base-om → 409', put(`/api/templates/${nt.id}/blocks`, { blocks: [], base: tBase }), 409, 'Šablon je u međuvremenu promenjen na drugom uređaju.');
+    s = await expectOk('PUT: šablon posle 409', get('/api/schedule'));
+    check('PUT: 409 ne menja šablon', same(s.templates.find((t) => t.id === nt.id).blocks.map(shape), tOut.blocks.slice(0, 2).map(shape)));
+    await expectStatus('PUT: šablon base duži od 100 znakova → 400', put(`/api/templates/${nt.id}/blocks`, { blocks: [], base: 'x'.repeat(101) }), 400);
+    await expectStatus('PUT: šablon base nije tekst → 400', put(`/api/templates/${nt.id}/blocks`, { blocks: [], base: 5 }), 400);
+    await expectOk('PUT: obriši šablon za niz', del(`/api/templates/${nt.id}`));
+  });
+
   // ---- Zadaci ----
   await section('tasks', async () => {
     let d = await expectOk('dodaj zadatak', post('/api/tasks', { date: D4, title: '  Kupi čaj  ', categoryId: catDel.id }));
@@ -1801,6 +1979,14 @@ async function isolationSection() {
     const bb = bd.blocks[0];
     check('B: njegov dan ima samo njegov blok (bez A-ovog šablona)', bd.initialized === true && bd.blocks.length === 1 && bb?.title === 'B blok' && bd.templateId === null && bd.note === '', bd);
     await is404('swap svog bloka sa A-ovim', post(`/api/blocks/${bb.id}/swap`, { with: ab1.id }, asB));
+    await is400('PUT dana sa A-ovim blokom', put(`/api/days/${DI}/blocks`, { blocks: [{ id: ab1.id, start: 480, end: 600, title: 'B krade', categoryId: null }] }, asB));
+    await is400('PUT dana sa A-ovom kategorijom', put(`/api/days/${DI}/blocks`, { blocks: [{ id: bb.id, start: 900, end: 960, title: 'B blok', categoryId: catI.id }] }, asB));
+    await is400('PUT A-ovog bloka na drugi datum', put(`/api/days/${DI1}/blocks`, { blocks: [{ id: ab2.id, start: 700, end: 760, title: 'A podne', categoryId: null }] }, asB));
+    await expectError('B: PUT sa base A-ovog dana → 409', put(`/api/days/${DI}/blocks`, { blocks: [], base: layoutBase(before.day.blocks) }, asB), 409);
+    bd = await expectOk('B: PUT svog dana (isti datum kao A-ov)', put(`/api/days/${DI}/blocks`, { blocks: [{ id: bb.id, start: 900, end: 960, title: 'B blok', categoryId: null }], base: layoutBase(bd.blocks) }, asB));
+    check('B: PUT menja samo njegov dan', bd.blocks.length === 1 && bd.blocks[0].id === bb.id && bd.blocks[0].title === 'B blok', bd.blocks);
+    const bd1 = await expectOk('B: drugi datum posle odbijenog PUT-a', get(`/api/days/${DI1}`, asB));
+    check('B: odbijen PUT ne pravi dan', bd1.initialized === false && bd1.blocks.length === 0, bd1);
     await is404('swap A-ovog bloka sa svojim', post(`/api/blocks/${ab1.id}/swap`, { with: bb.id }, asB));
     await is404('čekiranje A-ovog zadatka', patch(`/api/tasks/${at1.id}`, { done: false }, asB));
     await is404('premeštanje A-ovog zadatka', patch(`/api/tasks/${at2.id}`, { date: DI }, asB));
@@ -2010,6 +2196,37 @@ async function languageSection() {
       409,
       'Beleška je u međuvremenu promenjena na drugom uređaju.',
       'The note was changed on another device in the meantime.',
+    );
+    await both(
+      'jezik: preklapanje blokova u PUT → 400',
+      as((o) => put(`/api/days/${DL}/blocks`, { blocks: [{ start: 600, end: 700, title: 'Prvi', categoryId: null }, { start: 650, end: 720, title: 'Drugi', categoryId: null }] }, o)),
+      400,
+      'Blokovi se preklapaju: „Prvi“ i „Drugi“.',
+      'Blocks overlap: “Prvi” and “Drugi”.',
+    );
+    await both(
+      'jezik: raspored dana promenjen na drugom uređaju → 409',
+      as((o) => put(`/api/days/${DL}/blocks`, { blocks: [], base: 'stari' }, o)),
+      409,
+      'Dan je u međuvremenu promenjen na drugom uređaju.',
+      'The day was changed on another device in the meantime.',
+    );
+    const ls = await expectOk('jezik: šablon', post('/api/templates', { name: `Jezik šablon ${RUN}` }));
+    const lTpl = ls.templates.find((x) => x.name === `Jezik šablon ${RUN}`);
+    await both(
+      'jezik: šablon promenjen na drugom uređaju → 409',
+      as((o) => put(`/api/templates/${lTpl.id}/blocks`, { blocks: [], base: 'stari' }, o)),
+      409,
+      'Šablon je u međuvremenu promenjen na drugom uređaju.',
+      'The template was changed on another device in the meantime.',
+    );
+    await expectOk('jezik: obriši šablon', del(`/api/templates/${lTpl.id}`));
+    await both(
+      'jezik: previše blokova u PUT → 400',
+      as((o) => put(`/api/days/${DL}/blocks`, { blocks: Array.from({ length: 101 }, (_, i) => ({ start: i * 10, end: i * 10 + 10, title: 'B', categoryId: null })) }, o)),
+      400,
+      'Dan može imati najviše 100 blokova.',
+      'A day can have at most 100 blocks.',
     );
     const missing = await rawReq('GET', '/assets/nepostoji-123.js', { lang: 'en' });
     check('jezik: nepostojeći fajl iz /assets/ → 404 tekst na jeziku zahteva', missing.status === 404 && missing.text === 'Not found.', missing.text);

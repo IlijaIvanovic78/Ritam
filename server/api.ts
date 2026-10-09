@@ -65,19 +65,38 @@ const blockInput = z
   })
   .refine((b) => isValidRange(b.start, b.end), E('block.timeInvalid'));
 
+const blockStatus = z.enum(['pending', 'done', 'partial', 'skipped'], E('block.statusInvalid'));
+const actualMin = z.int(E('block.actualInt')).min(0, E('block.actualRange')).max(1440, E('block.actualRange')).nullable();
+const blockNote = z.string().max(5000, E('block.noteTooLong'));
+
 const blockPatch = z.object({
   start: minute.optional(),
   end: minute.optional(),
   title: blockTitle.optional(),
   categoryId: categoryRef.optional(),
-  status: z.enum(['pending', 'done', 'partial', 'skipped'], E('block.statusInvalid')).optional(),
-  actualMin: z
-    .int(E('block.actualInt'))
-    .min(0, E('block.actualRange'))
-    .max(1440, E('block.actualRange'))
-    .nullable()
-    .optional(),
-  note: z.string().max(5000, E('block.noteTooLong')).optional(),
+  status: blockStatus.optional(),
+  actualMin: actualMin.optional(),
+  note: blockNote.optional(),
+});
+
+// PUT /days/:date/blocks: ceo raspored dana. `id` = blok tog dana (zadržava ocenu i belešku), bez id-ja = nov blok.
+const dayBlockInput = z
+  .object({
+    id: z.int(E('param.idInvalid')).positive(E('param.idInvalid')).optional(),
+    start: minute,
+    end: minute,
+    title: blockTitle,
+    categoryId: categoryRef.optional().transform((v) => v ?? null),
+    status: blockStatus.optional(),
+    actualMin: actualMin.optional(),
+    note: blockNote.optional(),
+  })
+  .refine((b) => isValidRange(b.start, b.end), E('block.timeInvalid'));
+
+const dayBlocks = z.object({
+  blocks: z.array(dayBlockInput).max(100, E('day.tooManyBlocks')),
+  // layoutBase(...) liste na koju se izmena oslanja (shared/blockStack.ts); drugačija lista na serveru → 409.
+  base: z.string().max(100).optional(),
 });
 
 const dayPatch = z.object({
@@ -160,6 +179,8 @@ const templateInput = z.object({ name: templateName, copyFrom: templateRef.optio
 const templatePatch = z.object({ name: templateName.optional(), sort: z.int().optional() });
 const templateBlocks = z.object({
   blocks: z.array(blockInput).max(100, E('template.tooManyBlocks')),
+  // templateBase(...) blokova šablona na koje se izmena oslanja (shared/blockStack.ts); drugačiji šablon → 409.
+  base: z.string().max(100).optional(),
 });
 
 const weekdayMap = z.strictObject({
@@ -259,6 +280,15 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
   api.post('/days/:date/blocks', async (c) => {
     const date = dateParam(c);
     repoOf(c).addBlock(date, await body(c, blockInput));
+    return day(c, date);
+  });
+
+  // Ceo raspored dana odjednom (uređivač "niz blokova"): zadržani id-jevi ostaju (sa ocenom i beleškom), izostavljeni
+  // blokovi se brišu, novi se dodaju — u jednoj transakciji (repo.putDayBlocks).
+  api.put('/days/:date/blocks', async (c) => {
+    const date = dateParam(c);
+    const { blocks, base } = await body(c, dayBlocks);
+    repoOf(c).putDayBlocks(date, blocks, base);
     return day(c, date);
   });
 
@@ -387,8 +417,8 @@ export function createApi(deps: ApiDeps): Hono<ApiEnv> {
 
   api.put('/templates/:id/blocks', async (c) => {
     const id = idParam(c);
-    const { blocks } = await body(c, templateBlocks);
-    repoOf(c).putTemplateBlocks(id, blocks);
+    const { blocks, base } = await body(c, templateBlocks);
+    repoOf(c).putTemplateBlocks(id, blocks, base);
     return schedule(c);
   });
 

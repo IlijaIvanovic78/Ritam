@@ -16,6 +16,7 @@ import type {
   BlockInput,
   BlockPatch,
   CategoryInput,
+  DayBlocksPut,
   DayPatch,
   DayPayload,
   JournalEntry,
@@ -555,6 +556,11 @@ export const api = {
 
   // Blokovi (server automatski inicijalizuje dan ako treba)
   addBlock: (date: string, input: BlockInput) => post<DayPayload>(`/api/days/${date}/blocks`, input),
+  /**
+   * Ceo raspored dana odjednom (niz blokova, `toBlocks` iz shared/blockStack.ts). `base` = `layoutBase` liste na
+   * koju se izmena oslanja; ako se dan u međuvremenu promenio na drugom uređaju → 409.
+   */
+  putDayBlocks: (date: string, body: DayBlocksPut) => put<DayPayload>(`/api/days/${date}/blocks`, body),
   patchBlock: (id: number, p: BlockPatch) => patch<DayPayload>(`/api/blocks/${id}`, p),
   deleteBlock: (id: number) => del<DayPayload>(`/api/blocks/${id}`),
   splitBlock: (id: number, at: number) => post<DayPayload>(`/api/blocks/${id}/split`, { at }),
@@ -589,8 +595,9 @@ export const api = {
   addTemplate: (input: { name: string; copyFrom?: number | null }) => post<SchedulePayload>('/api/templates', input),
   patchTemplate: (id: number, p: { name?: string; sort?: number }) => patch<SchedulePayload>(`/api/templates/${id}`, p),
   deleteTemplate: (id: number) => del<SchedulePayload>(`/api/templates/${id}`),
-  putTemplateBlocks: (id: number, blocks: TemplateBlockInput[]) =>
-    put<SchedulePayload>(`/api/templates/${id}/blocks`, { blocks }),
+  /** `base` = `templateBase(...)` blokova na koje se izmena oslanja; šablon u međuvremenu promenjen → 409. */
+  putTemplateBlocks: (id: number, blocks: TemplateBlockInput[], base?: string) =>
+    put<SchedulePayload>(`/api/templates/${id}/blocks`, base === undefined ? { blocks } : { blocks, base }),
   /** Menjaju se samo poslati dani (server ostale ostavlja kako jesu). */
   putWeekdays: (map: Partial<WeekdayMap>) => put<SchedulePayload>('/api/weekdays', map),
   patchSettings: (p: Partial<Settings>) => patch<SchedulePayload>('/api/settings', p),

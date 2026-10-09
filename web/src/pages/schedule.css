@@ -316,11 +316,6 @@
   }
 }
 
-.sched-tl-lg .sched-tl-bar {
-  height: 14px;
-  border-radius: 4px;
-}
-
 .sched-tl-seg {
   position: absolute;
   top: 0;
@@ -362,256 +357,83 @@
   transform: translateX(-100%);
 }
 
-/* ---- Editor šablona ---- */
+/* ---- Uređivač šablona: isti niz blokova kao Danas (components/blocks, klase blk-) ---- */
 
-.sched-ed {
+.sched-ed-top {
   display: flex;
   flex-direction: column;
+}
+
+/* "‹ Raspored" iznad naslova: tih link nazad (dodirna površina 40px). */
+.sched-back {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 40px;
+  margin: -10px 0 -4px -6px;
+  padding: 0 10px 0 2px;
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  color: var(--text-2);
+  text-decoration: none;
+}
+
+@media (hover: hover) {
+  .sched-back:hover {
+    color: var(--text);
+  }
+}
+
+.sched-ed-head .page-title {
+  overflow-wrap: anywhere;
+}
+
+.sched-ed-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
   gap: 16px;
 }
 
-.sched-ed-preview {
+.sched-ed-main,
+.sched-ed-side {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 16px;
+  min-width: 0;
 }
 
-.sched-ed-sum {
-  font-size: 13px;
-  color: var(--text-2);
-  font-variant-numeric: tabular-nums;
-}
-
-.sched-ed-blocks {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.sched-ed-h {
+.sched-ed-note {
+  padding: 14px 16px;
   font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+
+.sched-ed-note strong {
+  color: var(--text);
   font-weight: 600;
 }
 
-.sched-ed-head {
-  display: none;
-}
-
-.sched-ed-list {
-  display: flex;
-  flex-direction: column;
-}
-
-/* Telefon: 1. red od–do + obriši, 2. red naslov + kategorija (pola-pola, da se nazivi kategorija
-   ne seku čim su duži od par slova) */
-.sched-ed-row {
-  position: relative;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  align-items: center;
-  gap: 8px;
-  padding: 10px 0 10px 20px;
-  border-bottom: var(--hairline) solid var(--divider);
-}
-
-.sched-ed-row:first-child {
-  border-top: var(--hairline) solid var(--divider);
-}
-
-/* Crta kategorije (10px) uz levu ivicu, cele visine reda. */
-.sched-ed-bar {
-  position: absolute;
-  left: 0;
-  top: 10px;
-  bottom: 10px;
-}
-
-.sched-ed-time {
-  grid-row: 1;
-  grid-column: 1 / -1;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
-  padding-right: 48px; /* mesto za dugme Obriši koje stoji u istom redu */
-}
-
-.sched-ed-dash {
-  width: 10px;
-  text-align: center;
-  color: var(--text-3);
-}
-
-.sched-ed-del {
-  grid-row: 1;
-  grid-column: 2;
-  justify-self: end;
-}
-
-.sched-ed-title {
-  grid-row: 2;
-  grid-column: 1;
-}
-
-.sched-ed-cat {
-  grid-row: 2;
-  grid-column: 2;
-  position: relative;
-  min-width: 0;
-}
-
-.sched-ed-cat .cat-dot {
-  position: absolute;
-  left: 12px;
-  top: 50%;
-  transform: translateY(-50%);
-  pointer-events: none;
-}
-
-.sched-ed-cat .select {
-  padding-left: 28px;
-  padding-right: 30px;
-  background-position: right 8px center;
-  text-overflow: ellipsis;
-}
-
-.sched-ed-err,
-.sched-ed-hint {
-  grid-row: 3;
-  grid-column: 1 / -1;
-  font-size: 13px;
-  color: var(--danger);
-}
-
-/* Blok posle ponoći / upozorenje da je blok prešao na drugi kraj dana. */
-.sched-ed-hint {
-  color: var(--text-3);
-  font-variant-numeric: tabular-nums;
-}
-
-.sched-ed-hint.is-warn {
-  color: var(--partial);
-}
-
-.sched-ed .input[aria-invalid='true'] {
-  border-color: var(--danger);
-}
-
-.sched-ed-addrow {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
-  margin-top: 6px;
-}
-
-.sched-ed-warn {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 10px 12px;
-  border-radius: var(--radius);
-  background: var(--surface-2);
-  color: var(--text-2);
-  font-size: 13px;
-}
-
-.sched-ed-warn ul {
-  margin-top: 4px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  color: var(--text);
-  font-variant-numeric: tabular-nums;
-}
-
-.sched-ed-more {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding-top: 12px;
-  border-top: var(--hairline) solid var(--divider);
-}
-
-/* Uži telefoni (≤ 380px, npr. 360px Android): uži izbori vremena, pa Obriši i dalje staje u
-   prvi red. */
-@media (max-width: 380px) {
-  .sched-ed-time {
-    padding-right: 44px;
+/* Dve kolone kad ima mesta (kao Danas): niz levo, napomena i tastatura desno, uz vrh dok se niz skroluje. */
+@media (min-width: 1000px) {
+  .sched-ed-grid {
+    grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+    gap: 24px;
   }
 
-  .sched-ed-time .time-input-part {
-    width: 3.3rem;
-    padding: 0 16px 0 7px;
-    background-position: right 2px center;
-  }
-}
-
-/* Najuži (≤ 352px, npr. iPhone SE sa uvećanim prikazom): vremena dobijaju ceo red, a Obriši ide
-   pored kategorije — inače bi minuti kraja završili ispod dugmeta Obriši. */
-@media (max-width: 352px) {
-  .sched-ed-row {
-    grid-template-columns: minmax(0, 1fr) 7.5rem 40px;
-  }
-
-  .sched-ed-time {
-    padding-right: 0;
-  }
-
-  .sched-ed-del {
-    grid-row: 2;
-    grid-column: 3;
-  }
-}
-
-/* Desktop dijalog: jedan red po bloku */
-@media (min-width: 860px) {
-  .sched-ed-head,
-  .sched-ed-row {
-    grid-template-columns: 17rem minmax(0, 1fr) minmax(9rem, 14rem) 40px;
-    column-gap: 8px;
-  }
-
-  .sched-ed-head {
-    display: grid;
-    padding: 0 0 2px 20px;
-    font-size: 12px;
-    color: var(--text-3);
-  }
-
-  .sched-ed-row {
-    padding: 8px 0 8px 20px;
-  }
-
-  .sched-ed-bar {
-    top: 8px;
-    bottom: 8px;
-  }
-
-  .sched-ed-time {
-    grid-row: 1;
-    grid-column: 1;
-    padding-right: 0;
-  }
-
-  .sched-ed-title {
-    grid-row: 1;
-    grid-column: 2;
-  }
-
-  .sched-ed-cat {
-    grid-row: 1;
-    grid-column: 3;
-  }
-
-  .sched-ed-del {
-    grid-row: 1;
-    grid-column: 4;
-  }
-
-  .sched-ed-err,
-  .sched-ed-hint {
-    grid-row: 2;
+  .sched-ed-side {
+    gap: 20px;
+    position: sticky;
+    top: 28px;
+    max-height: calc(100dvh - 56px - var(--update-h, 0px));
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    /* Prsten fokusa uz ivicu kolone se ne seče. */
+    margin: -4px;
+    padding: 4px;
   }
 }
 

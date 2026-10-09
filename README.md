@@ -114,8 +114,9 @@ ti odgovara. Posle prve prijave otvori **Schedule** / **Raspored**:
 
 1. **Categories** / **Kategorije**: napravi kategorije za ono što radiš tokom dana (bilo koji naziv i boja). Za svaku
    biraš da li se računa u ispunjenost dana.
-2. **Templates** / **Šabloni**: napravi šablon dana i dodaj mu blokove (od–do, naslov, kategorija). Šablona može biti
-   koliko hoćeš, a novi možeš da napraviš i kao kopiju postojećeg.
+2. **Templates** / **Šabloni**: napravi šablon dana i složi mu blokove kao i dan na stranici Today / Danas (naziv,
+   kategorija, trajanje; deliš, premeštaš, menjaš trajanje). Izmene se čuvaju same. Šablona može biti koliko hoćeš, a
+   novi možeš da napraviš i kao kopiju postojećeg.
 3. **Days of the week** / **Dani u nedelji**: za svaki dan izaberi šablon ili ga ostavi bez šablona.
 4. Po želji u **Settings** / **Podešavanjima** promeni "Day starts at" / "Dan počinje u" (podrazumevano 00:00, vidi
    ispod).

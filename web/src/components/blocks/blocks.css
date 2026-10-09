@@ -1,0 +1,1923 @@
+/* Niz blokova (Danas, Raspored): dan kao blokovi složeni jedan za drugim. Sve klase imaju prefiks blk-.
+   Boje dolaze iz tokena (styles/tokens.css) i kategorija; ovde su samo jačine tona bloka i mere. */
+
+:root {
+  /* Ton kategorije u pozadini bloka: obično / prošao / izabran. */
+  --tint: 11%;
+  --tint-past: 7%;
+  --tint-sel: 17%;
+  /* Iza lista "Novi blok": svetlija pozadina, da se vidi blok koji se dodaje. */
+  --backdrop-light: rgba(20, 20, 18, 0.14);
+  --gutter: 46px;
+  --gap: 4px;
+  --dock-h: 0px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --tint: 13%;
+    --tint-past: 9%;
+    --tint-sel: 19%;
+    --backdrop-light: rgba(0, 0, 0, 0.42);
+  }
+}
+
+:root[data-theme='dark'] {
+  --tint: 13%;
+  --tint-past: 9%;
+  --tint-sel: 19%;
+  --backdrop-light: rgba(0, 0, 0, 0.42);
+}
+
+/* Stranica sa nizom (Danas, uređivač šablona) dobija prostor ispod trake akcija (telefon; dok je tastatura otvorena
+   traka stoji iznad nje, --kb iz lib/viewport.ts). */
+.day-page,
+.blk-page {
+  padding-bottom: calc(
+    max(var(--tabbar-h) + env(safe-area-inset-bottom) + var(--update-h, 0px), var(--kb, 0px)) + 28px + var(--dock-h, 0px)
+  );
+}
+
+@media (min-width: 860px) {
+  .day-page,
+  .blk-page {
+    padding-bottom: calc(48px + var(--update-h, 0px));
+  }
+}
+
+.blk-section {
+  position: relative;
+  min-width: 0;
+}
+
+/* ---- Zalepljena traka: Sada + čip ocene + Poništi/+ , pa mapa dana ---- */
+
+.blk-bar {
+  position: sticky;
+  /* Ispod trake "Nema interneta" (App.tsx, --offline-h), ne preko nje. */
+  top: var(--offline-h, 0px);
+  z-index: 24;
+  margin: 0 -16px;
+  padding: 4px 8px 8px 16px;
+  background: var(--bg);
+  border-bottom: var(--hairline) solid transparent;
+  transition: border-color 120ms;
+}
+
+.blk-bar.is-stuck {
+  border-bottom-color: var(--divider);
+}
+
+@media (min-width: 860px) {
+  .blk-bar {
+    margin: 0 -4px;
+    padding: 4px 0 8px 4px;
+  }
+}
+
+.blk-bar-top {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 48px;
+}
+
+.blk-bar-info {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.blk-bar-label {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--now);
+}
+
+.blk-bar-label.is-plain {
+  color: var(--text-2);
+}
+
+.blk-bar-text {
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  font-size: 14px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Naziv se skraćuje (…), "· još 20m" ostaje ceo, "· sledeće …" se skraćuje prvo. */
+.blk-bar-text > * {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.blk-bar-text > .blk-bar-keep {
+  flex: none;
+}
+
+.blk-bar-text > .blk-bar-keep,
+.blk-bar-text > .blk-bar-next {
+  white-space: pre;
+}
+
+.blk-bar-text > .blk-bar-next {
+  flex-shrink: 1000;
+}
+
+.blk-bar-text strong {
+  font-weight: 600;
+  color: var(--text);
+  font-size: 15px;
+}
+
+.blk-bar-text .is-now {
+  color: var(--now);
+  font-weight: 600;
+}
+
+.blk-bar-due {
+  position: relative;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 12px;
+  border-radius: 18px;
+  background: var(--partial-bg);
+  color: var(--partial);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* Dodirna površina ≥ 44px. */
+.blk-bar-due::after {
+  content: '';
+  position: absolute;
+  inset: -4px -2px;
+}
+
+.blk-bar-due-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.blk-bar-saved {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--text-3);
+  padding: 0 4px;
+}
+
+.blk-bar-saved:empty {
+  display: none;
+}
+
+.blk-bar-saved.is-offline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-2);
+}
+
+.blk-bar-saved.is-offline::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--partial);
+}
+
+@media (max-width: 399px) {
+  .blk-bar-saved.has-due {
+    display: none;
+  }
+}
+
+.blk-map {
+  position: relative;
+  height: 20px;
+  margin: 2px 8px 0 var(--gutter);
+  border-radius: 4px;
+  background: var(--surface-2);
+  touch-action: none;
+  cursor: pointer;
+}
+
+@media (min-width: 860px) {
+  .blk-map {
+    margin-right: 4px;
+  }
+}
+
+.blk-map-seg {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  background: var(--cat);
+  border-radius: 2px;
+}
+
+.blk-map-seg.is-past {
+  background: color-mix(in srgb, var(--cat) 45%, var(--surface-2));
+}
+
+.blk-map-seg.is-free {
+  background: none;
+  border: 1px dashed var(--border-strong);
+  top: 5px;
+  bottom: 5px;
+}
+
+.blk-map-seg.is-sel {
+  box-shadow: 0 0 0 1.5px var(--text);
+  z-index: 1;
+}
+
+.blk-map-now {
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--now);
+  border-radius: 1px;
+  z-index: 2;
+}
+
+.blk-map-view {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  border: 1px solid var(--text-2);
+  border-radius: 4px;
+  pointer-events: none;
+  z-index: 3;
+  min-width: 6px;
+}
+
+.blk-map-due {
+  position: absolute;
+  bottom: -7px;
+  width: 4px;
+  height: 4px;
+  margin-left: -2px;
+  border-radius: 50%;
+  background: var(--partial);
+}
+
+.blk-map-hours {
+  position: relative;
+  height: 13px;
+  margin: 4px 8px 0 var(--gutter);
+  font-size: 11px;
+  line-height: 13px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+.blk-map-hours span {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+}
+
+.blk-map-hours span:first-child {
+  transform: none;
+}
+
+.blk-map-hours span:last-child {
+  transform: translateX(-100%);
+}
+
+@media (min-width: 860px) {
+  .blk-map-hours {
+    margin-right: 4px;
+  }
+}
+
+/* ---- Savet (jednom), trake ispod trake ---- */
+
+.blk-tip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 10px 0 2px var(--gutter);
+  padding: 4px 4px 4px 12px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.blk-tip span {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.blk-tip .icon-btn {
+  width: 40px;
+  height: 40px;
+}
+
+.blk-notice {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin: 10px 0 2px var(--gutter);
+  padding: 8px 8px 8px 12px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.blk-notice > .icon,
+.blk-notice > .spinner {
+  flex-shrink: 0;
+  color: var(--text-3);
+}
+
+.blk-notice-text {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.blk-notice .btn {
+  flex-shrink: 0;
+}
+
+.blk-notice-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 32px;
+  color: var(--partial);
+  font-weight: 600;
+}
+
+.blk-notice.is-warn {
+  background: var(--partial-bg);
+  color: var(--text);
+}
+
+/* ---- Redovi ---- */
+
+.blk-stack {
+  position: relative;
+  margin: 0;
+  padding: 14px 0 0 var(--gutter);
+  list-style: none;
+}
+
+.blk {
+  position: relative;
+  margin-top: var(--gap);
+  transition: margin-top 180ms var(--ease);
+}
+
+.blk:first-child {
+  margin-top: 0;
+}
+
+.blk-time {
+  position: absolute;
+  left: calc(-1 * var(--gutter));
+  top: calc(-1 * var(--gap) / 2 - 8px);
+  width: calc(var(--gutter) - 8px);
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.blk.is-past .blk-time {
+  color: var(--text-3);
+}
+
+.blk-box {
+  --cat: var(--text-3);
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  height: var(--h, 60px);
+  overflow: visible;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--cat) var(--tint), var(--surface));
+  border: 1px solid color-mix(in srgb, var(--cat) 22%, var(--border));
+  transition:
+    height 180ms var(--ease),
+    opacity 180ms var(--ease),
+    background-color 120ms,
+    box-shadow 140ms,
+    border-color 120ms;
+  /* Skrol i uvećanje dvama prstima; držanje / prevlačenje / ručica sprečavaju skrol sami (touchmove u BlockStack-u). */
+  touch-action: pan-y pinch-zoom;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.blk.is-past:not(.is-free) .blk-box {
+  background: color-mix(in srgb, var(--cat) var(--tint-past), var(--surface));
+}
+
+.blk-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+  padding: 8px 4px 8px 10px;
+  text-align: left;
+  border-radius: inherit;
+  -webkit-touch-callout: none;
+}
+
+.blk-main:focus-visible {
+  outline-offset: -2px;
+}
+
+.blk-main,
+.blk .day-status,
+.blk-gap {
+  position: relative;
+  z-index: 1;
+}
+
+.blk-main .cat-stroke {
+  min-height: 28px;
+}
+
+.blk-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding-top: 1px;
+  overflow: hidden;
+  /* Dodir pogađa dugme reda, ne tekst: tekst se menja kad se blok podigne (meta postaje opseg), a dodir čiji je cilj
+     uklonjen iz DOM-a više ne stiže do niza — touchmove bez preventDefault, pa browser skroluje i prekida prevlačenje. */
+  pointer-events: none;
+}
+
+.blk-name {
+  flex-shrink: 0;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -0.005em;
+  color: var(--text);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow-wrap: anywhere;
+}
+
+/* Delovi meta reda ("13:30–16:30 · 3h · stvarno 1h"): svaki deo nosi "·" ispred sebe u svom levom paddingu, a
+   red počinje 14px levo i ta traka je odsečena — pa "·" nikad ne stoji na početku reda kad se red prelomi. */
+.blk-meta {
+  display: flex;
+  flex-wrap: wrap;
+  margin-left: -14px;
+  clip-path: inset(-6px -6px -6px 14px);
+  font-size: 13px;
+  line-height: 1.35;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.blk-meta > span {
+  position: relative;
+  padding-left: 14px;
+  white-space: nowrap;
+}
+
+.blk-meta > span::before {
+  content: '·';
+  position: absolute;
+  left: 0;
+  width: 14px;
+  text-align: center;
+  color: var(--text-3);
+  font-weight: 400;
+}
+
+.blk-meta > .blk-note::before {
+  content: none;
+}
+
+.blk-meta .is-now {
+  color: var(--now);
+  font-weight: 600;
+}
+
+.blk-meta .is-due {
+  color: var(--partial);
+  font-weight: 550;
+}
+
+.blk-meta .is-over {
+  color: var(--danger);
+  font-weight: 550;
+}
+
+.blk.is-over .blk-time {
+  color: var(--danger);
+}
+
+.blk-meta .is-range {
+  color: var(--text);
+  font-weight: 550;
+}
+
+.blk-meta .blk-note {
+  /* Opis ikonice (title) uz miš; element ostaje isti i kad se blok podigne (ključ u BlockRow). */
+  pointer-events: auto;
+  display: inline-flex;
+  color: var(--text-3);
+  align-self: center;
+  padding-left: 20px;
+}
+
+/* Ocena (✓ ◐ ✕): dodirna površina 44px, vidljiv krug 32px; samo blokovi koji su počeli. */
+.blk .day-status {
+  align-self: flex-start;
+  gap: 0;
+  margin: 2px 2px 0 0;
+}
+
+.blk .day-status-btn {
+  width: 44px;
+  height: 44px;
+  padding: 6px;
+}
+
+.blk .day-status-btn:focus-visible {
+  outline-offset: -3px;
+}
+
+/* 30–45 min (niže od 78 px): naziv u jednom redu, da opseg ostane vidljiv. */
+.blk.is-mid .blk-name {
+  -webkit-line-clamp: 1;
+}
+
+/* Blok sa ✓ ◐ ✕ (do 45 min): meta ne prelama; "čeka ocenu" / "još 20m" / "stvarno" ide prvo i ostaje celo, opseg se
+   skraćuje (početak je ionako u koloni levo). */
+.blk.is-rate .blk-meta {
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+.blk.is-rate .blk-meta > .blk-extra {
+  flex: none;
+}
+
+.blk.is-rate .blk-meta > .blk-extra.is-status {
+  order: -1;
+}
+
+.blk.is-rate .blk-meta > .blk-range {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Kad ni ceo opseg ne staje uz "čeka ocenu" (telefon), ne prikazuje se odsečen: početak je u koloni levo, kraj je
+   početak sledećeg reda. */
+.blk.is-rate .blk-text {
+  container-type: inline-size;
+}
+
+@container (max-width: 179px) {
+  .blk-meta > .blk-range {
+    display: none;
+  }
+}
+
+/* Kratak blok (ispod 30 min): naziv i vreme u jednom redu. */
+.blk.is-short .blk-main {
+  align-items: center;
+  padding-block: 0;
+}
+
+.blk.is-short .blk-text {
+  flex-direction: row;
+  align-items: baseline;
+  gap: 8px;
+  padding: 0;
+}
+
+.blk.is-short .blk-name {
+  -webkit-line-clamp: 1;
+  flex: 0 1 auto;
+}
+
+.blk.is-short .blk-meta {
+  flex-wrap: nowrap;
+  flex-shrink: 0;
+}
+
+.blk.is-short .day-status {
+  align-self: center;
+  margin-top: 0;
+}
+
+/* Kratak blok sa ✓ ◐ ✕ na uskom ekranu: naziv iznad, "čeka ocenu" ispod (u jednom redu bi naziv ostao na par slova). */
+@media (max-width: 559px) {
+  .blk.is-short.is-rate .blk-main {
+    align-items: stretch;
+    padding-block: 3px;
+  }
+
+  .blk.is-short.is-rate .blk-text {
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: center;
+    gap: 0;
+  }
+
+  .blk.is-short.is-rate .blk-name {
+    flex: none;
+    font-size: 15px;
+    line-height: 1.25;
+  }
+
+  .blk.is-short.is-rate .blk-meta {
+    flex-shrink: 1;
+    font-size: 12px;
+    line-height: 1.3;
+  }
+}
+
+.blk.is-short .cat-stroke {
+  min-height: 0;
+}
+
+.blk.is-short .cat-stroke svg {
+  height: 10px;
+}
+
+.blk.is-skipped .blk-name {
+  color: var(--text-2);
+}
+
+.blk.is-due .day-status-btn {
+  color: var(--text-2);
+}
+
+/* Slobodno vreme: isprekidano, bez boje i ocene. Dodir = dodaj blok ovde. */
+.blk.is-free .blk-box {
+  --cat: transparent;
+  background: transparent;
+  border: 1px dashed var(--border-strong);
+}
+
+.blk.is-free .blk-main {
+  align-items: center;
+  padding-block: 0;
+  padding-left: 14px;
+}
+
+.blk.is-free .blk-text {
+  flex-direction: row;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.blk.is-free .blk-name {
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--text-2);
+  -webkit-line-clamp: 1;
+}
+
+.blk.is-free .blk-meta {
+  color: var(--text-3);
+}
+
+.blk-plus {
+  display: inline-flex;
+  align-self: center;
+  color: var(--text-3);
+  margin-right: -2px;
+}
+
+.blk.is-free.is-past .blk-box {
+  border-color: var(--border);
+}
+
+.blk.is-free.is-past .blk-name,
+.blk.is-free.is-past .blk-plus {
+  color: var(--text-3);
+}
+
+.blk.is-free.is-past .blk-plus {
+  display: none;
+}
+
+.blk-gap {
+  display: grid;
+  align-self: center;
+  width: 44px;
+  height: 44px;
+  margin-right: 2px;
+  place-items: center;
+  color: var(--text-3);
+  border-radius: var(--radius);
+}
+
+.blk-gap:active {
+  background: var(--surface-2);
+}
+
+@media (hover: hover) {
+  .blk-gap:hover {
+    background: var(--surface-2);
+    color: var(--text);
+  }
+
+  .blk.is-free:not(.is-past) .blk-main:hover .blk-name {
+    color: var(--text);
+  }
+}
+
+/* Sada: kratka linija u minutu "sada" i blag ton preko prošlog dela tekućeg bloka. */
+.blk.is-now .blk-box {
+  border-color: color-mix(in srgb, var(--now) 60%, var(--border));
+}
+
+.blk.is-now.is-free .blk-box {
+  border-color: color-mix(in srgb, var(--now) 50%, var(--border-strong));
+}
+
+.blk-elapsed,
+.blk-nowline {
+  display: none;
+  position: absolute;
+  left: 0;
+  right: 0;
+  pointer-events: none;
+}
+
+.blk.is-now .blk-elapsed {
+  display: block;
+  top: 0;
+  height: var(--now-y);
+  background: var(--now-bg);
+  border-radius: calc(var(--radius) - 1px) calc(var(--radius) - 1px) 0 0;
+}
+
+.blk.is-now .blk-nowline {
+  display: block;
+  top: var(--now-y);
+  left: -7px;
+  right: auto;
+  width: 22px;
+  height: 0;
+  border-top: 2px solid var(--now);
+  z-index: 2;
+}
+
+.blk.is-now .blk-nowline::before {
+  content: '';
+  position: absolute;
+  left: -2px;
+  top: -4.5px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--now);
+}
+
+/* Izabran blok */
+.blk.is-selected .blk-box {
+  box-shadow: 0 0 0 1.5px var(--text-2);
+  background: color-mix(in srgb, var(--cat) var(--tint-sel), var(--surface));
+  z-index: 2;
+}
+
+.blk-box.is-flash {
+  animation: blk-flash 760ms var(--ease);
+}
+
+.blk-box.is-shifted {
+  animation: blk-shifted 900ms var(--ease);
+}
+
+.blk-box.is-shake {
+  animation: blk-shake 280ms var(--ease);
+}
+
+@keyframes blk-flash {
+  30% {
+    box-shadow: 0 0 0 2px var(--text-2);
+  }
+}
+
+@keyframes blk-shifted {
+  25% {
+    box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--text-2) 70%, transparent);
+  }
+}
+
+@keyframes blk-shake {
+  25% {
+    transform: translateX(-4px);
+  }
+  60% {
+    transform: translateX(3px);
+  }
+}
+
+/* Ručica trajanja (donja ivica izabranog bloka) i "+" na njegovim šavovima */
+.blk-grip,
+.blk-ins {
+  display: none;
+  position: absolute;
+  z-index: 4;
+  touch-action: none;
+}
+
+.blk-grip {
+  left: 50%;
+  bottom: -18px;
+  width: 88px;
+  height: 36px;
+  margin-left: -44px;
+  cursor: ns-resize;
+}
+
+.blk-grip::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 13px;
+  width: 36px;
+  height: 9px;
+  margin-left: -18px;
+  border-radius: 5px;
+  background: var(--text-2);
+  box-shadow: 0 0 0 2.5px var(--bg);
+}
+
+.blk-grip:focus-visible {
+  outline: none;
+}
+
+.blk-grip:focus-visible::before {
+  box-shadow:
+    0 0 0 2.5px var(--bg),
+    0 0 0 4.5px var(--focus);
+}
+
+.blk-ins {
+  left: -22px;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  color: var(--text);
+  touch-action: manipulation;
+}
+
+.blk-ins::before {
+  content: '';
+  position: absolute;
+  left: 9px;
+  top: 9px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--surface-3);
+  border: 1px solid var(--border-strong);
+}
+
+.blk-ins .icon {
+  position: relative;
+}
+
+.blk-ins.is-top {
+  top: calc(-22px - var(--gap) / 2 - 1px);
+}
+
+.blk-ins.is-bot {
+  bottom: calc(-22px - var(--gap) / 2 - 1px);
+}
+
+.blk.is-selected.can-resize:not(.is-splitting) .blk-grip {
+  display: block;
+}
+
+.blk.is-selected.can-ins-top:not(.is-splitting) .blk-ins.is-top,
+.blk.is-selected.can-ins-bot:not(.is-splitting) .blk-ins.is-bot {
+  display: grid;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .blk-section:not(.is-dragging):not(.is-moving) .blk.can-resize:not(.is-splitting):hover .blk-grip {
+    display: block;
+  }
+
+  .blk-section:not(.is-dragging) .blk.can-resize:not(.is-splitting):not(.is-selected):hover .blk-grip::before {
+    opacity: 0.55;
+  }
+
+  .blk-main {
+    cursor: grab;
+  }
+
+  .blk.is-free .blk-main,
+  .blk.no-lift .blk-main {
+    cursor: pointer;
+  }
+
+  .blk-section.is-dragging,
+  .blk-section.is-dragging * {
+    cursor: grabbing !important;
+  }
+}
+
+.blk-rs-pill,
+.blk.is-lifted .blk-time {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 7px;
+  border-radius: 12px;
+  width: auto;
+  background: var(--text);
+  color: var(--bg);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 24px;
+}
+
+.blk-rs-pill {
+  position: absolute;
+  left: 0;
+  z-index: 31;
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.blk-rs-pill[hidden] {
+  display: none;
+}
+
+/* Prevlačenje: podignut blok se smanji u "čip" pod prstom; isprekidano mesto pokazuje gde pada. */
+.blk.is-lifted {
+  z-index: 30;
+  transition: none;
+}
+
+.blk.is-lifted .blk-box {
+  height: var(--ch) !important;
+  transform: translateY(var(--dy, 0px));
+  transition:
+    height 140ms var(--ease),
+    box-shadow 140ms;
+  box-shadow:
+    var(--shadow-pop),
+    0 0 0 1.5px var(--text-2);
+  background: color-mix(in srgb, var(--cat) var(--tint-sel), var(--surface));
+}
+
+.blk.is-lifted .blk-time {
+  transform: translateY(var(--dy, 0px));
+  top: -2px;
+  left: calc(-1 * var(--gutter) - 4px);
+  z-index: 31;
+}
+
+.blk.is-lifted .day-status,
+.blk.is-lifted .blk-gap,
+.blk.is-lifted .blk-elapsed,
+.blk.is-lifted .blk-nowline,
+.blk.is-lifted .blk-break {
+  display: none;
+}
+
+.blk.is-lifted .blk-main {
+  align-items: center;
+  padding-block: 4px;
+}
+
+.blk.is-lifted .blk-name {
+  -webkit-line-clamp: 1;
+}
+
+.blk.is-lifted .blk-meta {
+  flex-wrap: nowrap;
+}
+
+.blk.is-lifted.is-leaving-hole::before {
+  content: attr(data-hole);
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: var(--hole-h);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  display: flex;
+  align-items: center;
+  padding-left: 14px;
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--text-3);
+}
+
+.blk.is-shifting {
+  transition: transform 160ms var(--ease);
+}
+
+.blk-drop-slot {
+  position: absolute;
+  left: var(--gutter);
+  right: 0;
+  z-index: 3;
+  pointer-events: none;
+  border-radius: var(--radius);
+  border: 1.5px dashed var(--text-2);
+  background: color-mix(in srgb, var(--cat, var(--text-3)) 9%, transparent);
+  transition:
+    top 120ms var(--ease),
+    height 120ms var(--ease);
+}
+
+.blk-drop-slot.is-push {
+  border-color: var(--partial);
+}
+
+.blk.is-free.is-drop .blk-box {
+  border-color: var(--text-2);
+  background: var(--surface-2);
+}
+
+.blk-section.is-live .blk-box,
+.blk-section.is-live .blk {
+  transition: none !important;
+}
+
+.blk-section.is-dragging .blk-ins,
+.blk-section.is-dragging .blk-grip,
+.blk-section.is-live .blk-ins,
+.blk-section.is-moving .blk-ins,
+.blk-section.is-moving .blk-grip {
+  display: none !important;
+}
+
+.blk.is-free.is-drop .blk-main,
+.blk.is-free.is-drop .blk-gap {
+  visibility: hidden;
+}
+
+.blk-box.is-entering {
+  opacity: 0;
+}
+
+.blk-as-ind {
+  position: fixed;
+  left: 50%;
+  z-index: 60;
+  width: 40px;
+  height: 24px;
+  margin-left: -20px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  background: var(--text);
+  color: var(--bg);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 120ms;
+}
+
+.blk-as-ind.is-on {
+  opacity: 0.85;
+}
+
+.blk-as-ind .blk-as-down,
+.blk-as-ind[data-dir='down'] .blk-as-up {
+  display: none;
+}
+
+.blk-as-ind[data-dir='down'] .blk-as-down {
+  display: block;
+}
+
+/* Novi blok dok je list otvoren: isprekidan, u tonu izabrane kategorije. */
+.blk.is-ghost .blk-box {
+  border: 1.5px dashed var(--text-2);
+  background: color-mix(in srgb, var(--cat) var(--tint), transparent);
+}
+
+/* "Premesti": isprekidana mesta "Ovde"; slobodno vreme je takođe cilj. */
+.blk-slot {
+  position: relative;
+  margin-top: var(--gap);
+}
+
+.blk-slot-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 44px;
+  padding: 0 12px;
+  border-radius: var(--radius);
+  border: 1.5px dashed var(--text-3);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  text-align: left;
+  animation: blk-slot-in 160ms var(--ease);
+}
+
+.blk-slot-btn .muted {
+  color: var(--text-2);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+.blk-slot-btn:active {
+  background: var(--surface-2);
+}
+
+@media (hover: hover) {
+  .blk-slot-btn:hover {
+    background: var(--surface-2);
+    border-color: var(--text-2);
+  }
+}
+
+@keyframes blk-slot-in {
+  from {
+    opacity: 0;
+    transform: scaleY(0.8);
+  }
+}
+
+.blk.is-target .blk-box {
+  border: 1.5px dashed var(--text-2);
+}
+
+.blk.is-target .blk-name {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.blk.is-moving .blk-box {
+  box-shadow: 0 0 0 1.5px var(--text);
+}
+
+.blk-section.is-moving .blk:not(.is-moving):not(.is-target):not(.is-free) .blk-box {
+  opacity: 0.62;
+}
+
+/* Deljenje na rezovima: blok se izduži; rez je isprekidana linija sa oznakom vremena koja se vuče. */
+.blk.is-splitting .day-status,
+.blk.is-splitting .blk-meta {
+  display: none;
+}
+
+.blk.is-splitting .blk-box {
+  box-shadow: 0 0 0 1.5px var(--text-2);
+  cursor: copy;
+}
+
+.blk-cuts {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.blk-cut-piece {
+  position: absolute;
+  left: 30px;
+  display: flex;
+  align-items: center;
+  font-size: 13px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+.blk-cut-piece b {
+  font-weight: 600;
+  color: var(--text);
+  margin-right: 6px;
+}
+
+.blk-cut {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+  border-top: 1.5px dashed var(--text);
+  pointer-events: none;
+}
+
+.blk-cut-handle {
+  position: absolute;
+  right: 6px;
+  top: -22px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  pointer-events: auto;
+}
+
+.blk-cuts .cut-drag {
+  height: 44px;
+  display: grid;
+  place-items: center;
+  padding: 0 4px;
+  touch-action: none;
+  cursor: ns-resize;
+}
+
+.blk-cuts .cut-drag span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 30px;
+  padding: 0 11px;
+  border-radius: 15px;
+  background: var(--text);
+  color: var(--bg);
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.blk-cuts .cut-x {
+  position: relative;
+  width: 40px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  color: var(--text);
+  touch-action: manipulation;
+}
+
+.blk-cuts .cut-x::before {
+  content: '';
+  position: absolute;
+  left: 7px;
+  top: 9px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--surface-3);
+  border: 1px solid var(--border-strong);
+}
+
+.blk-cuts .cut-x .icon {
+  position: relative;
+}
+
+/* Duže od 3h: visina je sabijena, što označava prekid u koloni vremena. */
+.blk-break {
+  display: none;
+  position: absolute;
+  left: calc(-1 * var(--gutter) + 12px);
+  top: 58%;
+  color: var(--text-3);
+  pointer-events: none;
+}
+
+.blk.is-long .blk-break {
+  display: block;
+}
+
+/* Kraj plana */
+.blk-end {
+  position: relative;
+  height: 26px;
+  margin-top: var(--gap);
+}
+
+.blk-end .blk-time {
+  top: -8px;
+}
+
+.blk-end.is-over .blk-time {
+  color: var(--skipped);
+}
+
+.blk-over-note {
+  margin: 2px 0 0 var(--gutter);
+  font-size: 13px;
+  color: var(--skipped);
+}
+
+/* ---- Traka akcija izabranog bloka ---- */
+
+/* Telefon: iznad donje trake, a dok je tastatura otvorena (preimenovanje u traci) iznad nje (--kb, lib/viewport.ts). */
+.blk-dock {
+  position: fixed;
+  left: max(8px, env(safe-area-inset-left));
+  right: max(8px, env(safe-area-inset-right));
+  bottom: max(calc(var(--tabbar-h) + env(safe-area-inset-bottom) + var(--update-h, 0px) + 8px), calc(var(--kb, 0px) + 8px));
+  z-index: 40;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow: var(--shadow-pop);
+  padding: 2px 6px 6px;
+  animation: blk-dock-in 160ms var(--ease);
+}
+
+@keyframes blk-dock-in {
+  from {
+    transform: translateY(12px);
+    opacity: 0;
+  }
+}
+
+.blk-dock-msg,
+.blk-toast {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 44px;
+  border-radius: var(--radius);
+  background: var(--text);
+  color: var(--bg);
+  font-size: 14px;
+}
+
+.blk-dock-msg {
+  margin: 4px 0 2px;
+  padding: 2px 2px 2px 12px;
+  animation: blk-toast-in 160ms var(--ease);
+}
+
+.blk-msg-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.blk-dock-msg .blk-msg-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.blk-msg-act {
+  flex-shrink: 0;
+  height: 40px;
+  padding: 0 10px;
+  border-radius: 6px;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  color: inherit;
+  white-space: nowrap;
+}
+
+.blk-msg-close {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: 6px;
+  display: grid;
+  place-items: center;
+  opacity: 0.7;
+  color: inherit;
+}
+
+/* Fokus u tamnoj poruci: prsten u boji pozadine stranice, unutar dugmeta (kontrast ≥ 3:1 na obrnutoj pozadini). */
+.blk-dock-msg :focus-visible,
+.blk-toast :focus-visible {
+  outline: 2px solid var(--bg);
+  outline-offset: -3px;
+  opacity: 1;
+}
+
+.blk-toaster {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 100;
+  bottom: max(calc(var(--tabbar-h) + env(safe-area-inset-bottom) + var(--update-h, 0px) + 12px), calc(var(--kb, 0px) + 12px));
+  display: flex;
+  flex-direction: column;
+  width: min(440px, calc(100vw - 24px));
+  pointer-events: none;
+}
+
+.blk-toast {
+  padding: 4px 4px 4px 14px;
+  min-height: 48px;
+  box-shadow: var(--shadow-pop);
+  pointer-events: auto;
+  animation: blk-toast-in 180ms var(--ease);
+}
+
+@keyframes blk-toast-in {
+  from {
+    transform: translateY(8px);
+    opacity: 0;
+  }
+}
+
+@media (min-width: 860px) {
+  .blk-toaster {
+    bottom: calc(24px + var(--update-h, 0px));
+    left: calc(50% + var(--sidebar-w) / 2);
+  }
+}
+
+.blk-dock-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 46px;
+  padding-left: 6px;
+}
+
+.blk-dock-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 58%;
+  height: 44px;
+  padding: 0 6px;
+  margin-left: -6px;
+  border-radius: var(--radius-sm);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.blk-dock-name span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.blk-dock-name .icon {
+  flex-shrink: 0;
+  color: var(--text-3);
+}
+
+.blk-dock-name:active {
+  background: var(--surface-2);
+}
+
+.blk-dock-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.blk-dock-title .muted {
+  color: var(--text-2);
+  font-weight: 400;
+}
+
+.blk-dock-when {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+
+.blk-dock-close {
+  flex-shrink: 0;
+  margin-right: -2px;
+}
+
+.blk-dock-actions {
+  display: grid;
+  grid-template-columns: repeat(var(--n, 6), minmax(0, 1fr));
+  gap: 2px;
+}
+
+.blk-dock-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  height: 54px;
+  min-width: 0;
+  border-radius: var(--radius);
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 550;
+  line-height: 1.1;
+  text-align: center;
+  transition:
+    background-color 120ms,
+    color 120ms;
+}
+
+.blk-dock-btn span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 1px;
+}
+
+/* Sedam akcija (tekući blok, "Završi sad"): oznaka sme u dva reda, malo manja. */
+.blk-dock-actions.is-many .blk-dock-btn {
+  gap: 2px;
+}
+
+.blk-dock-actions.is-many .blk-dock-btn span {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  white-space: normal;
+  font-size: 10.5px;
+  letter-spacing: -0.01em;
+}
+
+.blk-dock-btn:not(:disabled):active {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.blk-dock-btn:disabled {
+  opacity: 0.35;
+}
+
+.blk-dock-btn.is-danger {
+  color: var(--danger);
+}
+
+.blk-dock-btn.is-now {
+  color: var(--now);
+}
+
+.blk-dock-btn:focus-visible {
+  outline-offset: -2px;
+}
+
+@media (hover: hover) {
+  .blk-dock-btn:not(:disabled):hover {
+    background: var(--surface-2);
+    color: var(--text);
+  }
+
+  .blk-dock-btn.is-danger:not(:disabled):hover {
+    color: var(--danger);
+  }
+}
+
+.blk-dock-keys {
+  display: none;
+  margin: 4px 6px 2px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .blk-dock-keys {
+    display: block;
+  }
+}
+
+.blk-dock-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 4px 6px;
+  flex-wrap: wrap;
+}
+
+.blk-dock-row-label {
+  font-size: 13px;
+  color: var(--text-2);
+  margin-right: 2px;
+}
+
+.blk-dock .chip,
+.blk-new-sheet .chip {
+  height: 40px;
+  border-radius: 20px;
+  padding: 0 12px;
+}
+
+.blk-dock .blk-chip-n {
+  min-width: 44px;
+  justify-content: center;
+}
+
+.chip.chip-dashed {
+  border-style: dashed;
+  background: transparent;
+  color: var(--text-2);
+}
+
+.chip:disabled {
+  opacity: 0.4;
+}
+
+.blk-dock-hint {
+  padding: 0 6px 6px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.blk-dock-foot {
+  display: flex;
+  gap: 8px;
+  padding: 2px;
+}
+
+.blk-dock-foot .btn {
+  flex: 1 1 0;
+}
+
+.blk-dock-sum {
+  font-size: 13px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.blk-dock-rename {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  padding: 6px 2px 6px 4px;
+}
+
+.blk-dock-rename .input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.blk-dock-sugs {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 0 4px 6px;
+  scrollbar-width: none;
+}
+
+.blk-dock-sugs .chip {
+  flex-shrink: 0;
+}
+
+/* Tastatura otvorena: traka nikad viša od vidljivog dela (polje i čipovi naziva ostaju dostupni). */
+@media (max-width: 859px) {
+  .kb-open .blk-dock {
+    max-height: calc(var(--vvh, 100dvh) - 16px);
+    overflow-y: auto;
+  }
+}
+
+@media (min-width: 860px) {
+  .blk-dock {
+    position: sticky;
+    left: auto;
+    right: auto;
+    bottom: calc(16px + var(--update-h, 0px));
+    margin-top: 16px;
+  }
+
+  .blk-dock-actions {
+    gap: 4px;
+  }
+}
+
+/* ---- Listovi "Novi blok" i Detalji ---- */
+
+.sheet.blk-new-sheet::backdrop {
+  background: var(--backdrop-light);
+}
+
+@media (min-width: 860px) {
+  .sheet.blk-new-sheet {
+    margin: auto 32px auto auto;
+  }
+}
+
+/* Telefon: list ne pokriva isprekidan novi blok (--nb-max računa StackController.fitNewSheet; telo se tada skroluje),
+   a kategorije i trajanja su po jedan red koji se pomera u stranu. */
+@media (max-width: 859px) {
+  .sheet.blk-new-sheet,
+  .blk-new-sheet .sheet-panel {
+    max-height: min(92dvh, var(--vvh, 92dvh), var(--nb-max, 92dvh));
+  }
+
+  .blk-new-sheet .blk-nb-cats .chips,
+  .blk-new-sheet .blk-nb-durs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    margin: -2px calc(-1 * max(20px, env(safe-area-inset-right))) -2px calc(-1 * max(20px, env(safe-area-inset-left)));
+    padding: 2px max(20px, env(safe-area-inset-right)) 2px max(20px, env(safe-area-inset-left));
+  }
+
+  .blk-new-sheet .blk-nb-cats .chips::-webkit-scrollbar,
+  .blk-new-sheet .blk-nb-durs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .blk-new-sheet .blk-nb-cats .chips > *,
+  .blk-new-sheet .blk-nb-durs > * {
+    flex-shrink: 0;
+  }
+}
+
+.blk-sheet-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.blk-sheet-spacer {
+  flex: 1 1 auto;
+}
+
+@media (max-width: 859px) {
+  .sheet-foot .blk-sheet-spacer {
+    display: none;
+  }
+}
+
+.blk-nb-where,
+.blk-det-when {
+  font-size: 14px;
+  color: var(--text-2);
+  margin-top: -6px;
+}
+
+.blk-nb-effect {
+  font-size: 13px;
+  color: var(--text-3);
+  margin-top: -10px;
+}
+
+.blk-nb-effect.is-moves {
+  color: var(--text-2);
+}
+
+.blk-nb-effect.is-over {
+  color: var(--danger);
+}
+
+/* ---- Desktop: niz levo, Pregled / Zadaci / Beleške desno ---- */
+
+.blk-keys {
+  display: none;
+  padding: 14px 16px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.blk-keys dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  margin: 10px 0 0;
+}
+
+.blk-keys-row {
+  display: contents;
+}
+
+.blk-keys dt {
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  font-weight: 550;
+  white-space: nowrap;
+}
+
+.blk-keys dd {
+  margin: 0;
+}
+
+@media (hover: hover) and (pointer: fine) and (min-width: 1000px) {
+  .blk-keys {
+    display: block;
+  }
+}
+
+/* Desna kolona (Pregled, Tastatura, Zadaci, Beleške) stoji uz vrh dok se niz skroluje (Pregled je uvek na oku); kad je
+   viša od ekrana skroluje se sama — bez druge trake za skrol, a točkić na njenom kraju nastavlja da skroluje stranicu. */
+@media (min-width: 1000px) {
+  .day-grid.is-blocks {
+    gap: 24px;
+  }
+
+  .day-grid.is-blocks .day-col-side {
+    position: sticky;
+    top: 28px;
+    max-height: calc(100dvh - 56px - var(--update-h, 0px));
+    overflow-y: auto;
+    scrollbar-width: none;
+    /* Prsten fokusa polja uz ivicu kolone se ne seče. */
+    margin: -4px;
+    padding: 4px;
+  }
+
+  .day-grid.is-blocks .day-col-side::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* Windows visok kontrast: izbor, sada, ručica, mapa dana i ocene ostaju vidljivi (senke i pozadine se tada ne crtaju). */
+@media (forced-colors: active) {
+  .blk.is-selected .blk-box,
+  .blk.is-lifted .blk-box,
+  .blk.is-moving .blk-box {
+    outline: 2px solid Highlight;
+    outline-offset: 1px;
+  }
+
+  .blk.is-now .blk-box {
+    outline: 2px dashed CanvasText;
+    outline-offset: 1px;
+  }
+
+  .blk-grip::before,
+  .blk.is-now .blk-nowline::before {
+    forced-color-adjust: none;
+    background: CanvasText;
+  }
+
+  .blk-map-seg {
+    border: 1px solid CanvasText;
+  }
+
+  .blk-map-seg.is-free {
+    border-style: dashed;
+  }
+
+  .blk-map-seg.is-sel {
+    outline: 2px solid Highlight;
+  }
+
+  .blk-map-now {
+    forced-color-adjust: none;
+    background: Highlight;
+  }
+
+  .blk-map-view {
+    border-color: Highlight;
+  }
+
+  .blk .day-status-btn.is-active {
+    border: 2px solid Highlight;
+  }
+
+  .blk-drop-slot {
+    border-color: Highlight;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .blk-section *,
+  .blk-section *::before,
+  .blk-section *::after,
+  .blk-dock,
+  .blk-toast,
+  .blk-new-sheet {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

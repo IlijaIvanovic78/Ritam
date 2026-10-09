@@ -1,7 +1,7 @@
-// Glavni ekran: jedan dan — "Sada", vremenska linija blokova, pregled, zadaci i beleške.
+// Glavni ekran: jedan dan — niz blokova (Sada, mapa dana, slaganje u hodu), pregled, zadaci i beleške.
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { Block, BlockPatch, BlockStatus, DayPayload, Template } from '../../../shared/types.ts';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import type { DayPayload, Template } from '../../../shared/types.ts';
 import { DAY_MIN, addDays, isoWeekday, weekdayNameAcc } from '../../../shared/time.ts';
 import { summarizeBlocks } from '../../../shared/summary.ts';
 import { t as tNow, useLang, useT } from '../i18n/index.ts';
@@ -9,28 +9,22 @@ import { useIsDesktop, useLogicalNow } from '../lib/hooks.ts';
 import { noteTypedWithin } from '../lib/noteDrafts.ts';
 import { TODAY_EVENT, dayPath, navigate } from '../lib/router.tsx';
 import { useAllCategories, useAllCategoryMap, useScheduleData } from '../lib/store.ts';
-import { Button, Card, Empty, PageLoader, confirmDialog, toast } from '../ui/index.ts';
-import { BlockSheet } from '../components/day/BlockSheet.tsx';
-import { blockDomId } from '../components/day/BlockRow.tsx';
+import { Button, Card, Empty, Icon, PageLoader, Spinner, confirmDialog, toast } from '../ui/index.ts';
+import { BlockStack, KeysCard } from '../components/blocks/BlockStack.tsx';
+import type { CarryOver } from '../components/blocks/StackBar.tsx';
+import { useDayBlocks } from '../components/blocks/useDayBlocks.ts';
 import { DayHeader } from '../components/day/DayHeader.tsx';
 import type { MenuItem } from '../components/day/DayMenu.tsx';
-import { dueBlocks, scrollToEl, suggestNewRange } from '../components/day/dayUtils.ts';
+import { dueBlocks } from '../components/day/dayUtils.ts';
 import { NotesCard } from '../components/day/NotesCard.tsx';
-import { NowCard } from '../components/day/NowCard.tsx';
 import { SummaryCard } from '../components/day/SummaryCard.tsx';
 import { TaskSheet } from '../components/day/TaskSheet.tsx';
 import { TasksCard } from '../components/day/TasksCard.tsx';
 import { TemplatePickerSheet } from '../components/day/TemplatePickerSheet.tsx';
-import { Timeline } from '../components/day/Timeline.tsx';
 import { WelcomeCard } from '../components/day/WelcomeCard.tsx';
 import { peekDay, syncNoteDrafts, useDay } from '../components/day/useDay.ts';
-import './day.css';
 import { useSwipeNav } from '../components/day/useSwipeNav.ts';
-
-type Editor =
-  /** index = mesto bloka u danu pri otvaranju (za blok iz pregleda, vidi matchBlock). */
-  | { kind: 'edit'; id: number; snapshot: Block; index: number }
-  | { kind: 'new'; range: { start: number; end: number } };
+import './day.css';
 
 /** Prečice ne rade dok se kuca ili dok je fokus u meniju. */
 function isEditable(t: EventTarget | null): boolean {
@@ -47,21 +41,8 @@ function isEditable(t: EventTarget | null): boolean {
 const NOTE_HOLD_MIN = 10;
 /** Zadržava samo ako se u beleškama stvarno kucalo nedavno (ne samo zaostali fokus). */
 const NOTE_TYPING_MS = 2 * 60_000;
-/** Do koliko sati (logički minut) "Sada" kartica podseća na neocenjene blokove od juče. */
+/** Do koliko sati (logički minut) traka podseća na neocenjene blokove od juče. */
 const YESTERDAY_REMINDER_UNTIL = 12 * 60;
-
-/**
- * Blok iz pregleda u danu posle inicijalizacije: isti indeks ako se poklapa, inače jedini blok sa
- * istim vremenom, naslovom i kategorijom. null ako se plan u međuvremenu promenio (drugi šablon,
- * izmena sa drugog uređaja) — tada se ništa ne menja naslepo.
- */
-function matchBlock(list: Block[], b: Block, index: number): Block | null {
-  const same = (x: Block | undefined): x is Block =>
-    !!x && x.id > 0 && x.start === b.start && x.end === b.end && x.title === b.title && x.categoryId === b.categoryId;
-  if (same(list[index])) return list[index];
-  const found = list.filter(same);
-  return found.length === 1 ? found[0] : null;
-}
 
 /** Dan ima ocene ili beleške blokova (primena šablona bi ih obrisala). */
 function hasProgress(d: DayPayload): boolean {
@@ -92,7 +73,6 @@ export default function DayPage({ date: routeDate }: { date: string | null }) {
   const today = now.date;
   const yesterday = addDays(today, -1);
 
-  const [editor, setEditor] = useState<Editor | null>(null);
   const [taskId, setTaskId] = useState<number | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
 
@@ -133,14 +113,33 @@ export default function DayPage({ date: routeDate }: { date: string | null }) {
     if ((isToday || held) && day?.date === date && !day.initialized && day.blocks.length > 0) setPreviewPlanned(date);
   }, [isToday, held, day, date]);
 
+  // Niz blokova dana (izmene u hodu, čuvanje celog rasporeda, ocene).
+  const stack = useDayBlocks({
+    date,
+    day: day && day.date === date ? day : null,
+    dayStart: settings.dayStart,
+    now: viewMinute,
+    pastDay: isPast && viewMinute == null,
+    catMap,
+    templates,
+    t,
+    lang,
+    actions,
+  });
+  const ctl = stack.ctl;
+  const blocks = stack.blocks;
+
   // Sheet koji je stvarno na ekranu (zadatak obrisan na drugom uređaju više nema sheet).
   const editTask = taskId != null ? (day?.tasks.find((x) => x.id === taskId) ?? null) : null;
-  const sheetOpen = (editor != null && day != null) || editTask != null || (pickerOpen && day != null);
+  const sheetOpen = ctl.nb != null || ctl.detId != null || editTask != null || (pickerOpen && day != null);
+  // Rad u nizu koji bi prelazak na novi dan prekinuo: preimenovanje u traci, "Premesti", rezovi, prevlačenje,
+  // ručica (sam izbor bloka ne zadržava dan — inače bi mogao da ostane zauvek).
+  const stackBusy = useSyncExternalStore(ctl.subscribe, () => ctl.renaming || ctl.moveSt != null || ctl.splitSt != null || ctl.isBusy());
 
   // Na "/" logičko danas — posle "dan počinje u" se sam prebaci na novi dan, ali tek kad ništa
-  // nije otvoreno (sheet bloka/zadatka, kucanje beleške), da se izmene u toku ne izgube.
+  // nije otvoreno (sheet bloka/zadatka, kucanje beleške, rad u nizu), da se izmene u toku ne izgube.
   useEffect(() => {
-    if (routeDate != null || shownToday === today || sheetOpen) return;
+    if (routeDate != null || shownToday === today || sheetOpen || stackBusy) return;
     const sinceBoundary = now.minute - settings.dayStart;
     const active = document.activeElement;
     const typingNote =
@@ -151,7 +150,7 @@ export default function DayPage({ date: routeDate }: { date: string | null }) {
       active.matches('.day-notes-input') &&
       noteTypedWithin(NOTE_TYPING_MS);
     if (!typingNote) setShownToday(today);
-  }, [routeDate, today, shownToday, sheetOpen, now.minute, settings.dayStart]);
+  }, [routeDate, today, shownToday, sheetOpen, stackBusy, now.minute, settings.dayStart]);
 
   // Zadatak iz otvorenog sheet-a je u međuvremenu obrisan ili premešten na drugom uređaju:
   // zatvori sheet i reci zašto (inače bi nestao bez reči, a taskId bi i dalje držao "otvoren sheet").
@@ -172,9 +171,6 @@ export default function DayPage({ date: routeDate }: { date: string | null }) {
     return res;
   };
 
-  const [initializing, setInitializing] = useState(false);
-  const initializingRef = useRef(false);
-
   const dateRef = useRef(date);
   useLayoutEffect(() => {
     dateRef.current = date;
@@ -182,7 +178,6 @@ export default function DayPage({ date: routeDate }: { date: string | null }) {
 
   // Promena dana zatvara otvorene sheet-ove (odnose se na prethodni dan).
   useEffect(() => {
-    setEditor(null);
     setTaskId(null);
     setPickerOpen(false);
   }, [date]);
@@ -221,14 +216,17 @@ export default function DayPage({ date: routeDate }: { date: string | null }) {
   const yDay = morning && yesterdayDay?.date === yesterday ? yesterdayDay : null;
   // Samo blokovi od juče koji su se već završili (u minutima jučerašnjeg dana sada je minut + 1440).
   const yesterdayDue = yDay?.initialized ? dueBlocks(yDay.blocks, now.minute + DAY_MIN, catMap).length : 0;
-  // Jučerašnji blokovi koji traju i posle početka ovog dana, u minutima ovog dana (−1440).
-  const carryOver = useMemo(
-    () =>
-      (yDay?.blocks ?? [])
-        .filter((b) => b.end > settings.dayStart + DAY_MIN)
-        .map((b) => ({ ...b, start: b.start - DAY_MIN, end: b.end - DAY_MIN })),
-    [yDay, settings.dayStart],
-  );
+  // Jučerašnji blok koji traje i posle početka ovog dana (u minutima ovog dana, −1440) i traje sada.
+  const carryOver = useMemo<CarryOver | null>(() => {
+    if (!isToday) return null;
+    let best: CarryOver | null = null;
+    for (const b of yDay?.blocks ?? []) {
+      if (b.end <= settings.dayStart + DAY_MIN) continue;
+      const c = { title: b.title, start: b.start - DAY_MIN, end: b.end - DAY_MIN };
+      if (c.start <= now.minute && now.minute < c.end && (!best || c.start >= best.start)) best = c;
+    }
+    return best;
+  }, [yDay, settings.dayStart, isToday, now.minute]);
 
   // Beleške drugih dana koje su ostale samo na ovom uređaju: pošalji ih ili ponudi link.
   const [otherDrafts, setOtherDrafts] = useState<string[]>([]);
@@ -276,7 +274,7 @@ export default function DayPage({ date: routeDate }: { date: string | null }) {
   });
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.defaultPrevented || e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.defaultPrevented || e.repeat || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
       if (isEditable(e.target) || document.querySelector('dialog[open]')) return;
       const k = keysRef.current;
       if (e.key === 'ArrowLeft') {
@@ -296,7 +294,7 @@ export default function DayPage({ date: routeDate }: { date: string | null }) {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  // Telefon: prevlačenje levo/desno = sledeći/prethodni dan.
+  // Telefon: prevlačenje levo/desno = sledeći/prethodni dan (ne dok se blok prevlači).
   const pageRef = useRef<HTMLDivElement>(null);
   useSwipeNav(
     pageRef,
@@ -304,92 +302,12 @@ export default function DayPage({ date: routeDate }: { date: string | null }) {
     () => keysRef.current.go(addDays(keysRef.current.date, 1)),
   );
 
-  // Pregled se računa na klijentu, pa prati optimističke izmene statusa.
-  const blocks = day?.blocks;
-  const summary = useMemo(() => (blocks ? summarizeBlocks(blocks, allCategories) : null), [blocks, allCategories]);
-
-  // ---- Pregled iz šablona → pravi dan pre prve izmene ----
-
-  /** Inicijalizuje dan (ako treba); null ako nije uspelo ili je korisnik u međuvremenu promenio dan. */
-  const withInit = async (): Promise<DayPayload | null> => {
-    if (initializingRef.current) return null;
-    const d = dateRef.current;
-    initializingRef.current = true;
-    setInitializing(true);
-    const p = await actions.ensureInit();
-    initializingRef.current = false;
-    setInitializing(false);
-    if (!p || p.date !== d || dateRef.current !== d) return null;
-    return p;
-  };
-
-  /**
-   * Blok iz pregleda (negativan id) se otvara bez upisa: samo gledanje ne zamrzava dan, pa kasnije
-   * izmene šablona i dalje važe za njega. Dan se upisuje iz šablona tek pri prvoj izmeni u sheet-u.
-   */
-  const resolvedPreview = useRef<{ previewId: number; id: number } | null>(null);
-
-  const openBlock = (block: Block, index: number) => {
-    // Forma kreće od onoga što je na ekranu; ako je to staro, osveži (drugi uređaj).
-    actions.refreshIfStale();
-    resolvedPreview.current = null;
-    setEditor({ kind: 'edit', id: block.id, snapshot: block, index });
-  };
-
-  /**
-   * Pravi id bloka za izmenu iz sheet-a. Za blok iz pregleda: inicijalizuj dan, pa isti blok (isti
-   * indeks, ili isto vreme i naslov); null ako nije uspelo ili se plan u međuvremenu promenio.
-   */
-  const realBlockId = async (id: number): Promise<number | null> => {
-    if (id > 0) return id;
-    if (resolvedPreview.current?.previewId === id) return resolvedPreview.current.id;
-    if (editor?.kind !== 'edit' || editor.id !== id) return null;
-    const { snapshot, index } = editor;
-    const p = await withInit();
-    if (!p) return null;
-    const b = matchBlock(p.blocks, snapshot, index);
-    if (!b) {
-      toast(t('day.planChanged'));
-      return null;
-    }
-    resolvedPreview.current = { previewId: id, id: b.id };
-    return b.id;
-  };
-
-  const sheetPatch = async (id: number, patch: BlockPatch) => {
-    const real = await realBlockId(id);
-    return real == null ? null : actions.patchBlock(real, patch);
-  };
-  const sheetSplit = async (id: number, at: number) => {
-    const real = await realBlockId(id);
-    return real == null ? null : actions.splitBlock(real, at);
-  };
-  const sheetDelete = async (id: number) => {
-    const real = await realBlockId(id);
-    return real == null ? null : actions.deleteBlock(real);
-  };
-
-  /** Status iz vremenske linije. Na pregledu ranijeg dana prva ocena upisuje dan iz šablona. */
-  const setBlockStatus = async (block: Block, index: number, status: BlockStatus) => {
-    if (block.id > 0) {
-      void actions.setStatus(block.id, status);
-      return;
-    }
-    const p = await withInit();
-    if (!p) return;
-    const b = matchBlock(p.blocks, block, index);
-    if (b) void actions.setStatus(b.id, status);
-    else toast(t('day.planChanged'));
-  };
-
-  // Na pregledu se dan ne upisuje unapred: server ga inicijalizuje tek kad se blok stvarno doda.
-  const openNew = () => {
-    if (!day) return;
-    resolvedPreview.current = null;
-    setEditor({ kind: 'new', range: suggestNewRange(day.blocks, settings.dayStart, viewMinute) });
-  };
+  // Pregled se računa iz niza na ekranu, pa prati izmene i ocene pre odgovora servera.
+  const summary = useMemo(() => summarizeBlocks(blocks, allCategories), [blocks, allCategories]);
 
   // ---- Šabloni ----
+
+  const [applying, setApplying] = useState(false);
 
   // Primena šablona zamenjuje sve blokove dana: pita uvek, osim kad dan nema ništa svoje
   // (pregled, prazan dan ili neizmenjena kopija svog šablona).
@@ -399,7 +317,7 @@ export default function DayPage({ date: routeDate }: { date: string | null }) {
     const d = date;
     if (!isPristine(day, templates)) {
       const name = templateId == null ? null : (templates.find((x) => x.id === templateId)?.name ?? null);
-      const blocks = t('common.blocks', { n: day.blocks.length });
+      const blocksText = t('common.blocks', { n: day.blocks.length });
       const ok = await confirmDialog({
         title:
           templateId == null
@@ -410,14 +328,18 @@ export default function DayPage({ date: routeDate }: { date: string | null }) {
         body: hasProgress(day)
           ? t('day.template.progressLost')
           : templateId == null
-            ? t('day.template.clearBody', { blocks })
-            : t('day.template.replaceBody', { blocks }),
+            ? t('day.template.clearBody', { blocks: blocksText })
+            : t('day.template.replaceBody', { blocks: blocksText }),
         confirmText: templateId == null ? t('day.template.clear') : t('day.template.apply'),
         danger: true,
       });
       if (!ok || dateRef.current !== d) return;
     }
+    // Nesačuvan raspored ide prvi (isti red), pa šablon zamenjuje dan.
+    stack.flush();
+    setApplying(true);
     await actions.applyTemplate(templateId);
+    setApplying(false);
   };
 
   const resetToTemplate = async () => {
@@ -431,11 +353,16 @@ export default function DayPage({ date: routeDate }: { date: string | null }) {
       danger: true,
     });
     if (!ok || dateRef.current !== d) return;
+    stack.flush();
+    setApplying(true);
     await actions.applyTemplate();
+    setApplying(false);
   };
 
+  const openNew = () => ctl.openNew();
+
   const menuItems: MenuItem[] = [
-    { label: t('day.addBlock'), icon: 'plus', onSelect: openNew, disabled: !day || initializing },
+    { label: t('day.addBlock'), icon: 'plus', onSelect: openNew, disabled: !day || applying },
     {
       label: t('day.menu.applyOtherTemplate'),
       icon: 'blocks',
@@ -452,23 +379,82 @@ export default function DayPage({ date: routeDate }: { date: string | null }) {
   const weekdayTpl = templates.find((x) => x.id === weekdays[isoWeekday(date)]) ?? null;
   const offerWeekday = !!day && day.initialized && day.templateId == null && weekdayTpl != null && !isPast;
 
-  const jumpTo = (b: Block) => {
-    const el = document.getElementById(blockDomId(b.id));
-    scrollToEl(el);
-    el?.focus({ preventScroll: true });
-  };
-
-  const editBlock =
-    editor?.kind === 'edit' ? (day?.blocks.find((b) => b.id === editor.id) ?? editor.snapshot) : null;
-  // Sačuvan blok iz otvorenog sheet-a više ne postoji na serveru (obrisan na drugom uređaju).
-  const editDeleted =
-    editor?.kind === 'edit' && editor.id > 0 && !!day && fresh && !day.blocks.some((b) => b.id === editor.id);
-  // Izbor nudi samo neobrisane kategorije; obrisana koju blok/zadatak već ima se prikazuje kao izabrana
+  // Izbor nudi samo neobrisane kategorije; obrisana koju zadatak već ima se prikazuje kao izabrana
   // (sheet je šalje samo ako se promeni, a promena na obrisanu nije moguća).
   const pickerCategories = (id: number | null | undefined) => {
     const own = id != null && !categories.some((c) => c.id === id) ? catMap.get(id) : undefined;
     return own ? [...categories, own] : categories;
   };
+
+  const empty = blocks.length === 0;
+
+  // Trake ispod trake "Sada": podsetnik za juče, pregled iz šablona, ponuda šablona, preklapanja, prazan dan.
+  let notice = null;
+  if (day && day.date === date) {
+    const preview = !day.initialized;
+    const ov = stack.overlaps[0];
+    const titleOf = (id: number) => day.blocks.find((b) => b.id === id)?.title ?? '';
+    notice = (
+      <>
+        {isToday && yesterdayDue > 0 && (
+          <div className="blk-notice">
+            <button type="button" className="blk-notice-link" onClick={() => go(yesterday)}>
+              {t('day.now.yesterdayDue', { n: yesterdayDue })}
+              <Icon name="arrow-right" size={14} />
+            </button>
+          </div>
+        )}
+        {preview && (applying || !empty) && (
+          <div className="blk-notice" role="note">
+            {applying ? <Spinner small /> : <Icon name="info" size={16} />}
+            <span className="blk-notice-text">
+              {applying
+                ? t('day.timeline.preparing')
+                : isPast
+                  ? day.templateName
+                    ? t('day.timeline.untrackedTemplate', { name: day.templateName })
+                    : t('day.timeline.untrackedNoTemplate')
+                  : day.templateName
+                    ? t('day.timeline.previewTemplate', { name: day.templateName })
+                    : t('day.timeline.previewNoTemplate')}
+            </span>
+          </div>
+        )}
+        {offerWeekday && weekdayTpl && !preview && (
+          <div className="blk-notice" role="note">
+            <Icon name="info" size={16} />
+            <span className="blk-notice-text">
+              {t('day.timeline.weekdayOffer', { day: weekdayNameAcc(isoWeekday(date), lang), name: weekdayTpl.name })}
+            </span>
+            <Button size="sm" variant="ghost" onClick={() => void pickTemplate(weekdayTpl.id)} disabled={applying}>
+              {t('day.template.apply')}
+            </Button>
+          </div>
+        )}
+        {ov && (
+          <div className="blk-notice is-warn" role="alert">
+            <span className="blk-notice-text">{t('blocks.overlap.banner', { a: titleOf(ov.a), b: titleOf(ov.b) })}</span>
+            <Button size="sm" onClick={stack.fixOverlaps}>
+              {t('blocks.overlap.fix')}
+            </Button>
+          </div>
+        )}
+        {empty && (
+          <div className="blk-notice">
+            <span className="blk-notice-text">{t('day.timeline.empty')}</span>
+            <Button size="sm" icon="plus" onClick={openNew} disabled={applying}>
+              {t('day.addBlock')}
+            </Button>
+            {templates.length > 0 && (
+              <Button size="sm" variant="ghost" onClick={() => setPickerOpen(true)} disabled={applying}>
+                {t('day.timeline.applyTemplate')}
+              </Button>
+            )}
+          </div>
+        )}
+      </>
+    );
+  }
 
   return (
     <div className="page day-page" ref={pageRef}>
@@ -481,54 +467,25 @@ export default function DayPage({ date: routeDate }: { date: string | null }) {
         menuItems={menuItems}
       />
 
-      {day && summary ? (
-        <div className="day-grid">
+      {day && day.date === date ? (
+        <div className="day-grid is-blocks">
           <div className="day-col">
             {/* Raspored još nije postavljen (nijedan dan nema šablon) i prazan dan: kako se pravi. */}
-            {!anyWeekday && day.blocks.length === 0 && (
+            {!anyWeekday && empty && (
               <WelcomeCard
                 hasCategories={categories.length > 0}
                 hasTemplates={templates.length > 0}
                 isToday={isToday}
-                disabled={initializing}
+                disabled={applying}
                 onAddBlock={openNew}
               />
             )}
-            {viewMinute != null && (
-              <NowCard
-                blocks={day.blocks}
-                carryOver={isToday ? carryOver : undefined}
-                minute={viewMinute}
-                catMap={catMap}
-                onJump={jumpTo}
-                yesterdayDue={isToday ? yesterdayDue : 0}
-                onYesterday={() => go(yesterday)}
-              />
-            )}
-            <Timeline
-              day={day}
-              minute={viewMinute}
-              past={isPast}
-              catMap={catMap}
-              initializing={initializing}
-              hasTemplates={templates.length > 0}
-              weekdayOffer={
-                offerWeekday && weekdayTpl
-                  ? { day: weekdayNameAcc(isoWeekday(date), lang), name: weekdayTpl.name }
-                  : null
-              }
-              onApplyWeekday={() => {
-                if (weekdayTpl) void pickTemplate(weekdayTpl.id);
-              }}
-              onOpen={openBlock}
-              onStatus={setBlockStatus}
-              onAdd={openNew}
-              onPickTemplate={() => setPickerOpen(true)}
-            />
+            <BlockStack ctl={ctl} categories={categories} notice={notice} carryOver={carryOver} scrollKey={date} />
           </div>
-          <div className="day-col">
-            {/* Prazan dan nema šta da sabere. */}
-            {day.blocks.length > 0 && <SummaryCard summary={summary} catMap={catMap} preview={!day.initialized} />}
+          <div className="day-col day-col-side">
+            {/* Prazan dan nema šta da sabere. Desktop: Pregled i Tastatura su na vrhu kolone (uvek na oku). */}
+            {!empty && <SummaryCard summary={summary} catMap={catMap} preview={!day.initialized} />}
+            <KeysCard />
             <TasksCard
               tasks={day.tasks}
               openBefore={day.openBefore}
@@ -572,25 +529,6 @@ export default function DayPage({ date: routeDate }: { date: string | null }) {
         <div className="day-loader">
           <PageLoader />
         </div>
-      )}
-
-      {editor && day && (
-        <BlockSheet
-          key={editor.kind === 'edit' ? `edit-${editor.id}` : 'new'}
-          block={editBlock}
-          deleted={editDeleted}
-          dayBlocks={day.blocks}
-          initialRange={editor.kind === 'new' ? editor.range : { start: 0, end: 0 }}
-          categories={pickerCategories(editBlock?.categoryId)}
-          dayStart={settings.dayStart}
-          onClose={() => setEditor(null)}
-          returnFocus={editor.kind === 'edit' ? () => document.getElementById(blockDomId(editor.id)) : undefined}
-          onAdd={actions.addBlock}
-          onPatch={sheetPatch}
-          onSplit={sheetSplit}
-          onSwap={actions.swapBlocks}
-          onDelete={sheetDelete}
-        />
       )}
 
       {editTask && (

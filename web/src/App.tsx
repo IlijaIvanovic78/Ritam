@@ -403,12 +403,7 @@ function Shell() {
             <Wordmark height={30} />
           </Link>
         </header>
-        {(!online || stale) && (
-          <div className="shell-offline" role="status">
-            <span className="shell-offline-dot" aria-hidden="true" />
-            {online ? t('shell.serverStale') : t('shell.offline')}
-          </div>
-        )}
+        {(!online || stale) && <OfflineBar text={online ? t('shell.serverStale') : t('shell.offline')} />}
         <PageErrorBoundary key={pathname}>
           <PageView key={pathname} route={route} />
         </PageErrorBoundary>
@@ -433,6 +428,33 @@ function Shell() {
           );
         })}
       </nav>
+    </div>
+  );
+}
+
+/**
+ * "Nema interneta — izmene se ne čuvaju." / server ne odgovara: zalepljena traka na vrhu sadržaja. Visina ide u
+ * --offline-h, pa se zalepljena traka niza blokova (Danas, šablon) lepi ispod nje, a ne preko nje.
+ */
+function OfflineBar({ text }: { text: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const root = document.documentElement.style;
+    const measure = () => root.setProperty('--offline-h', `${Math.ceil(el.getBoundingClientRect().height)}px`);
+    measure();
+    const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(measure) : null;
+    ro?.observe(el);
+    return () => {
+      ro?.disconnect();
+      root.removeProperty('--offline-h');
+    };
+  }, []);
+  return (
+    <div ref={ref} className="shell-offline" role="status">
+      <span className="shell-offline-dot" aria-hidden="true" />
+      {text}
     </div>
   );
 }
@@ -531,7 +553,7 @@ function PageView({ route }: { route: Route }) {
     case 'journal':
       return <JournalPage />;
     case 'schedule':
-      return <SchedulePage />;
+      return <SchedulePage templateId={route.templateId} />;
     case 'settings':
       return <SettingsPage />;
     case 'notfound':

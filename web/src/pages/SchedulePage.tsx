@@ -1,25 +1,28 @@
-// Raspored: šablon po danu u nedelji, planirani sati, šabloni i kategorije (SPEC 6.4).
+// Raspored: šablon po danu u nedelji, planirani sati, šabloni i kategorije (SPEC 6.4). Šablon otvoren iz kartice
+// Šabloni ima svoju adresu (/raspored/sablon/:id) i uređuje se kao niz blokova (TemplateEditor).
 
-import { useState } from 'react';
 import { WeekdaysCard } from '../components/schedule/WeekdaysCard.tsx';
 import { WeeklyPlanCard } from '../components/schedule/WeeklyPlanCard.tsx';
 import { TemplatesCard } from '../components/schedule/TemplatesCard.tsx';
 import { CategoriesCard } from '../components/schedule/CategoriesCard.tsx';
+import { TemplateEditor } from '../components/schedule/TemplateEditor.tsx';
 import { useT } from '../i18n/index.ts';
 import { Link, paths } from '../lib/router.tsx';
 import { useScheduleData } from '../lib/store.ts';
 import { Icon, PageHeader } from '../ui/index.ts';
 import './schedule.css';
 
-export default function SchedulePage() {
+export default function SchedulePage({ templateId }: { templateId: number | null }) {
+  return templateId != null ? <TemplateEditor key={templateId} templateId={templateId} /> : <ScheduleOverview />;
+}
+
+function ScheduleOverview() {
   const t = useT();
   const { templates } = useScheduleData();
-  // Šablon otvoren u editoru (kartica Šabloni menja mesto kad nastane prvi šablon, pa stanje drži stranica).
-  const [editingId, setEditingId] = useState<number | null>(null);
 
   const weekdays = <WeekdaysCard />;
   const plan = <WeeklyPlanCard />;
-  const tpls = <TemplatesCard editingId={editingId} setEditingId={setEditingId} />;
+  const tpls = <TemplatesCard />;
   const cats = <CategoriesCard />;
 
   return (
