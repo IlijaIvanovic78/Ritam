@@ -83,7 +83,8 @@ na ovoj mašini (127.0.0.1); za pristup sa telefona u istoj mreži pokreni produ
 `HOST=0.0.0.0 npm start` (posle `npm run build`).
 Ako postojeća baza (`./data`) ima podatke iz verzije bez naloga, prvi nalog ih preuzima.
 
-Ostale komande: `npm run typecheck`, `npm run build`, `npm start` (produkcijski server, servira `dist/web`).
+Ostale komande: `npm run typecheck`, `npm run build`, `npm start` (produkcijski server, servira `dist/web`),
+`npm run db:reset` (pražnjenje baze, vidi "Pražnjenje baze").
 
 Test svih API ruta (`scripts/smoke.mjs`) se pokreće samo na posebnoj, privremenoj instanci (nikad na pravoj): pravi
 svoje naloge, a prvi nalog na serveru bi preuzeo podatke iz verzije bez naloga. Proverava registraciju, prijavu,
@@ -275,3 +276,54 @@ docker compose start ritam
 ```
 
 Za vraćanje podataka koristi JSON kopiju.
+
+## Pražnjenje baze
+
+Komanda briše **sve** iz baze: sve naloge, prijave na svim uređajima i sve podatke (kategorije, šabloni, dani u
+nedelji, dani, blokovi, zadaci, beleške, ocene, podešavanja). Šema ostaje, pa se aplikacija posle ponaša kao posle
+nove instalacije: prvi nalog koji se registruje počinje prazan. Server ne treba zaustavljati ni restartovati; uređaji
+koji su bili prijavljeni pri sledećem zahtevu dobijaju ekran prijave.
+
+Bez `--yes` komanda ništa ne menja, samo pokaže bazu i broj redova po tabeli koji bi bili obrisani:
+
+```bash
+# lokalno (baza ./data/ritam.db, ili DATA_DIR)
+npm run db:reset                # proba
+npm run db:reset -- --yes       # briše
+
+# Docker na serveru, u folderu projekta (baza u volumenu: /data/ritam.db)
+docker compose exec ritam node --disable-warning=ExperimentalWarning server/resetDb.ts         # proba
+docker compose exec ritam node --disable-warning=ExperimentalWarning server/resetDb.ts --yes   # briše
+```
+
+Dodatne opcije:
+
+- `--keep-accounts` — nalozi ostaju (email, lozinka, jezik) i uređaji ostaju prijavljeni, a brišu se svi podaci tih
+  naloga i podešavanja se vraćaju na podrazumevana: svaki nalog je kao tek napravljen. Aplikaciju koja je bila
+  otvorena osveži.
+- `--logout` — uz `--keep-accounts` odjavljuje i sve uređaje (prijavu traže najkasnije za 15 minuta).
+- `--no-backup` — bez kopije pre brisanja (ne preporučuje se).
+
+**Kopija:** pre brisanja komanda pravi kopiju cele baze pored nje, `ritam.db.backup-<datum-vreme>` (npr.
+`/data/ritam.db.backup-20261010-143012`; tačna putanja je u ispisu). Kopija ima i naloge (heševe lozinki) i sve
+podatke, pa je obriši kad ti više ne treba (`docker compose exec ritam ls -l /data` pokazuje kopije,
+`docker compose exec ritam rm /data/ritam.db.backup-20261010-143012` briše jednu). Ako brisanje ne uspe (izlaz 2),
+ništa nije obrisano i kopija se ne ostavlja. Obrisani redovi se i u fajlu baze prepisuju nulama (ne ostaju u
+njegovom slobodnom prostoru); stari podaci su u kopiji.
+
+**Vraćanje iz kopije** (sve upisano posle pražnjenja se gubi): dok aplikacija **ne radi**, kopiraj kopiju preko
+`ritam.db` i obriši `ritam.db-wal` i `ritam.db-shm`, pa je pokreni. U Docker-u se kopira unutar volumena, privremenim
+kontejnerom (radi kao korisnik `node`, pa baza ostaje njegova):
+
+```bash
+docker compose stop ritam
+docker compose run --rm --no-deps ritam sh -c \
+  'cp /data/ritam.db.backup-20261010-143012 /data/ritam.db && rm -f /data/ritam.db-wal /data/ritam.db-shm'
+docker compose start ritam
+
+# lokalno (server zaustavljen)
+cp data/ritam.db.backup-20261010-143012 data/ritam.db && rm -f data/ritam.db-wal data/ritam.db-shm
+```
+
+Id-jevi naloga, blokova i zadataka posle pražnjenja ne kreću ispočetka. To je namerno: token ili zahtev sa uređaja
+koji je bio prijavljen pre pražnjenja nikad ne pogađa nov nalog ili nov red.

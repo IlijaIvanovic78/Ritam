@@ -1,12 +1,24 @@
 // Otvaranje SQLite baze (node:sqlite), migracije i pomoćnik za transakcije.
 
 import { mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { StatementSync } from 'node:sqlite';
 import { initEmptyDatabase } from './defaults.ts';
 
 export type { DatabaseSync };
+
+/** Koren projekta; relativan DATA_DIR se računa od njega (ne od trenutnog foldera). */
+const ROOT = resolve(import.meta.dirname, '..');
+
+/**
+ * Folder podataka (env DATA_DIR, podrazumevano `data` u korenu projekta; u Docker-u `/data`) i baza u njemu.
+ * Isto za server (index.ts) i alate (resetDb.ts), pa alat uvek radi nad bazom koju koristi server.
+ */
+export function dataPaths(env: NodeJS.ProcessEnv = process.env): { dataDir: string; dbFile: string } {
+  const dataDir = resolve(ROOT, env.DATA_DIR || 'data');
+  return { dataDir, dbFile: join(dataDir, 'ritam.db') };
+}
 
 /**
  * Migracije redom; indeks + 1 = verzija šeme posle primene.
@@ -264,7 +276,7 @@ function readSchemaVersion(db: DatabaseSync): number {
 }
 
 /** `20261008-153012` (lokalno vreme) za ime kopije baze. */
-function fileStamp(d = new Date()): string {
+export function fileStamp(d = new Date()): string {
   const p = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
 }

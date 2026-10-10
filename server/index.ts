@@ -8,10 +8,10 @@ import { createApp } from './app.ts';
 import { Accounts } from './accounts.ts';
 import { createAccessTokens, dummyPasswordHash, loadSessionKey } from './auth.ts';
 import type { SignupPolicy } from './auth.ts';
-import { openDatabase } from './db.ts';
+import { dataPaths, openDatabase } from './db.ts';
 import { repoFactory } from './repo.ts';
 
-/** Koren projekta; relativne putanje iz env-a se računaju od njega. */
+/** Koren projekta; relativne putanje iz env-a se računaju od njega (DATA_DIR: dataPaths u db.ts). */
 const ROOT = resolve(import.meta.dirname, '..');
 
 const env = process.env;
@@ -92,8 +92,7 @@ if (!Number.isInteger(proxyHops) || proxyHops < 0 || proxyHops > 10) {
   console.error(`Ritam: neispravan TRUST_PROXY "${env.TRUST_PROXY}" (očekuje se broj proxy-ja, npr. 1).`);
   process.exit(1);
 }
-const dataDir = resolve(ROOT, env.DATA_DIR || 'data');
-const dbFile = join(dataDir, 'ritam.db');
+const { dataDir, dbFile } = dataPaths(env);
 const staticCandidate = resolve(ROOT, env.STATIC_DIR || 'dist/web');
 const staticDir = existsSync(join(staticCandidate, 'index.html')) ? staticCandidate : null;
 

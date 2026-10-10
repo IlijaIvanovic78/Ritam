@@ -13,6 +13,7 @@
     "dev:web": "vite",
     "build": "vite build",
     "start": "node --disable-warning=ExperimentalWarning server/index.ts",
+    "db:reset": "node --disable-warning=ExperimentalWarning server/resetDb.ts",
     "typecheck": "tsc -p tsconfig.web.json && tsc -p tsconfig.server.json",
     "test": "node --test --disable-warning=ExperimentalWarning \"shared/*.test.ts\" \"server/*.test.ts\"",
     "icons": "node scripts/make-icons.mjs"
