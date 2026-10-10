@@ -240,7 +240,8 @@ dele ga klijent, server (`layoutBase`) i testovi (`npm test`) — i prenos je te
   van `isValidRange` (takvu izmenu operacija odbija — vraća null). Id: broj = blok sa servera (negativan = pregled iz
   šablona), string = nov blok (`n…`) ili slobodno vreme (`f…`); obrisan blok postaje slobodno vreme sa istim id-jem.
 - Mreža 5 min, najkraći blok 5 min (`SNAP_MIN`, `MIN_BLOCK_MIN`). Stari podaci van mreže ostaju kakvi jesu dok ih
-  korisnik ne menja ("Kraće" / "Duže" menjaju trajanje za 15 min — `LEN_STEP_MIN` — i poravnavaju kraj na mrežu).
+  korisnik ne menja (Shift+↑↓ menja trajanje za 15 min — `LEN_STEP_MIN` —, koraci u listu bloka za 5 min; oba
+  poravnavaju kraj na mrežu).
 - Pravilo talasa: duže i ubacivanje guraju stavke posle sebe samo do prvog slobodnog vremena, koje upija razliku;
   kraće, "Završi sad" i zatvaranje praznine povlače stavke do prvog slobodnog vremena, koje raste; brisanje ostavlja
   slobodno vreme na istom mestu (ništa se ne pomera). Ništa se ne preuređuje samo od sebe.
@@ -269,7 +270,7 @@ dele ga klijent, server (`layoutBase`) i testovi (`npm test`) — i prenos je te
   proveru konflikta (`base`, sekcija 5); `templateBase(blokovi)` = otisak sadržaja šablona (vreme, naziv, kategorija —
   bez id-jeva, koje server daje pri svakom čuvanju, i bez obzira na redosled) za `base` pri čuvanju šablona.
 - Istorija izmena (poništi/ponovi) po prikazu: snimak `{ items, sel }`, najviše 200 koraka; ista izmena sa istom oznakom
-  u roku od 4 s je jedan korak ("Kraće" više puta) — `historyRecord`, `historyUndo`, `historyRedo`.
+  u roku od 4 s je jedan korak (Kraj + više puta, držanje) — `historyRecord`, `historyUndo`, `historyRedo`.
 
 ---
 
@@ -293,7 +294,7 @@ verzije koja je novu bazu punila primerom rasporeda) ostaju kakvi jesu. Takav ra
 potvrđenom akcijom "Raspored ispočetka" (sekcija 6.5, `POST /api/schedule/reset` u sekciji 5). Aplikacija ga nikad
 ne prepoznaje niti briše sama.
 
-Uređivač blokova takođe ne donosi ništa ugrađeno: predlozi naziva (nov blok, preimenovanje) su samo korisnikovi nazivi
+Uređivač blokova takođe ne donosi ništa ugrađeno: predlozi naziva (nov blok, Detalji) su samo korisnikovi nazivi
 blokova iz dana i šablona (po učestalosti), a izabran predlog donosi i njegovu kategoriju.
 
 Dok raspored ne postoji, sve radi nad praznim podacima: dan bez šablona je dan bez blokova (pregled je prazan,
@@ -727,105 +728,169 @@ minut dok je tab vidljiv a nijedan sheet nije otvoren; stanje se menja samo ako 
   šablon „X“, a ovaj dan je napravljen bez šablona." (dan u akuzativu, `weekdayNameAcc`: "Za subotu…", "Za sredu…"; en
   "The template for Saturday is “X”, but this day was created without a template.") + dugme "Primeni" (isto pravilo potvrde kao izbor šablona).
   Raniji dani je nemaju (istorija).
-- Desktop (≥ 1000px): dve kolone — levo niz blokova (~1.35fr), desno Pregled, kartica "Tastatura" (samo uz miš),
-  Zadaci, Beleške; desna kolona stoji uz vrh dok se niz skroluje (Pregled i Tastatura su na oku), a kad je viša od ekrana
-  skroluje se sama — bez druge trake za skrol, a točkić na njenom kraju nastavlja da skroluje stranicu. Telefon: jedna
-  kolona: niz blokova → Pregled → Zadaci → Beleške.
+- Desktop (≥ 1000px): dve kolone — levo niz blokova (~1.35fr), desno list izabranog bloka (bez izbora isprekidano
+  uputstvo "Izaberi blok da mu promeniš vreme, podeliš ga ili premestiš. …"), Pregled, kartica "Tastatura" (samo uz miš),
+  Zadaci, Beleške; desna kolona stoji uz vrh dok se niz skroluje (list bloka, Pregled i Tastatura su na oku), a kad je
+  viša od ekrana skroluje se sama — bez druge trake za skrol, a točkić na njenom kraju nastavlja da skroluje stranicu.
+  Telefon: jedna kolona: niz blokova → Pregled → Zadaci → Beleške.
 - **Niz blokova** (`components/blocks/*`: `BlockStack`, `StackController`, `useDayBlocks`; klase `blk-`, `blocks.css`;
   model u `shared/blockStack.ts`, sekcija 3) zamenjuje raniju vremensku liniju i karticu "Sada". Dan je niz stavki
   složenih jedna za drugom (blokovi i slobodno vreme), pa se slaže u hodu: deli, premešta, produžava, ubacuje. Isti
   komponent (`mode: 'day' | 'template'`) služi i uređivaču šablona (bez ocena i bez "sada").
   - **Traka** (zalepljena uz vrh — ispod trake "Nema interneta" kad je ona prikazana, `--offline-h` iz App.tsx —, linija
-    ispod kad je zalepljena): "SADA <blok> · još 20m" (slobodno vreme: "Slobodno vreme · još 50m"; posle poslednjeg: "Dan
-    je završen — …"; od 860px i "· sledeće <naziv> u 13:30"); dugačak naziv se skraćuje (…), "· još 20m" ostaje ceo, a
-    "· sledeće …" se skraćuje prvo (ceo tekst u `title`). Jučerašnji blok koji traje i posle početka dana (npr.
-    23:30–07:00) je trenutni dok traje ("· od juče"), ako danas u tom trenutku nema bloka. Čip "● N čeka ocenu" (36px,
-    dodirna površina ≥ 44px; ime za čitač ekrana počinje vidljivim tekstom: "1 čeka ocenu: Prikaži prvi blok…"): skrol
-    do najstarijeg prošlog neocenjenog bloka (samo kategorije koje se računaju), bljesak i fokus na njegov ✓. "Čuva se… /
-    Sačuvano" (bez mreže "● Van mreže"), Poništi (onemogućeno bez istorije), "+" (nov blok). Drugi dan: oznaka "Blokovi" +
-    broj blokova. Ispod mapa celog dana (24h od "dan počinje u"): segment po stavci u boji kategorije (prošli prigušeni,
-    slobodno isprekidano, izabran uokviren), linija "sada", tačka ispod bloka koji čeka ocenu i okvir vidljivog dela;
-    dodir/prevlačenje skače na to vreme, ←/→ = ±1h; oznake 00 06 12 18 00. Mapa je klizač (`role="slider"`, 0–1440 min):
-    vrednost (`aria-valuetext` "14:30") je vreme od kog ←/→ skaču i menja se sa skrolom.
+    ispod kad je zalepljena; ~76px), u dva reda da se naziv nikad loše ne skrati: gore "Sada · još 2h 40m · do 14:00"
+    (slobodno vreme: "… · sledeće <naziv> u 16:00"; jučerašnji blok koji traje i posle početka dana, npr. 23:30–07:00, je
+    trenutni dok traje: "· od juče"; "Sada" i preostalo vreme se nikad ne skraćuju, samo rep; dok čuvanje (poslat zahtev,
+    ne pauza od 700 ms posle izmene) traje duže od 1 s rep je "Čuva se…", bez mreže "Van mreže"), ispod naziv bloka / "Slobodno vreme" (16px/600, jedan red sa …, ceo
+    tekst u `title`; "Dan je završen — …" do dva reda). Šablon: "Šablon · 7 blokova" i naziv šablona; drugi dan: "Blokovi"
+    i broj blokova. Desno čip "● 1" (30px, dodirna površina 44px; kad traka ima ≥ 400px "● 1 čeka ocenu"; ime za čitač
+    ekrana počinje vidljivim tekstom: "1 čeka ocenu: Prikaži prvi blok…") koji pokreće prolaz kroz ocene (vidi Ocena),
+    Poništi (samo kad ima istorije) i "+" (nov blok). Ispod traka celog dana (24h od "dan počinje u"): staza 6px, blokovi
+    u boji kategorije (budući blaži, prošli i prošli deo tekućeg puni; slobodno vreme se ne crta), izabran uokviren,
+    crtica "sada"; dodir/prevlačenje skače na to vreme (dodirna površina 32px), ←/→ = ±1h. Traka je klizač
+    (`role="slider"`, 0–1440 min): vrednost (`aria-valuetext` "14:30") je vreme od kog ←/→ skaču i menja se sa skrolom.
   - Pri otvaranju danas se stranica skroluje tako da je blok pre "sada" odmah ispod trake (dan bez blokova ostaje na
-    vrhu, pa su kartica dobrodošlice i "Nema plana za ovaj dan." na oku). Jednom savet "Dodirni blok za
-    izmene. Drži ga da ga prevučeš. Dodirni slobodno vreme da dodaš blok." (uz miš "Klikni…"; × ga sakriva,
-    `localStorage 'ritam.blocks.tip'`).
+    vrhu, pa su kartica dobrodošlice i "Nema plana za ovaj dan." na oku). Pri prvom izboru bloka ikad jednom savet u listu
+    bloka "Savet: vuci ivicu bloka za vreme, drži blok da ga prevučeš." (uz miš "… prevuci blok da ga pomeriš.";
+    `localStorage 'ritam.blocks.tip2'`).
   - Ispod trake trake dana: "Juče: N blokova čeka ocenu →" (danas do 12:00, link na juče), pregled iz šablona / dan nije
     praćen, ponuda šablona dana u nedelji, preklapanja ("Dva bloka se preklapaju: „A“ i „B“. …" + "Popravi"; dok se ne
     popravi, raspored se ne menja — ocene i detalji rade preko PATCH-a), prazan dan ("Nema plana za ovaj dan." + "Dodaj
     blok" i, ako postoji šablon, "Primeni šablon…").
-  - **Red**: vreme početka u koloni levo (46px), blok visine 38 + 0.7·min(d, 180) + 0.16·max(0, d − 180) px (posle 3h
-    oznaka prekida "//"), ton kategorije u pozadini (prošli slabiji, izabran jači), crta kategorije, NAZIV (16px/600, do
-    dva reda — blok od 30–45 min, niži od 78px, u jednom redu da opseg ostane vidljiv; kategorija se ne piše), meta
-    "13:30–16:30 · 3h" (počet blok: "još 20m" / "čeka ocenu" / "stvarno 2h"; ikonica beleške; blok kraći od 30 min u
-    jednom redu; prelomljen red nikad ne počinje sa "·"). Blok do 45 min sa ✓ ◐ ✕: meta u jednom redu, "čeka ocenu" /
-    "još 20m" / "stvarno" prvo i celo, opseg se skraćuje, a kad ni ceo ne staje (telefon) ne prikazuje se (početak je u
-    koloni levo); kraći od 30 min sa ✓ ◐ ✕ na uskom ekranu (< 560px): naziv iznad, "čeka ocenu" ispod. Tekući blok: okvir u
-    boji "sada", ton preko prošlog dela i kratka oznaka u minutu "sada". Slobodno vreme: isprekidano, "+ Slobodno
-    18:00–19:00 · 1h" / "Slobodno do kraja dana · 1h 30m", ikonica "Zatvori prazninu"; prošlo slobodno vreme je neaktivno.
-    Blok koji počinje posle kraja dana: crveno vreme + "posle kraja dana"; ispod niza kraj plana ("00:15 sutra").
-  - **Ocena** (✓ ◐ ✕, 44px, samo blokovi koji su počeli; raniji dan: svi): jedan dodir, ponovo = nazad na neocenjeno;
-    ne bira blok, ne otvara traku i ne pomera ništa; ide u istoriju (poništi). Prevlačenje koje počne na dugmetu je skrol.
-    Tastatura: 1 2 3. Šalje se odmah `PATCH /api/blocks/:id` (blok koji server već ima), inače sa rasporedom.
-  - **Izbor i traka akcija**: dodir na blok ga bira (okvir, traka akcija iznad donje trake — desktop: na dnu kolone niza
-    — i skrol između njih); izabran blok ima ručice na donjoj (kraj) i gornjoj ivici (početak) i "+" na šavovima. Ponovni dodir (posle
-    300 ms, bez izmene između) otvara Detalje. Akcije: budući blok Podeli · Premesti · Kraće · Duže · Obriši · Detalji;
-    tekući i "Završi sad"; prošao neocenjen Podeli · Premesti · Obriši · Detalji (+ "Već je prošlo…"); ocenjen bez
-    Premesti. Zatvara se sa ×, Esc, dodirom pored blokova ili prvim dodirom na slobodno vreme.
+  - **Red** (bez kolone vremena; razmak 6px): kartica visine max(52, 24 + 7,1·√d) px (15m = 52, 1h = 79, 2h = 102,
+    4h45 = 144, 12h = 214; ništa se ne sabija — srazmeru pokazuje traka dana), radijus 10, ton kategorije u pozadini
+    (prošli slabiji; ivica samo u svetloj temi), crta kategorije (∫) visoka koliko tekst, NAZIV (16px/600, jedan red;
+    kartica od 83px — 1h10m — naviše do dva reda; kategorija se ne piše), meta u jednom redu "13:30–16:30 · 3h" — posle opsega
+    tačno jedan dodatak: "još 20m" (tekući) / "čeka ocenu" / "stvarno 2h" / trajanje; ikonica beleške; skraćuje se samo
+    opseg. Kraći od 30 min: manji tekst, i dalje dva reda. Tekući blok: okvir u boji "sada" i tanka linija napretka pri
+    dnu. Praćen raniji dan: svaki neocenjen blok (koji se računa) čeka ocenu — žut krug, "čeka ocenu", čip "● N" i
+    prolaz kroz ocene, kao danas (dan koji nije praćen je samo pregled). Izabran: neutralan prsten (ostali redovi se ne zatamnjuju). Slobodno vreme: bez pozadine i okvira, tačkasta crta
+    u liniji sa crtama kartica, "1h slobodno 15:00–16:00" / "… do kraja dana", "+" desno (44px); "sada" u slobodnom
+    vremenu: tačka na crti i "Slobodno · još 30m"; red je stalne visine (44px; prošlo slobodno vreme i svo na ranijem
+    danu 28px, neaktivno, bez "+"). Blok koji počinje posle kraja dana: "posle kraja dana" crveno; ispod niza "Kraj dana ·
+    00:15 sutra" i tanka linija.
+  - **Ocena** (krug desno na kartici, 26px u površini 44px, samo blokovi koji su počeli; raniji dan: svi; šablon i budući
+    dan bez kruga): dodir na neocenjen krug = Urađeno (kratka vibracija, krug se "napumpa", bez poruke — Poništi je u
+    traci; prvi put ikad napomena "Urađeno. Dodirni krug ponovo za Delimično ili Nije urađeno." sa Poništi,
+    `localStorage 'ritam.blocks.rateHint'` — ne dok je izabran drugi blok, i nestaje kad se izabere drugi blok: ne kaže
+    na koji se blok odnosi). Dodir se računa samo ako je prst pušten pre držanja (420 ms), bez pomeranja i
+    bez skrola stranice (inače je to skrol). Dodir na ocenjen krug ili držanje bilo kog otvara izbor uz krug (vodoravno
+    levo od njega: Urađeno · Delimično · Nije, aktivna ocena istaknuta; ponovo ista = nazad na neocenjeno; zatvara se
+    dodirom van njega (taj dodir samo zatvara: ne bira blok, ne otvara list, ne pomera vreme), Esc — fokus nazad na krug —, skrolom i izborom; ←/→ između ocena). Krug "čeka ocenu" je žut, tekući
+    neutralan. Ocena sa kruga ne bira blok, ne otvara list i ne pomera ništa; ide u istoriju (poništi). Izabran blok koji
+    je počeo ima u listu i red ocena (Urađeno · Delimično · Nije, aktivna u boji statusa; ponovo ista = neocenjeno), pa
+    se Delimično / Nije daju u dva dodira bez Urađeno pre toga. Tastatura: 1 2 3 na redu, Enter na krugu. Šalje se odmah
+    `PATCH /api/blocks/:id` (blok koji server već ima), inače sa rasporedom.
+    **Prolaz kroz ocene** (čip "● N" u traci): bira najraniji blok koji čeka ocenu (skrol ispod trake, fokus na prvo dugme
+    reda ocena u listu); posle ocene izabranog bloka (380 ms) ide sledeći, a kad ih više nema izbor se zatvara uz "Sve je
+    ocenjeno.". Svaka druga izmena, zatvaranje izbora ili Esc prekida prolaz. Ocena iz lista u prvih 250 ms posle
+    prelaska na sledeći blok se ne računa (drugi dodir prethodne ocene; red ocena je na istom mestu).
+  - **Izbor i list bloka**: dodir na blok ga bira (okvir, list bloka iznad donje trake — 860–999px na dnu kolone niza,
+    ≥ 1000px u desnoj koloni — i skrol tako da je blok između trake i lista; kad list poraste, npr. poruka, blok se ponovo
+    pomeri iznad njega); izabran blok ima ručice na donjoj (kraj) i gornjoj ivici (početak) — 32×5px usred ivice, površina
+    96×32px. Ponovni dodir izabranog bloka ne radi ništa (Detalji: "Detalji ›" u listu, Enter na izabranom redu, F2).
+    List (radijus 16, na telefonu levo/desno 8px, najviše 560px): prvi red je naziv sa tačkom kategorije i trajanjem
+    ("Ručak 1h", dodir = Detalji, "Detalji ›") i ×; zatim red ocena (blok koji je počeo); zatim **Početak** i **Kraj**:
+    − vreme + (koraci od 5 min; držanje ponavlja: posle 400 ms na 120 ms, posle 20 koraka na 70 ms; staje na granici uz
+    trešenje kartice i poruku, i kad prst sklizne sa dugmeta), vreme se dodirne da se upiše (polje za vreme, korak 5 min, upisano se zaokruži; pre početka
+    dana = sutra; birač primenjuje odmah, kucanje tek na Enter ili izlazak iz polja, Esc vraća otkucano; kucanje je uvek 24h
+    ("2100" = 21:00, "930" = 09:30, ↑↓ ±5 min), i kad browser ima 12h jezik; kraj pre početka
+    bloka je sutra ako blok tako traje najviše 12h (i kad je vreme pre početka dana), inače "Kraj mora biti posle
+    početka.", a početak posle kraja "Početak
+    mora biti pre kraja."); dok traje niz koraka (4 s) uz oznaku stoji pomak ("Kraj · +25m"), a svaki korak se računa od
+    rasporeda na početku niza (Kraj + pa − vraća i blokove koje je bio pogurao; niz koji se vrati na početak ne ostavlja
+    korak istorije). Tekući blok: početak zaključan
+    ("Početak · počelo", isprekidano), kraj ne ide pre "sada" ("Tekući blok ne može da se završi pre sada."). Prošao blok i
+    raniji dan: umesto koraka "**14:00–15:00** · Već je prošlo, pa vreme ostaje kakvo je bilo."; zaključan raspored
+    (preklapanja): samo ocena, Detalji i napomena. Na dnu najviše četiri pločice (62px): budući blok, šablon i budući dan
+    Podeli · Premesti · Dodaj posle · Obriši; tekući Završi sad (ili Dodaj posle kad se ne može završiti) · Podeli ·
+    Premesti · Obriši; prošao neocenjen Podeli · Premesti · Obriši; ocenjen i svaki blok ranijeg dana Podeli · Obriši.
+    "Dodaj posle": u slobodno vreme odmah posle bloka (ništa se ne pomera), inače na šav posle njega; Otkaži u listu
+    "Novi blok" vraća list tog bloka (fokus na "Dodaj posle"). Zatvara se sa ×,
+    Esc, dodirom van niza i lista ili prvim dodirom na slobodno vreme.
   - Blokovi primaju skrol i uvećanje dvama prstima (`touch-action: pan-y pinch-zoom`); držanje, prevlačenje, ručica i
     rezovi sami sprečavaju skrol.
   - **Premeštanje**: dodir — držanje 420 ms bez pomeranja (ranije pomeranje je skrol, stranica se tada ne pomera), pa
-    prevlačenje; miš — posle 5px. Podignut blok je "čip" pod prstom, mesto određuje prst (susedi se razmiču, isprekidano
-    mesto pokazuje gde pada; iznad slobodnog vremena blok ide u njega od vremena pod gornjom ivicom i ništa drugo se ne
-    pomera), automatski skrol uz ivice. Bez prevlačenja: "Premesti" → mesta "+ Ovde · od 15:30" i slobodno vreme kao cilj
-    ("U slobodno vreme · od 20:15"; čitač ekrana: "U slobodno vreme, od 20:15"; slobodno vreme koje nije cilj tada nije u
-    Tab redosledu) (tastatura: M, ↑↓, Enter). Alt+↑↓ jedno mesto, Alt+Shift+↑↓ ±5 min kroz slobodno vreme. Prošlost
-    se ne pomera (sidrenje, sekcija 3): drž/prevlačenje ocenjenog prošlog bloka ga trese uz "Prošlost se ne pomera…".
-  - **Deljenje**: "Podeli" deli na pola odmah (jedan korak istorije), drugi deo je izabran, traka nudi "Podeli na [2] [3]
-    [4] [Ručno…]" (ponovno deljenje istog bloka); "Ručno…" — blok se izduži, rezovi su isprekidane linije sa oznakom
-    vremena koja se vuče (↑↓ ±5; fokus odmah na prvoj oznaci), × uklanja, dodir dodaje rez, "Podeli na N delova" / Enter.
-    Izduženi blok staje ceo između trake i trake akcija (vrh odmah ispod trake; na telefonu je visok najviše koliko tu
-    staje, ali ne niži od 168px). Blok kraći od 10 min se ne deli.
-  - **Trajanje**: ručica na donjoj ivici ("Promeni kraj"; 12px = 5 min, prati prst, posle se smiri na srazmernu
-    visinu; ↑↓ ±5), Kraće/Duže ±15 (više dodira u 4 s = jedan korak), "Završi sad" (tekući blok se završava u sada,
-    sledeći idu ranije), Shift+↑↓ ±15. Ručica na gornjoj ivici ("Promeni početak"; samo izabran blok koji još nije
-    počeo, i u šablonu): vuče se odmah, korak 5 min, kraj ostaje (donja ivica stoji, skrol je drži), oznaka pokazuje nov
-    početak, isto čuvanje i poništavanje kao donja ručica (pravilo gornje ivice, sekcija 3); ↑↓ ±5. Ručica prstom nema
-    automatski skrol (trajanje prati samo prst; opseg je u traci akcija i na oznaci kraja — dalje od ekrana: Duže ili
-    prevlačenje); uz miš, tek kad je pokazivač preko trake akcija ili iznad trake, jedan korak (5 min) na 65 ms,
-    najviše ±2h po potezu (samo donja ručica). U traci akcija tekućeg bloka (7 akcija) oznaka sme u dva reda.
-  - **Nov blok** ("+" u traci, "+" na šavu, dodir na slobodno vreme — od početka praznine; samo u praznini dužoj od 2h
-    dodir ispod natpisa "+ Slobodno" bira vreme pod prstom —, N, meni ⋯; list `NewBlockSheet`, svetlija pozadina,
-    na desktopu uz desnu ivicu): naziv prvo (fokus odmah, Enter = Dodaj), do 6 predloga od korisnikovih naziva (dan +
-    šabloni, po učestalosti, filtrirani dok se kuca; izabran predlog donosi i kategoriju), "Slobodno vreme" (ubacuje
-    slobodno vreme), kategorija (`CategoryPicker` sa "+ Nova"), trajanje 15m–3h. Red ispod naslova: gde ide ("13:30–14:30 ·
-    posle „Ručak“" / "… · u slobodnom vremenu") i šta pomera ("Ništa drugo se ne pomera." / "Pomera 6 blokova za najviše
-    1h." / crveno "… bi počeo posle kraja dana."); u nizu se uživo vidi isprekidan novi blok. Prazan dan bez "sada":
+    prevlačenje; miš — posle 5px. Podignut blok je neprozirna kartica ("čip", najviše 64px) pod prstom sa opsegom na koji
+    pada; list bloka se tada skriva. Blok koji nije počeo ostavlja na svom mestu samo čip (red se skupi), a susedi se
+    razmiču za visinu čipa (+ razmak, 70px): isprekidano mesto te visine pokazuje gde pada i opseg na koji pada (ne
+    crta se dok čip leži na njemu). Blok koji
+    je počeo (neocenjen) ostavlja svoje mesto kao "Slobodno". Iznad slobodnog vremena red se sam istakne i blok ide na
+    početak praznine ili od "sada" (čip: "pomera N · u slobodno vreme" — žuto kad ne staje ceo i pomera blokove posle);
+    automatski skrol uz ivice. Dok je blok podignut stranica se nikad ne skroluje prstom (i kad browser otkaže pokazivač,
+    prevlačenje dalje vode dodiri). Bez prevlačenja: "Premesti" → mesta u nizu sa natpisom i opsegom bloka na tom mestu
+    ("Pre „Ručak“ · 14:00–16:00", "Posle „…“", "Na početak / kraj dana", slobodno vreme "U slobodno vreme · 15:00–17:00";
+    šav sa istim početkom kao slobodno vreme ni šav odmah posle slobodnog vremena koje je cilj se ne nude — osim kad bi
+    blok u slobodnom vremenu prešao kraj dana, a na šavu ne) i "pomera N blokova" kad pomera druge (crveno "prelazi kraj
+    dana" kad bi blok ili neki koji pomera prešao kraj dana); ostali redovi su bleđi (ton, crta i krug; tekst ostaje čitljiv);
+    slobodno vreme koje nije cilj tada nije u Tab redosledu (tastatura: M, ↑↓, Enter). U listu: Ranije / Kasnije (jedno
+    mesto, ispod opseg posle koraka ili "nema mesta"; režim ostaje) i, za blok koji nije počeo, "Ceo blok · kroz slobodno
+    vreme" − opseg + (±5 min, držanje ponavlja). Alt+↑↓ jedno mesto, Alt+Shift+↑↓ ±5 min kroz slobodno vreme (i u režimu
+    "Premesti"). Prošlost se ne pomera (sidrenje, sekcija 3): drž/prevlačenje ocenjenog prošlog bloka ga trese uz
+    "Prošlost se ne pomera…".
+  - **Deljenje**: "Podeli" (ili S) otvara deljenje sa 2 dela: blok se izduži, a list nudi "Na koliko delova" [2] [3] [4]
+    [5] [6] (jednaki delovi na mreži od 15 min; nedostupno kad ne staje), zbir ("3 × 40m" / "20m + 40m + 1h"), Otkaži i
+    "Podeli na N delova" (Enter). Rezovi su isprekidane linije sa oznakom vremena koja se vuče (↑↓ ±5; fokus odmah na
+    prvoj oznaci), × uz rez (samo kad su rezovi ručni i ima ih više od jednog) ga uklanja, dodir u bloku dodaje rez (tada
+    nijedan broj nije izabran; dodir na 14px od postojećeg reza ne dodaje rez). Svaki deo u izduženoj kartici ima
+    svoju crtu kategorije (nizak deo kratku crtu) i oznaku ("40m · 16:00–16:40", prvi i naziv; nizak prvi deo u jednom
+    redu "20m · 16:00–16:20 · Naziv"), pa kartica već izgleda kao N blokova. Izduženi
+    blok (clamp(1,6 × trajanje, 184, 360) px) staje ceo između trake i lista (vrh odmah ispod trake; na telefonu je visok
+    najviše koliko tu staje, ali ne niži od 168px). Posle deljenja (jedan korak istorije) delovi bljesnu, a izabran je
+    prvi. Odustaje se sa ×, Otkaži, Esc ili dodirom na drugi blok. Blok kraći od 10 min se ne deli.
+  - **Trajanje**: Početak / Kraj u listu (vidi Izbor; uzastopni koraci iste ivice u 4 s = jedan korak istorije), ručica
+    na donjoj ivici ("Promeni kraj"; 12px = 5 min, prati prst, posle se smiri na srazmernu visinu; oznaka na ivici
+    pokazuje vreme i pomak "15:30 +30m"; ↑↓ ±5), "Završi sad" (tekući blok se završava u sada, sledeći idu ranije; poruka
+    "Završeno sad: 11:40–15:30 · pomerena 2 bloka" sa Poništi), Shift+↑↓ ±15. Kraj ranije/kasnije: sledeće stavke upija prvo slobodno vreme posle bloka. Ručica na gornjoj
+    ivici ("Promeni početak"; samo izabran blok koji još nije počeo, i u šablonu): vuče se odmah, korak 5 min, kraj ostaje
+    (donja ivica stoji, skrol je drži), oznaka pokazuje nov početak, isto čuvanje i poništavanje kao donja ručica (pravilo
+    gornje ivice, sekcija 3: raniji početak troši slobodno vreme pre bloka); ↑↓ ±5. Koraci u listu, ručice i ↑↓ na ručici
+    su tihi (bez poruke — vrednost se vidi u listu i na kartici, Poništi je u traci; čitač ekrana čuje "Kraj 15:05"); odbijanja
+    i dalje imaju poruku. Ručica prstom nema automatski skrol (trajanje prati samo prst; dalje od ekrana: Kraj + ili
+    prevlačenje); uz miš, tek kad je pokazivač preko lista ili iznad trake, jedan korak (5 min) na 65 ms, najviše ±2h po
+    potezu (samo donja ručica).
+  - **Nov blok** ("+" u traci, dodir na slobodno vreme — uvek od početka praznine (ili od "sada") —, "Dodaj posle" u listu
+    bloka, N, meni ⋯; list `NewBlockSheet`, svetlija pozadina, na desktopu uz desnu ivicu): naziv prvo (fokus odmah,
+    Enter = Dodaj), do 6 predloga od korisnikovih naziva ("Tvoji nazivi blokova"; dan + šabloni, po učestalosti, filtrirani
+    dok se kuca; izabran predlog donosi i kategoriju), "Slobodno vreme" (ubacuje slobodno vreme), kategorija
+    (`CategoryPicker` sa "+ Nova"), u slobodnom vremenu "Počinje u" (− vreme +, korak 5 min, držanje ponavlja, vreme se
+    dodirne da se upiše; od početka praznine / "sada" do 5 min pre njenog kraja, trajanje ostaje), trajanje 15m–3h.
+    Ispod naslova: gde ide ("13:30–14:30 · posle „Ručak“" / "… · u slobodnom vremenu"), a u svom redu šta pomera ("Ništa
+    drugo se ne pomera." / žuto "Pomera 6 blokova za najviše 1h." / crveno "… bi počeo posle kraja dana."); u nizu se
+    uživo vidi isprekidan novi blok. Posle Dodaj blok bljesne i izabran je (poruka u listu sa Poništi). Prazan dan bez "sada":
     09:00–10:00. Kad je list izmeren, isprekidan blok staje između trake i lista (vrh odmah ispod trake); na telefonu je
     list najviše toliko visok da iznad njega ostane bar min(visina bloka, 80px) (telo se tada skroluje), a kategorije i
     trajanja su po jedan red koji se pomera u stranu (izabran čip se vidi).
   - **Brisanje**: blok postaje slobodno vreme na istom mestu (ništa se ne pomera), poruka "Obrisano: X" sa "Zatvori
     prazninu" i "Poništi" (7 s). Zatvaranje praznine povlači sledeće blokove (ne pre "sada").
-  - **Detalji** (`DetailsSheet`, ponovni dodir / "Detalji" / Enter dvaput): naziv, kategorija, ocena i stvarno vreme
-    (samo počeli blokovi; "Najviše N min (trajanje bloka)."), beleška (dan), Obriši · Otkaži · Sačuvaj; "Odbaci izmene?"
-    kao i ostali sheet-ovi. Vreme bloka se menja samo u nizu (nema polja Od/Do ni "Zameni sa…").
-  - **Poruke**: dok je traka akcija otvorena, u njoj (tamni red sa Poništi i ×), inače iznad donje trake; 4,5 s (7 s uz
-    akciju); naziv bloka u poruci se skraćuje (~26 znakova), da opseg i "N pomereno" ostanu vidljivi. Ocene i deljenje
-    bez poruke. Čitač ekrana sve (i odbijanja: "Prošlost se ne pomera…", "Nema slobodnog vremena iznad.") čuje jednom,
-    kroz jedan stalni `aria-live` region (red poruke nema `role="status"`). Fokus u tamnoj poruci: prsten u boji
-    pozadine stranice, unutar dugmeta. Traka akcija i poruka su na telefonu iznad tastature kad je otvorena (`--kb`).
+  - **Detalji** (`DetailsSheet`, "Detalji ›" u listu bloka / Enter na izabranom redu / F2 — tada je naziv izabran):
+    naziv, "Tvoji nazivi blokova" (do 10 drugih naziva u jednom redu koji se pomera u stranu; dodir upisuje naziv i
+    kategoriju u formu, čuva se tek Sačuvaj — to je i preimenovanje), kategorija, ocena i stvarno vreme (samo počeli
+    blokovi; "Najviše N min (trajanje bloka)."), beleška (dan), Obriši · Otkaži · Sačuvaj; "Odbaci izmene?" kao i ostali
+    sheet-ovi. Vreme bloka se menja samo u listu bloka i u nizu (nema polja Od/Do ni "Zameni sa…").
+  - **Poruke**: dok je list bloka otvoren, u njemu kao prvi red (tamni red, tekst do dva reda — u uskoj desnoj koloni
+    1000–1100px do četiri —, Poništi / akcija i ×; nikad
+    preko izabranog bloka), inače iznad donje trake (isto do dva reda); 4,5 s (7 s uz akciju); naziv bloka u poruci se
+    skraćuje (~26 znakova), da opseg i "N pomereno" ostanu vidljivi. Ocene, koraci u listu, ručice i "Ceo blok" su bez
+    poruke. Čitač ekrana sve (i odbijanja: "Prošlost se ne pomera…", "Nema slobodnog vremena iznad.") čuje jednom, kroz
+    jedan stalni `aria-live` region (red poruke nema `role="status"`). Dvostruki dodir: dodir na poruku u prvih 400 ms
+    se ne računa (plutajuća poruka posle "Obriši" se pojavi tačno ispod prsta), drugi dodir na pločicu, "+", dugme lista
+    "Novi blok", dugme poruke (Poništi brisanja vraća list sa Obriši na istom mestu) ili ocenu u izboru uz krug koje je
+    ono ispod prsta zamenilo se proguta, a drugi dodir iste ocene u listu ne vraća "čeka". Fokus u tamnoj poruci: prsten u boji pozadine
+    stranice, unutar dugmeta. List bloka i poruka su na telefonu iznad tastature kad je otvorena (`--kb`).
   - **Poništi / ponovi**: svaka izmena (i ocena) je korak (najviše 200 po danu, istorija se briše pri promeni dana i kad
     stigne tuđa izmena): Poništi u traci i u poruci, Ctrl/Cmd+Z, Ctrl+Shift+Z / Ctrl+Y; vraća i izbor.
-  - **Tastatura**: Tab / ↑↓ do bloka, Enter bira (ponovo = Detalji), S, M, N, F2 preimenuj, Del obriši (na slobodnom
-    vremenu zatvori prazninu), Esc korak nazad (Premesti, Podeli, preimenovanje, izbor; u poljima van niza — Beleške,
-    Zadaci — Esc ne dira niz). Fokus ostaje na bloku: posle dodavanja na novom bloku, posle brisanja na slobodnom vremenu
-    koje je ostalo, posle zatvaranja praznine na prvom bloku posle nje, posle "Premesti" na premeštenom bloku, posle
-    deljenja na izabranom delu, posle ×, Detalja i Poništi u poruci na bloku. ↑↓ i "Premesti" drže fokus u vidljivom
-    delu (ispod trake, iznad trake akcija — i na desktopu, gde je traka zalepljena na dnu kolone); Tab isto (fokus
-    tastaturom u nizu skroluje do elementa).
-  - Windows visok kontrast (`forced-colors`): izabran blok, tekući blok, ručica, mapa dana i ocene ostaju vidljivi
-    (okviri u sistemskim bojama).
+  - **Tastatura**: Tab / ↑↓ do bloka, Enter bira (ponovo = Detalji), S (deljenje na 2, Enter deli), M, N (nov blok
+    posle; na slobodnom vremenu u njega), F2 Detalji sa izabranim nazivom, Del obriši (na slobodnom vremenu zatvori
+    prazninu), 1 2 3 ocena, Esc korak nazad (izbor ocene, prevlačenje, Premesti, Podeli, izbor; u poljima van niza —
+    Beleške, Zadaci — Esc ne dira niz). Koraci, polja za vreme, pločice i red ocena u listu su obična dugmad i polja.
+    Fokus ostaje na bloku: posle dodavanja na novom bloku, posle brisanja na slobodnom vremenu koje je ostalo, posle
+    zatvaranja praznine na prvom bloku posle nje, posle "Premesti" na premeštenom bloku, posle deljenja na prvom delu,
+    posle ×, Detalja i Poništi u poruci na bloku. ↑↓ i "Premesti" drže fokus u vidljivom delu (ispod trake, iznad lista
+    bloka — i na 860–999px, gde je list zalepljen na dnu kolone); Tab isto (fokus tastaturom u nizu skroluje do elementa).
+  - Windows visok kontrast (`forced-colors`): izabran blok, tekući blok, ručice, traka dana, krug ocene, mesta za
+    "Premesti", mesto pada, list bloka (okvir, koraci, pločice, izabrana ocena i broj delova) ostaju vidljivi (okviri u
+    sistemskim bojama).
   - **Čuvanje** (`useDayBlocks`): raspored ide 700 ms posle poslednje izmene ceo, kroz zajednički red
     (`PUT /api/days/:date/blocks`, `toBlocks`, `base` = `layoutBase` stanja sa servera na koje se izmena oslanja, računato
     u trenutku slanja); i odmah pri promeni dana, sakrivanju stranice i napuštanju ekrana, i pre primene šablona. Novi
@@ -834,7 +899,8 @@ minut dok je tab vidljiv a nijedan sheet nije otvoren; stanje se menja samo ako 
     (PATCH) u njemu menja samo taj blok (ceo dan sa tuđim izmenama preuzima tek crtanje, kad ništa ne čeka), pa zastareo
     raspored posle tuđe izmene i dalje dobija 409. Status, stvarno vreme i beleška bloka se šalju samo ako se razlikuju od
     vrednosti koje je ovaj ekran poslednje preuzeo ili poslao (tuđa beleška iz odgovora koji još nije preuzet ostaje).
-    Greška: vraća se poslednje stanje koje je server potvrdio, istorija se briše, poruka "Izmena nije sačuvana. Pokušaj
+    Greška: vraća se poslednje stanje koje je server potvrdio, istorija se briše (neuspela ocena: vraća se odmah samo
+    ona — i kad je server nedostupan, pa ponovo učitan dan stiže iz keša —, a otpada samo njen korak istorije), poruka "Izmena nije sačuvana. Pokušaj
     ponovo." (409: "Dan je u međuvremenu promenjen na drugom uređaju."; bez mreže: "Nema interneta — izmene se ne
     čuvaju."), a dan se ponovo učita. Greška čuvanja dana koji više nije na ekranu (promena dana, napušten ekran): toast
     "<pet, 9. okt>: <poruka>". Stanje sa servera (osvežavanje, drugi uređaj, primena šablona) se preuzima samo kad ništa
@@ -844,8 +910,8 @@ minut dok je tab vidljiv a nijedan sheet nije otvoren; stanje se menja samo ako 
     šablona kakav jeste (`GET ?ensure=1`), pa se menja blok sa istim vremenom i nazivom kao blok pregleda.
   - Budući dan (pregled, negativni id): bez ocena, traka "Plan iz šablona „X“"; samo gledanje ne zamrzava dan, prva
     izmena ga upisuje (PUT inicijalizuje dan, sekcija 3). Raniji dan koji nije praćen: traka "Dan nije praćen. …",
-    ocene rade (prva ocena upisuje dan). Raniji dan: ništa se ne pomera (bez Premesti, trajanja i "+" na šavovima; nov
-    blok samo u slobodno vreme tako da se ništa ne pomeri).
+    ocene rade (prva ocena upisuje dan). Raniji dan: ništa se ne pomera (bez Premesti i trajanja; nov blok samo u
+    slobodno vreme tako da se ništa ne pomeri).
   - Osvežavanje dana: povratak u aplikaciju, fokus prozora (> 30 s), `online`, i na minut dok je tab vidljiv a ništa nije u
     toku (laptop koji sve vreme stoji otvoren).
 - **Pregled**: Ring sa `score` (%), "Urađeno 5 / 11 blokova" (samo `done`; delimični se vide u redu ✓ ◐ ✕ ispod);
@@ -883,10 +949,10 @@ minut dok je tab vidljiv a nijedan sheet nije otvoren; stanje se menja samo ako 
   gore ("Tastatura").
 - Telefon: brzo prevlačenje levo/desno = sledeći/prethodni dan (`useSwipeNav`); ne dok je otvoren sheet ili potvrda,
   ne iz polja za unos ili menija ⋯, ne od same ivice ekrana (to je sistemski gest "nazad") i nikad kad je tokom poteza
-  blok podignut, menjano trajanje, pomeran rez ili prevlačena mapa dana.
+  blok podignut, menjano trajanje, pomeran rez, prevlačena traka dana ili otvoren izbor ocene držanjem kruga.
 - Kad je ruta `/` i logički datum se promeni (ponoć/dayStart), automatski prikaži novi dan — kad ništa nije otvoreno
-  (nov blok, detalji bloka, sheet zadatka/šablona) i ništa u nizu nije u toku (preimenovanje u traci akcija, "Premesti",
-  rezovi, prevlačenje, ručica; sam izbor bloka ne zadržava dan); do tada ostaje prethodni dan ("Dan je završen").
+  (nov blok, detalji bloka, sheet zadatka/šablona) i ništa u nizu nije u toku ("Premesti", rezovi, prevlačenje, ručica,
+  izbor ocene; sam izbor bloka ne zadržava dan); do tada ostaje prethodni dan ("Dan je završen").
   Kucanje beleške zadržava prethodni dan samo ako je fokus u polju beleške, u njemu se kucalo u poslednja 2 min i od
   granice dana ("dan počinje u") nije prošlo 10 min — meri se od same granice, pa telefon/laptop probuđen ujutru uvek
   otvara novi dan.
@@ -945,18 +1011,20 @@ minut dok je tab vidljiv a nijedan sheet nije otvoren; stanje se menja samo ako 
   izabrani."; placeholder naziva "Naziv šablona"). Bez ijednog šablona kartica pokazuje samo "Šablon je plan dana koji se
   ponavlja." + "Novi šablon".
 - **Uređivač šablona** (`components/schedule/TemplateEditor.tsx` + `components/blocks/useTemplateBlocks.ts`): isti niz
-  blokova kao Danas (`BlockStack` u režimu `'template'`, sekcije 6.1 i 3) — deli (na pola, 2/3/4, ručno), premešta
-  (držanje i prevlačenje, "Premesti", Alt+↑↓), menja trajanje (ručica, Kraće/Duže), ubacuje (dodir na slobodno vreme, "+"
-  na šavu, "+" u traci, N), briše, zatvara praznine, preimenuje (predlozi su samo korisnikovi nazivi: drugi šabloni i
-  današnji dan), Detalji (naziv i kategorija), poništi/ponovi (svoja istorija). Bez ocena, bez "sada" i bez sidrenja
-  (ništa nije "prošlost"); traka: "ŠABLON <naziv> · N blokova", mapa bez linije "sada"; kartica Tastatura i pomoć u traci
-  akcija bez "1 2 3 oceni"; kraj posle ponoći "01:00 the next day" / "01:00 sutra".
+  blokova kao Danas (`BlockStack` u režimu `'template'`, sekcije 6.1 i 3) — deli (2–6 delova ili ručni rezovi), premešta
+  (držanje i prevlačenje, "Premesti" sa Ranije / Kasnije i "Ceo blok", Alt+↑↓), menja Početak i Kraj (koraci u listu,
+  ručice), ubacuje (dodir na slobodno vreme — slobodno vreme pre prvog bloka je način da se doda na početak dana —,
+  "Dodaj posle", "+" u traci, N), briše, zatvara praznine, Detalji (naziv sa čipovima korisnikovih naziva — drugi
+  šabloni i današnji dan — i kategorija), poništi/ponovi (svoja istorija). Bez ocena, bez "sada" i bez sidrenja (ništa
+  nije "prošlost"): svaki blok ima oba koraka i pločice Podeli · Premesti · Dodaj posle · Obriši; traka: "Šablon · N
+  blokova" i naziv šablona, traka dana bez "sada"; kartica Tastatura bez "1 2 3 oceni"; desktop (≥ 1000px): list bloka
+  na vrhu desne kolone; kraj posle ponoći "01:00 the next day" / "01:00 sutra".
   - Stranica: "‹ Raspored" (nazad — korak nazad u istoriji ako je uređivač otvoren sa Rasporeda, inače zamena adrese),
     naslov = naziv šablona, podnaslov "Šablon · pon–pet" (uzastopni dani kao opseg, ili "nije dodeljen danima"), meni ⋯:
     "Preimenuj…" (mali sheet: naziv, jedinstven — 409 ide ispod polja; prazan → "Upiši naziv šablona."), "Dupliraj" (prvo
     sačuva izmenu koja čeka, pa `copyFrom`; kopija "X (kopija)" se otvara umesto ovog uređivača), "Obriši šablon" (potvrda
-    kao ranije; posle brisanja nazad na Raspored). Desktop (≥ 1000px): niz levo, desno (uz vrh) napomena "Isti blokovi,
-    isti pokreti. …" i kartica Tastatura; telefon: napomena ispod niza. Prazan šablon: "Šablon još nema blokova." + "Dodaj
+    kao ranije; posle brisanja nazad na Raspored). Desktop (≥ 1000px): niz levo, desno (uz vrh) list izabranog bloka (bez
+    izbora uputstvo), napomena "Isti blokovi, isti pokreti. …" i kartica Tastatura; telefon: napomena ispod niza. Prazan šablon: "Šablon još nema blokova." + "Dodaj
     blok" (prvi blok 09:00–10:00). Nova kategorija u hodu: "+ Nova" u izboru kategorije (list Novi blok, Detalji).
   - **Čuvanje je samo** (nema dugmeta Sačuvaj): 700 ms posle poslednje izmene ceo raspored ide kroz zajednički red
     (`PUT /api/templates/:id/blocks`, `toTemplateBlocks`, `base` = `templateBase` poslednje verzije sa servera računat u
@@ -1055,8 +1123,9 @@ serif samo za naslove, sve ostalo sistemski sans, jedan prigušen akcenat po tem
 - Koristi tokene iz `styles/tokens.css` (nikad hardkodovane boje osim boja kategorija iz podataka).
 - Zabranjeno: gradijenti (jedini izuzetak je isprekidan uzorak oznake "prag za niz" u legendi Napretka),
   glassmorphism/blur, sjaj, emodžiji, ikone-u-krugu dekoracije, ornamenti, script pismo van Wordmark-a, šareni hero
-  naslovi, marketinški tekst, senke na karticama (senka samo na sheet/toast), preterano zaobljeni uglovi (max 12px;
-  gornji uglovi sheet-a na telefonu 14px), verzal van "oznake sekcije" (ispod).
+  naslovi, marketinški tekst, senke na karticama (senka samo na sheet/toast/list bloka/izbor ocene), preterano zaobljeni
+  uglovi (max 12px; gornji uglovi sheet-a na telefonu 14px, list bloka 16px — u desnoj koloni 14px), verzal van "oznake
+  sekcije" (ispod).
 - **Pisma** (uloge važe za svaki postojeći i budući ekran):
   - **Naslovni serif** `--font-display`: EB Garamond 500 (`styles/fonts.css`; dok ne stigne, `'EB Garamond Fallback'` =
     Georgia podešena na njegovu meru, pa se naslov ne pomera), bez razmaka slova, lining + proporcionalni brojevi,
@@ -1070,11 +1139,11 @@ serif samo za naslove, sve ostalo sistemski sans, jedan prigušen akcenat po tem
   - **Sadržaj**: sistemski sans (`--font`), 15px za tekst i redove, težine 400/550/600. Brojevi i vremena
     `font-variant-numeric: tabular-nums`.
   - **Oznaka sekcije**: 12px / 600 / visina reda 1.3 / razmak slova 0.08em / verzal / `--text-2` — samo `.card-title`,
-    "SADA" u traci niza blokova (`.blk-bar-label`, u `--now`) i mesec u Dnevniku (`.jr-month-title`). KPI oznake, oznake ("Danas"), čipovi,
+    i mesec u Dnevniku (`.jr-month-title`). "Sada" u traci niza blokova je obična reč (13px/600, u `--now`). KPI oznake, oznake ("Danas"), čipovi,
     oznake polja i podnaslovi u sheet-u ostaju obična rečenica; ništa u verzalu ispod 12px.
 - **Jedan akcenat po temi** (`--now`, `--focus` je ista boja): tamna tema prigušena "šampanj" `#cbbd9f`, svetla tamno
   "mastilo" plavo `#3a5f8f` (`--now-bg` = blaga podloga trenutnog reda). Samo za: trenutno vreme (tekući blok, oznaka
-  "sada" u njemu i na mapi dana, traka "Sada", "Završi sad"), danas (oznaka "Danas", dan u nedelji u Rasporedu, danas u grafiku, kalendaru i
+  "sada" u njemu i na traci dana, traka "Sada", "Završi sad"), danas (oznaka "Danas", dan u nedelji u Rasporedu, danas u grafiku, kalendaru i
   heatmapi Napretka), aktivnu navigaciju i fokus. Aktivan tab donje trake: crta 24×2px na njenoj gornjoj liniji + tekst
   600; aktivna stavka bočne trake: crta 2×16px uz levu ivicu + tekst `--text` 600, bez sive podloge (hover ostaje
   `--surface-2`). Nikad za status, kategorije, primarna dugmad, velike površine ni gradijente; Prijava nema akcenat
@@ -1091,8 +1160,8 @@ serif samo za naslove, sve ostalo sistemski sans, jedan prigušen akcenat po tem
 - Hijerarhija tipografijom i razmakom, ne bojom. Prigušen sadržaj (npr. kategorije koje se ne računaju u Napretku) je
   prigušen bojom teksta (`--text-2`/`--text-3`), nikad providnošću teksta (kontrast ≥ 4.5:1).
 - Boja kategorije: tačka 8px ili, uz red bloka (niz blokova: Danas i uređivač šablona), crta u
-  obliku blagog integrala ∫ (`ui/CategoryStroke.tsx`: uspravna crta 2px cele visine reda čiji se vrh savija desno, a dno
-  levo; kuke 10×14px se nikad ne razvlače, pa su iste u svakom redu); svetla pozadina kategorije samo kroz
+  obliku blagog integrala ∫ (`ui/CategoryStroke.tsx`: uspravna crta 2px čiji se vrh savija desno, a dno levo — u kartici
+  bloka visoka koliko naziv i meta, ne cela kartica; kuke 10×14px se nikad ne razvlače, pa su iste u svakom redu); svetla pozadina kategorije samo kroz
   `color-mix(in srgb, <boja> 10–14%, var(--surface))`.
 - Status: done = `--done`, partial = `--partial`, skipped = `--skipped`; ikona uvek uz boju (ne samo boja).
 - Dodirne površine ≥ 40px na telefonu (sitan link ili dugme dobija veću površinu preko `::after`, bez pomeranja

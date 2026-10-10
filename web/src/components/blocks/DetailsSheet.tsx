@@ -1,6 +1,7 @@
-// Detalji bloka (ponovni dodir izabranog bloka, "Detalji", Enter dvaput): naziv, kategorija, ocena (samo
-// počeli blokovi), stvarno vreme (urađeno / delimično), beleška (samo dan). Vreme bloka se ovde ne menja —
-// to se radi u nizu (prevlačenje, ručica, Kraće/Duže). Nastao od ranijeg sheet-a bloka (components/day/BlockSheet).
+// Detalji bloka ("Detalji ›" u listu bloka, Enter na izabranom redu, F2): naziv (i korisnikovi drugi nazivi kao
+// čipovi), kategorija, ocena (samo počeli blokovi), stvarno vreme (urađeno / delimično), beleška (samo dan). Vreme
+// bloka se ovde ne menja — to se radi u listu bloka i u nizu (Početak / Kraj, ručice, prevlačenje). Nastao od ranijeg
+// sheet-a bloka (components/day/BlockSheet).
 
 import { useId, useRef, useState, type FormEvent } from 'react';
 import type { BlockStatus, Category } from '../../../../shared/types.ts';
@@ -9,8 +10,9 @@ import type { BlockFields, StackBlock } from '../../../../shared/blockStack.ts';
 import { useT, type TFunction } from '../../i18n/index.ts';
 import { createInlineCategory } from '../../lib/categories.ts';
 import { useUnsavedGuard } from '../../lib/useUnsavedGuard.ts';
-import { Button, CategoryPicker, Field, Sheet, TextArea, TextInput, confirmDiscard, type CategoryPickerHandle } from '../../ui/index.ts';
+import { Button, CategoryDot, CategoryPicker, cx, Field, Sheet, TextArea, TextInput, confirmDiscard, type CategoryPickerHandle } from '../../ui/index.ts';
 import { StatusControl } from '../day/StatusControl.tsx';
+import type { KnownName } from './controller.ts';
 
 const isActive = (s: BlockStatus) => s === 'done' || s === 'partial';
 
@@ -30,6 +32,9 @@ export function DetailsSheet({
   started,
   withNote,
   categories,
+  names,
+  catColor,
+  focusName,
   onSave,
   onDelete,
   onClose,
@@ -42,6 +47,11 @@ export function DetailsSheet({
   /** Beleška bloka (dan; šablon je nema). */
   withNote: boolean;
   categories: Category[];
+  /** Korisnikovi drugi nazivi blokova (najviše 10): dodir upisuje naziv i kategoriju u formu (čuva se tek Sačuvaj). */
+  names: KnownName[];
+  catColor: (id: number | null) => string;
+  /** Otvoren sa F2: naziv je odmah izabran. */
+  focusName: boolean;
   onSave: (patch: BlockFields) => void;
   onDelete: () => void;
   onClose: () => void;
@@ -57,6 +67,7 @@ export function DetailsSheet({
   const [busy, setBusy] = useState(false);
   const [catPending, setCatPending] = useState(false);
   const pickerRef = useRef<CategoryPickerHandle>(null);
+  const selectOnce = useRef(focusName);
 
   const showActual = started && isActive(status);
   const actual = readActual(t, actualStr, block.dur);
@@ -135,8 +146,37 @@ export function DetailsSheet({
             placeholder={t('day.block.titlePlaceholder')}
             autoComplete="off"
             enterKeyHint="done"
+            data-autofocus={focusName || undefined}
+            onFocus={(e) => {
+              if (!selectOnce.current) return;
+              selectOnce.current = false;
+              e.currentTarget.select();
+            }}
           />
         </Field>
+        {names.length > 0 && (
+          <div className="field">
+            <span className="field-label">{t('blocks.yourNames')}</span>
+            <div className="chips blk-det-names" role="group" aria-label={t('blocks.yourNames')} data-no-swipe>
+              {names.map((n) => (
+                <button
+                  key={n.name}
+                  type="button"
+                  className={cx('chip', title.trim() === n.name && 'is-active')}
+                  title={n.name}
+                  aria-pressed={title.trim() === n.name}
+                  onClick={() => {
+                    setTitle(n.name);
+                    setCategoryId(n.cat);
+                  }}
+                >
+                  <CategoryDot color={catColor(n.cat)} />
+                  <span>{n.name}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         <div className="field">
           <span className="field-label">{t('day.block.category')}</span>
           <CategoryPicker

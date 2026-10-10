@@ -30,7 +30,7 @@
  * isto ime koristi i aplikacija (web/src/lib/pwa.ts), koja u njega upisuje odgovore izmena.
  */
 
-const VERSION = 'v11';
+const VERSION = 'v12';
 const STATIC_CACHE = `ritam-static-${VERSION}`;
 const ASSET_CACHE = `ritam-assets-${VERSION}`;
 const API_CACHE = 'ritam-api';
@@ -80,6 +80,18 @@ let apiClearedAt = 0;
 // Upis u keš je i ovde samo pokušaj (pun disk ne sme da zaglavi staru verziju zauvek).
 
 self.addEventListener('install', (event) => {
+  // Izmene (sve osim GET) idu pravo na mrežu, mimo SW-a (Static Routing API, gde ga ima; SW ih ionako ne dira):
+  // poslednja izmena koja se šalje sa keepalive dok se stranica zatvara ili ponovo učitava inače čeka da se SW
+  // pokrene, pa je browser ponekad odbaci i izmena se izgubi.
+  if (typeof event.addRoutes === 'function') {
+    event.waitUntil(
+      event
+        .addRoutes(['POST', 'PUT', 'PATCH', 'DELETE'].map((requestMethod) => ({ condition: { requestMethod }, source: 'network' })))
+        .catch(() => {
+          // uslov po metodi nije podržan: zahtevi idu kroz SW kao i ranije
+        }),
+    );
+  }
   event.waitUntil(
     (async () => {
       const cache = await openCache(STATIC_CACHE);

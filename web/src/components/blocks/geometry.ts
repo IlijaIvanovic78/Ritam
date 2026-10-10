@@ -11,18 +11,30 @@ export const MOUSE_SLOP = 5;
 /** Ručica trajanja: 12 px = jedan korak mreže (5 min). */
 export const STEP_PX = 12;
 /** Razmak između redova (px), isto kao --gap u blocks.css. */
-export const ROW_GAP = 4;
+export const ROW_GAP = 6;
+/** Slobodno vreme koje nije prošlo: red stalne visine (vreme je u tekstu, srazmera je na traci dana). */
+export const FREE_H = 44;
+/** Slobodno vreme koje je prošlo (ili bilo koje na ranijem danu): niži red. */
+export const FREE_PAST_H = 28;
 /** Visina podignutog bloka ("čip" pod prstom). */
 export const CHIP_H = 64;
+/** Rupa pri prevlačenju: koliko se susedi pomere (čip + razmak). */
+export const HOLE = CHIP_H + ROW_GAP;
 /** Traka sa tabovima na telefonu (--tabbar-h). */
 export const TABBAR_H = 58;
+/** Od ove visine (1h10m) naziv bloka sme u dva reda: 11 + 2 × 20 + 2 + 18 + 11 (+ ivica) — tek tada staje i meta. */
+export const TALL_H = 83;
+/** Kraće od ovoga (min) je kratak blok (manji tekst). */
+export const SHORT_MIN = 30;
+/** Držanje dugmeta − / +: prvi ponovljeni korak posle `first` ms, pa na `every` ms, posle `fastAfter` koraka na `fast` ms. */
+export const REPEAT = { first: 400, every: 120, fastAfter: 20, fast: 70 };
 
 export const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
-/** Visina bloka: 15m = 49, 30m = 59, 1h = 80, 3h = 164, 7h = 202 (posle 3h sabijeno). */
-export const heightOf = (dur: number) => Math.round(38 + 0.7 * Math.min(dur, 180) + 0.16 * Math.max(0, dur - 180));
-/** Blok u uređivaču rezova: clamp(2 × trajanje, 168, 400). */
-export const splitHeightOf = (dur: number) => Math.round(clamp(dur * 2, 168, 400));
+/** Visina bloka (koren trajanja): 5–20m = 52, 30m = 63, 1h = 79, 2h = 102, 4h45 = 144, 8h = 180, 12h = 214. */
+export const heightOf = (dur: number) => Math.max(52, Math.round(24 + 7.1 * Math.sqrt(dur)));
+/** Blok u uređivaču rezova: clamp(1,6 × trajanje, 184, 360). */
+export const splitHeightOf = (dur: number) => Math.round(clamp(dur * 1.6, 184, 360));
 
 export const fmtRange = (a: number, b: number) => `${fmtClock(a)}–${fmtClock(b)}`;
 
@@ -50,6 +62,38 @@ export function vibrate(pattern: number | number[]) {
   } catch {
     // nije podržano
   }
+}
+
+// ---- Dvostruki dodir na dugme koje se pod prstom zameni drugim ----
+
+/**
+ * Drugi dodir dvostrukog dodira: ovoliko ms posle prvog (klik do klika: do 300 ms od puštanja do drugog pritiska, kao
+ * dvostruki dodir na Androidu, plus sam drugi dodir)…
+ */
+const TAP_GUARD_MS = 450;
+/** …i najviše ovoliko px od njega. */
+const TAP_GUARD_PX = 32;
+
+/**
+ * Dugme čija akcija menja ono što je pod prstom (Završi sad → Dodaj posle, Dodaj → donja traka, "+" → pozadina lista,
+ * Podeli → Otkaži): drugi dodir dvostrukog dodira (isto mesto, ≤ 450 ms) se proguta, da ne pokrene ono što se upravo
+ * pojavilo. Poziva se iz klika na to dugme; tastatura (detail 0) nema drugi dodir.
+ */
+export function guardTap(e: { clientX: number; clientY: number; detail: number }) {
+  if (e.detail === 0) return;
+  const x = e.clientX;
+  const y = e.clientY;
+  const until = performance.now() + TAP_GUARD_MS;
+  const done = () => document.removeEventListener('click', kill, true);
+  const kill = (ev: MouseEvent) => {
+    if (performance.now() > until) return done();
+    if (Math.hypot(ev.clientX - x, ev.clientY - y) > TAP_GUARD_PX) return;
+    ev.stopPropagation();
+    ev.preventDefault();
+    done();
+  };
+  document.addEventListener('click', kill, true);
+  window.setTimeout(done, TAP_GUARD_MS + 50);
 }
 
 // ---- Gest bloka u toku: prevlačenje dana levo/desno (useSwipeNav) ga ne sme preuzeti ----

@@ -125,6 +125,15 @@ const paths = {
   longer: <path d="M5 12h14M12 3v6.5M9 6l3-3 3 3M12 21v-6.5M9 18l3 3 3-3" />,
   collapse: <path d="M5 12h14M12 3.5v5M9.5 6.5l2.5 2.5 2.5-2.5M12 20.5v-5M9.5 17.5l2.5-2.5 2.5 2.5" />,
   undo: <path d="M9 14L4.5 9.5 9 5M4.5 9.5H15a4.5 4.5 0 0 1 0 9h-3" />,
+  // Traka izabranog bloka: dodaj posle, ranije / kasnije.
+  'add-after': (
+    <>
+      <rect x="4" y="3.5" width="16" height="6" rx="1" />
+      <path d="M12 13v7.5M8.25 16.75h7.5" />
+    </>
+  ),
+  'arrow-up': <path d="M12 19V5M6 11l6-6 6 6" />,
+  'arrow-down': <path d="M12 5v14M6 13l6 6 6-6" />,
 } satisfies Record<string, ReactNode>;
 
 export type IconName = keyof typeof paths;

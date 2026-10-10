@@ -78,6 +78,8 @@ function EditorView({ template, leaving }: { template: Template; leaving: Mutabl
   const catMap = useCategoryMap();
   const [busy, setBusy] = useState<'dup' | 'del' | null>(null);
   const [renaming, setRenaming] = useState(false);
+  // Mesto za list izabranog bloka u desnoj koloni (desktop ≥ 1000 px).
+  const [inspectorEl, setInspectorEl] = useState<HTMLDivElement | null>(null);
   const [dayNames, setDayNames] = useState<Array<{ title: string; categoryId: number | null }>>([]);
 
   // Raspored je možda u međuvremenu menjan na drugom uređaju.
@@ -243,9 +245,10 @@ function EditorView({ template, leaving }: { template: Template; leaving: Mutabl
       </div>
       <div className="sched-ed-grid">
         <div className="sched-ed-main">
-          <BlockStack ctl={ctl} categories={categories} title={template.name} notice={notice} />
+          <BlockStack ctl={ctl} categories={categories} title={template.name} notice={notice} inspector={inspectorEl} />
         </div>
         <aside className="sched-ed-side">
+          <div className="blk-inspector-slot" ref={setInspectorEl} />
           <section className="card sched-ed-note">
             <p>
               <strong>{t('blocks.tpl.noteLead')}</strong> {t('blocks.tpl.note')}

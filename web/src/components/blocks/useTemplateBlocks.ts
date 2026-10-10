@@ -110,9 +110,10 @@ export function useTemplateBlocks(o: {
   /** Izmena čeka jer neki blok počinje posle kraja dana. */
   const held = () => s.dirty && ctl.M.overflowing(ctl.items).length > 0;
 
+  /** "Čuva se" tek kad je zahtev poslat (pauza posle izmene nije čuvanje; traka ga pokazuje posle 1 s). */
   const showSaving = () => {
     window.clearTimeout(s.savedTimer);
-    ctl.setSaveState((s.dirty && !held()) || s.inflight > 0 ? 'saving' : 'idle');
+    ctl.setSaveState(s.inflight > 0 ? 'saving' : 'idle');
   };
 
   const showSaved = () => {

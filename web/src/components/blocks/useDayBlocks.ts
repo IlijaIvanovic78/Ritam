@@ -166,6 +166,7 @@ export function useDayBlocks(o: {
     mode: 'day' as const,
     now: o.now,
     pastDay: o.pastDay,
+    tracked: !!o.day && o.day.date === o.date && o.day.initialized,
     locked: s.overlaps.length > 0,
     catMap: o.catMap,
     t: o.t,
@@ -178,9 +179,10 @@ export function useDayBlocks(o: {
   const ctl = ctlRef.current;
   ctl.cfg = cfg;
 
+  /** "Čuva se" tek kad je zahtev poslat (pauza od 700 ms posle izmene nije čuvanje; traka ga pokazuje posle 1 s). */
   const showSaving = () => {
     window.clearTimeout(s.savedTimer);
-    ctl.setSaveState(s.dirty || s.inflight > 0 ? 'saving' : 'idle');
+    ctl.setSaveState(s.inflight > 0 ? 'saving' : 'idle');
   };
 
   const showSaved = () => {
@@ -412,11 +414,17 @@ export function useDayBlocks(o: {
           if (!s.disposed) showSaving();
           return;
         }
-        // Greška: useDay je vratio potvrđeno stanje i ponovo učitava dan; niz ga preuzima kad stigne.
+        // Greška: useDay je vratio potvrđeno stanje i ponovo učitava dan; niz ga preuzima kad stigne. Ocena se vraća
+        // odmah: bez servera ponovo učitan dan stiže iz keša (isti kao pre), pa ga niz ne bi preuzeo i ocena bi
+        // izgledala sačuvano dok se server ne vrati (poruku greške daje useDay).
         if (!p || failed) {
           s.seen = null;
           showSaving();
           if (preview) ctl.message(failText(failure));
+          else if (screen?.status !== undefined) {
+            const was = s.fields.get(id as number) ?? s.base?.blocks.find((b) => b.id === id);
+            if (was) ctl.revertRate(id, { status: screen.status, actualMin: screen.actualMin ?? null }, { status: was.status, actualMin: was.actualMin });
+          }
           return;
         }
         supersede(p);

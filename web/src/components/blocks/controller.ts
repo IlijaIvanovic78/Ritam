@@ -1,5 +1,6 @@
-// Stanje i ponašanje niza blokova (Danas i šablon): izbor, traka akcija, deljenje, premeštanje, trajanje,
-// dodavanje, brisanje, poništavanje, prevlačenje (dodir: držanje 420 ms; miš: posle 5 px) i tastatura.
+// Stanje i ponašanje niza blokova (Danas i šablon): izbor, list bloka (ocena, Početak / Kraj, pločice), deljenje,
+// premeštanje, trajanje, dodavanje, brisanje, poništavanje, prevlačenje (dodir: držanje 420 ms; miš: posle 5 px) i
+// tastatura.
 // Prenos prototipa (cubes-final/dev/app.js) nad modelom iz shared/blockStack.ts.
 //
 // React (BlockStack.tsx) crta sve iz ovog stanja (useSyncExternalStore nad `version`). Tokom prevlačenja se
@@ -10,7 +11,7 @@
 // stanje sa servera vraća kroz `replace` i `remap`.
 
 import type { BlockStatus, Category } from '../../../../shared/types.ts';
-import { fmtClock, fmtDuration } from '../../../../shared/time.ts';
+import { DAY_MIN, fmtClock, fmtDuration } from '../../../../shared/time.ts';
 import { blockCounts } from '../../../../shared/summary.ts';
 import {
   createBlockStack,
@@ -34,9 +35,10 @@ import {
   type StackItem,
   type StackSnapshot,
 } from '../../../../shared/blockStack.ts';
-import type { Lang, TFunction } from '../../i18n/index.ts';
+import type { Lang, MessageKey, TFunction } from '../../i18n/index.ts';
 import {
   CHIP_H,
+  HOLE,
   LONG_PRESS_MS,
   MOUSE_SLOP,
   ROW_GAP,
@@ -44,8 +46,10 @@ import {
   TABBAR_H,
   TOUCH_SLOP,
   clamp,
+  finePointer,
   fold,
   fmtRange,
+  guardTap,
   heightOf,
   isPhoneWidth,
   markBlockGesture,
@@ -70,12 +74,17 @@ export interface StackConfig {
   now: number | null;
   /** Raniji dan: sve je prošlost (ocene, deljenje, detalji i brisanje rade; ništa se ne pomera). */
   pastDay: boolean;
+  /**
+   * Dan je upisan na serveru (praćen): tek tada na ranijem danu neocenjeni blokovi čekaju ocenu — dan koji nije praćen
+   * je samo pregled iz šablona.
+   */
+  tracked?: boolean;
   /** Raspored se ne sme menjati (blokovi u podacima se preklapaju dok korisnik ne potvrdi "Popravi"). */
   locked: boolean;
   catMap: Map<number, Category>;
   t: TFunction;
   lang: Lang;
-  /** Nazivi blokova iz šablona (predlozi pri dodavanju i preimenovanju), uz nazive iz samog niza. */
+  /** Nazivi blokova iz šablona (predlozi u listu "Novi blok" i čipovi u Detaljima), uz nazive iz samog niza. */
   extraNames: ReadonlyArray<{ title: string; categoryId: number | null }>;
   onCommit: (e: CommitEvent) => void;
   /** Samo dok je raspored zaključan: izmena polja bloka sa servera (PATCH) umesto celog rasporeda. */
@@ -88,6 +97,13 @@ export interface Msg {
   actions: Array<{ label: string; fn: () => void }>;
   /** Stavka na koju se poruka odnosi (fokus posle Poništi / ×). */
   target?: ItemId;
+  /**
+   * Poruka ne imenuje blok na koji se odnosi (napomena posle prve ocene: "Urađeno. …"): nestaje kad se izabere drugi
+   * blok — u njegovom listu bi izgledala kao da je reč o njemu.
+   */
+  about?: ItemId;
+  /** Kada se pojavila (performance.now()): dodir odmah posle toga je drugi dodir dugmeta ispod nje, ne Poništi. */
+  at: number;
 }
 
 interface Rect {
@@ -107,9 +123,11 @@ export interface DragState {
   el: HTMLElement;
   box: HTMLElement;
   H: number;
+  /** Visina "čipa" pod prstom (najviše CHIP_H); blok koji nije počeo ostavlja na svom mestu samo toliko. */
   CH: number;
   grab: number;
   top0: number;
+  /** Koliko se susedi pomere da otvore mesto (čip + razmak). */
   shift: number;
   mode: 'none' | 'order' | 'free';
   to: number;
@@ -118,11 +136,51 @@ export interface DragState {
   off: number;
   key: string;
   enterShift: number;
-  /** Raspored koji bi nastao spuštanjem (vremena u gutteru i opsezi se crtaju po njemu). */
+  /** Raspored koji bi nastao spuštanjem (opsezi na karticama i na mestu pada se crtaju po njemu). */
   hyp: StackItem[] | null;
   extra: string | null;
-  slot: { top: number; h: number; push: boolean } | null;
+  slot: { top: number; h: number } | null;
+  /** Čip leži na mestu pada (pokriva ga više od pola): mesto se ne crta (inače viri isprekidana ivica). */
+  slotUnder: boolean;
+  /** Iznad slobodnog vremena u koje blok ne staje ceo: pomera blokove posle njega. */
+  push: boolean;
   hole: boolean;
+}
+
+/** Pritisak na krug ocene: dodir se računa samo ako je pušten pre držanja, bez pomeranja i bez skrola. */
+interface CheckPress {
+  id: ItemId;
+  pointerId: number;
+  x0: number;
+  y0: number;
+  /** window.scrollY pri pritisku i pri puštanju. */
+  sy0: number;
+  sy1: number;
+  moved: boolean;
+  /** Držanje je otvorilo izbor ocene. */
+  fired: boolean;
+  timer: number;
+}
+
+/** Odakle stiže ocena: krug na kartici, izbor uz krug, red ocena u traci ili 1 2 3. */
+export type RateVia = 'check' | 'pop' | 'sheet' | 'key';
+
+/** Jednokratni savet pri prvom izboru bloka i napomena posle prve ocene jednim dodirom (pamti se na uređaju). */
+const TIP_KEY = 'ritam.blocks.tip2';
+const RATE_HINT_KEY = 'ritam.blocks.rateHint';
+const shownOnce = new Set<string>();
+
+/** true samo prvi put (localStorage; bez njega bar jednom po učitavanju stranice). */
+function firstTime(key: string): boolean {
+  if (shownOnce.has(key)) return false;
+  shownOnce.add(key);
+  try {
+    if (window.localStorage.getItem(key) === '1') return false;
+    window.localStorage.setItem(key, '1');
+  } catch {
+    // privatni režim / blokiran storage: jednom po učitavanju
+  }
+  return true;
 }
 
 interface Pending {
@@ -178,6 +236,8 @@ export interface NewBlockState {
   effect: string;
   effectCls: '' | 'is-moves' | 'is-over';
   canCloseGap: boolean;
+  /** Otvoren pločicom "Dodaj posle" ovog bloka: Otkaži vraća njegov list (pločica je zatvaranjem lista nestala). */
+  from: ItemId | null;
 }
 
 export interface KnownName {
@@ -186,12 +246,51 @@ export interface KnownName {
   n: number;
 }
 
+/** Pločica u listu bloka (najviše četiri). */
 export interface DockAction {
-  act: 'split' | 'move' | 'endnow' | 'shorter' | 'longer' | 'delete' | 'details';
-  icon: 'split' | 'move' | 'end-now' | 'shorter' | 'longer' | 'trash' | 'more';
+  act: 'endnow' | 'split' | 'move' | 'after' | 'delete';
+  icon: 'end-now' | 'split' | 'move' | 'add-after' | 'trash';
   cls?: string;
   disabled?: boolean;
 }
+
+/** Ivica koju menjaju koraci u listu bloka: početak, kraj ili ceo blok (kroz slobodno vreme). */
+export type StepEdge = 'start' | 'end' | 'nudge';
+
+/**
+ * Niz koraka iste ivice (−/+, držanje, upisano vreme): vrednost na početku (za "· +25m" uz oznaku dok traje) i
+ * raspored na početku — svaki korak se računa od njega, pa korak nazad vraća i blokove koje je korak napred pogurao.
+ */
+interface StepSession {
+  id: ItemId;
+  edge: StepEdge;
+  from: number;
+  at: number;
+  base: StackItem[];
+  /** Raspored posle poslednjeg koraka: druga izmena između (ocena, Poništi, server) počinje nov niz. */
+  last: StackItem[] | null;
+}
+
+/** Oznaka "· +25m" uz Početak / Kraj ostaje ovoliko posle poslednjeg koraka (ms; isto kao spajanje u istoriji). */
+const STEP_SESS_MS = 4000;
+
+/** Upisan kraj pre početka bloka je sutra (22:00 → 00:30) ako blok tako traje najviše ovoliko (min); duže je greška. */
+const NEXT_DAY_MAX = 12 * 60;
+
+/** Ista ocena istim dugmetom u ovom roku (ms) je drugi dodir dvostrukog dodira, ne povratak na "čeka". */
+const RERATE_MS = 400;
+
+/**
+ * Prolaz kroz ocene: ocena iz lista u ovom roku (ms) posle prelaska na sledeći blok je drugi dodir prethodne ocene (red
+ * ocena je na istom mestu) — sledeći blok se ne ocenjuje pre nego što se vidi.
+ */
+const REVIEW_GUARD_MS = 250;
+
+/** Uređivač rezova: dodir bliže od ovoga (px) postojećem rezu nije nov rez (deo od 5 min tik uz njega). */
+const CUT_TAP_PX = 14;
+
+/** Dodir na poruku (Poništi, akcija, ×) u ovom roku (ms) posle njenog pojavljivanja se ne računa. */
+export const MSG_TAP_GUARD_MS = 400;
 
 interface CommitOpts {
   trusted?: boolean;
@@ -199,7 +298,6 @@ interface CommitOpts {
   fieldsOnly?: boolean;
   target?: ItemId;
   coalesce?: string;
-  keepFam?: boolean;
   select?: ItemId | null;
   first?: Map<ItemId, number> | null;
   msg?: string;
@@ -233,12 +331,8 @@ export class StackController {
   items: StackItem[] = [];
   hist: History<StackSnapshot> = emptyHistory();
   sel: ItemId | null = null;
-  selByTap = false;
-  selAt = 0;
   splitSt: { id: ItemId; cuts: number[] } | null = null;
-  splitFam: { orig: StackItem[]; origId: ItemId; n: number; ids: ItemId[] } | null = null;
   moveSt: { id: ItemId; targets: MoveTarget[] } | null = null;
-  renaming = false;
   preview: StackItem[] | null = null;
   ghostId: ItemId | null = null;
   drag: DragState | null = null;
@@ -249,7 +343,17 @@ export class StackController {
   msg: Msg | null = null;
   nb: NewBlockState | null = null;
   detId: ItemId | null = null;
-  /** Stanje čuvanja (domaćin): prikazuje se u traci. */
+  /** Detalji su otvoreni sa F2: naziv je odmah izabran. */
+  detFocusName = false;
+  /** Blok čiji je izbor ocene (Urađeno / Delimično / Nije) otvoren uz krug. */
+  ratePop: ItemId | null = null;
+  /** Redom kroz blokove koji čekaju ocenu (čip "● N" u traci): posle ocene izabranog ide sledeći. */
+  review = false;
+  /** Desktop (≥ 1000 px): list bloka je u desnoj koloni, ne preko niza (band() ga tada ne računa). */
+  dockInSide = false;
+  /** Poslednji niz koraka u listu bloka (Početak / Kraj / ceo blok). */
+  stepSess: StepSession | null = null;
+  /** Stanje čuvanja (domaćin; 'saving' = zahtev je poslat): traka posle 1 s kaže "Čuva se…". */
   saveState: 'idle' | 'saving' | 'saved' = 'idle';
   /** Animiraj nove redove i promene u sledećem crtanju (samo posle izmene korisnika, ne posle učitavanja). */
   animateNext = false;
@@ -263,9 +367,8 @@ export class StackController {
   asIndEl: HTMLElement | null = null;
   pillEl: HTMLElement | null = null;
   liveEl: HTMLElement | null = null;
-  mapViewEl: HTMLElement | null = null;
   mapEl: HTMLElement | null = null;
-  /** Telefon, uređivač rezova: najveća visina bloka koja staje između trake i trake akcija (null = bez ograničenja). */
+  /** Telefon, uređivač rezova: najveća visina bloka koja staje između trake i lista bloka (null = bez ograničenja). */
   splitCap: number | null = null;
 
   /** Stabilan ključ reda (React key) i kad blok dobije id sa servera ('n5' → 130). */
@@ -278,6 +381,18 @@ export class StackController {
   private sayTimer = 0;
   private raf = 0;
   private lastY = 0;
+  private chk: CheckPress | null = null;
+  /** Izbor ocene je upravo zatvoren dodirom na krug: isti dodir ga ne otvara ponovo. */
+  private popClosed: { id: ItemId; at: number } | null = null;
+  /** Poslednja data ocena (vidi RERATE_MS). */
+  private lastRate: { id: ItemId; s: BlockStatus; at: number } | null = null;
+  /** Prolaz kroz ocene je upravo izabrao ovaj blok (vidi REVIEW_GUARD_MS). */
+  private reviewAt: { id: ItemId; at: number } | null = null;
+  private reviewTimer = 0;
+  private stepTimer = 0;
+  /** Prst koji prevlači blok (touchstart posle pointerdown-a) i rezerva: browser je otkazao pokazivač, dalje dodiri. */
+  private touchId: number | null = null;
+  private docTouch = false;
 
   constructor(cfg: StackConfig, items: StackItem[], frame: Frame | number) {
     this.cfg = cfg;
@@ -338,10 +453,14 @@ export class StackController {
   dispose() {
     window.clearTimeout(this.msgTimer);
     window.clearTimeout(this.sayTimer);
+    window.clearTimeout(this.reviewTimer);
+    window.clearTimeout(this.stepTimer);
     cancelAnimationFrame(this.raf);
     if (this.afterRaf) cancelAnimationFrame(this.afterRaf);
     this.clearPend();
+    this.clearChk();
     this.unlistenMoves();
+    this.unlistenTouch();
   }
 
   // ======================= Domaćin =======================
@@ -352,7 +471,7 @@ export class StackController {
 
   /** Nešto je u toku (gest, sheet): stanje sa servera tada čeka. */
   isBusy(): boolean {
-    return !!(this.drag || this.rs || this.cutDrag || this.pend || this.nb || this.detId != null || this.preview);
+    return !!(this.drag || this.rs || this.cutDrag || this.pend || this.nb || this.detId != null || this.preview || this.ratePop != null);
   }
 
   /** Nov niz sa servera (učitavanje, izmena sa drugog uređaja, vraćanje posle greške). */
@@ -363,9 +482,9 @@ export class StackController {
     const has = (id: ItemId | null | undefined) => id != null && items.some((c) => c.id === id && c.kind === 'block');
     if (!has(this.sel)) this.sel = null;
     if (this.splitSt && !has(this.splitSt.id)) this.splitSt = null;
-    if (this.splitFam && (opts.resetHistory || !this.splitFam.ids.every(has))) this.splitFam = null;
-    if (this.moveSt) this.moveSt = has(this.moveSt.id) ? { id: this.moveSt.id, targets: this.M.moveTargets(items, this.moveSt.id, this.anch()) } : null;
-    if (this.renaming && !has(this.sel)) this.renaming = false;
+    if (this.moveSt) this.moveSt = has(this.moveSt.id) ? { id: this.moveSt.id, targets: this.targetsFor(this.moveSt.id) } : null;
+    if (!has(this.ratePop)) this.ratePop = null;
+    if (this.stepSess && (opts.resetHistory || !has(this.stepSess.id))) this.stepSess = null;
     this.animateNext = false;
     // Tokom crtanja domaćina: BlockStack se crta posle njega i čita novo stanje (bez obaveštavanja).
     if (opts.silent) this.version += 1;
@@ -386,6 +505,7 @@ export class StackController {
     this.detId = null;
     this.sel = null;
     this.cancelTransient();
+    this.stepSess = null;
     this.hist = emptyHistory();
     window.clearTimeout(this.msgTimer);
     this.msg = null;
@@ -426,10 +546,14 @@ export class StackController {
     };
     if (this.sel != null) this.sel = id(this.sel);
     if (this.splitSt) this.splitSt = { ...this.splitSt, id: id(this.splitSt.id) };
-    if (this.splitFam)
-      this.splitFam = { ...this.splitFam, orig: list(this.splitFam.orig), origId: id(this.splitFam.origId), ids: this.splitFam.ids.map(id) };
-    if (this.moveSt) this.moveSt = { id: id(this.moveSt.id), targets: this.M.moveTargets(this.items, id(this.moveSt.id), this.anch()) };
+    if (this.moveSt) this.moveSt = { id: id(this.moveSt.id), targets: this.targetsFor(id(this.moveSt.id)) };
+    if (this.stepSess) {
+      const s = this.stepSess;
+      this.stepSess = { ...s, id: id(s.id), base: list(s.base), last: s.last && list(s.last) };
+    }
     if (this.detId != null) this.detId = id(this.detId);
+    if (this.ratePop != null) this.ratePop = id(this.ratePop);
+    if (this.chk) this.chk.id = id(this.chk.id);
     // Odgovor može da stigne usred gesta (držanje, prevlačenje, ručica): gest nastavlja sa novim id-jevima.
     if (this.pend) this.pend.id = id(this.pend.id);
     const d = this.drag;
@@ -476,9 +600,9 @@ export class StackController {
     return c.kind === 'block' && blockCounts({ categoryId: c.categoryId }, this.cfg.catMap);
   }
 
-  /** Prošao je, a nije ocenjen (samo danas i zadržano juče). */
+  /** Prošao je, a nije ocenjen (danas, zadržano juče i praćen raniji dan — tamo je sve prošlo). */
   isDue(c: StackItem, st: number): boolean {
-    const now = this.cfg.now;
+    const now = this.cfg.now ?? (this.cfg.pastDay && this.cfg.tracked ? Infinity : null);
     return this.cfg.mode === 'day' && now != null && c.kind === 'block' && c.status === 'pending' && st + c.dur <= now && this.counts(c) && c.id !== this.ghostId;
   }
 
@@ -504,7 +628,7 @@ export class StackController {
     return this.t(this.cfg.mode === 'template' ? 'blocks.overlap.lockedTpl' : 'blocks.overlap.locked');
   }
 
-  /** Naziv u poruci (dugačak se skraćuje: poruka u traci akcija ima dva reda, a opseg i "N pomereno" su bitniji). */
+  /** Naziv u poruci (dugačak se skraćuje: poruka ima najviše dva reda, a opseg i "N pomereno" su bitniji). */
   private nameOf(c: StackItem): string {
     return c.kind === 'free' ? this.t('blocks.freeTime') : msgName(c.title);
   }
@@ -530,9 +654,9 @@ export class StackController {
 
   // ======================= Poruke, najave, bljesak =======================
 
-  /** Poruka (u traci akcija ili iznad donje trake); čitač ekrana je čuje kroz stalni aria-live region. */
-  message(text: string, o: { undo?: boolean; actions?: Msg['actions']; target?: ItemId } = {}) {
-    this.msg = { text, undo: !!o.undo, actions: o.actions ?? [], target: o.target };
+  /** Poruka (u listu bloka ili iznad donje trake); čitač ekrana je čuje kroz stalni aria-live region. */
+  message(text: string, o: { undo?: boolean; actions?: Msg['actions']; target?: ItemId; about?: ItemId } = {}) {
+    this.msg = { text, undo: !!o.undo, actions: o.actions ?? [], target: o.target, about: o.about, at: performance.now() };
     window.clearTimeout(this.msgTimer);
     this.msgTimer = window.setTimeout(() => this.closeMsg(), this.msg.actions.length ? 7000 : 4500);
     this.emit();
@@ -589,14 +713,16 @@ export class StackController {
     return (this.els.get(id)?.querySelector('.blk-box') as HTMLElement | null) ?? null;
   }
 
-  flash(id: ItemId, cls: 'is-flash' | 'is-shifted' | 'is-shake' = 'is-flash') {
+  /** Kratka animacija bloka (bljesak, pomeren, odbijeno) ili kruga ocene ('is-pop'). */
+  flash(id: ItemId, cls: 'is-flash' | 'is-shifted' | 'is-shake' | 'is-pop' = 'is-flash') {
     this.after(() => {
       const box = this.boxOf(id);
-      if (!box) return;
-      box.classList.remove(cls);
-      void box.offsetWidth;
-      box.classList.add(cls);
-      window.setTimeout(() => box.classList.remove(cls), 950);
+      const el = cls === 'is-pop' ? box?.querySelector<HTMLElement>('.blk-check-c') : box;
+      if (!el) return;
+      el.classList.remove(cls);
+      void el.offsetWidth;
+      el.classList.add(cls);
+      window.setTimeout(() => el.classList.remove(cls), 950);
     });
   }
 
@@ -645,15 +771,26 @@ export class StackController {
   }
 
   /**
-   * Granice vidljivog dela niza: ispod trake, iznad trake akcija (telefon: iznad donje trake; desktop: zalepljena na
-   * dnu kolone — njen vrh nikad nije iznad redova koje pokriva) ili iznad donje trake.
+   * Granice vidljivog dela niza: ispod trake, iznad lista bloka (telefon: iznad donje trake; 860–999 px: zalepljen na
+   * dnu kolone — njegov vrh nikad nije iznad redova koje pokriva) ili iznad donje trake. Desktop (≥ 1000 px): list je
+   * u desnoj koloni i ne pokriva niz, pa se ne računa.
    */
   band(): { top: number; bottom: number } {
     const top = Math.max(0, this.barEl?.getBoundingClientRect().bottom ?? 0);
-    const dock = this.dockEl?.isConnected ? this.dockEl : null;
+    const dock = this.dockEl?.isConnected && !this.dockInSide ? this.dockEl : null;
     const floor = window.innerHeight - (isPhoneWidth() ? TABBAR_H : 0);
     const bottom = dock ? Math.min(dock.getBoundingClientRect().top, floor) : floor;
     return { top, bottom };
+  }
+
+  /** List bloka je porastao (poruka, red ocena): izabran blok ponovo ceo iznad njega, ako ga list sada pokriva. */
+  keepSelVisible() {
+    const id = this.sel;
+    const box = id != null ? this.boxOf(id) : null;
+    const dock = this.dockEl;
+    if (id == null || !box || !dock?.isConnected || this.dockInSide || this.drag || this.rs) return;
+    // (Donja ručica viri ~17 px ispod kartice.)
+    if (box.getBoundingClientRect().bottom > dock.getBoundingClientRect().top - 24) this.reveal(id);
   }
 
   /** Donja ivica trake kad je zalepljena (ispod trake "Nema interneta", --offline-h). */
@@ -735,27 +872,19 @@ export class StackController {
     window.scrollTo({ top: Math.max(0, y - b.top - (b.bottom - b.top) * 0.25), behavior: smooth && !reduceMotion() ? 'smooth' : 'auto' });
   }
 
-  /** Okvir vidljivog dela dana na mapi i linija ispod trake kad je zalepljena. */
-  updateMapView() {
-    const v = this.mapViewEl;
-    if (v && this.els.size) {
+  /** Traka dana (klizač: vreme od kog ←/→ skaču) i linija ispod trake kad je zalepljena. */
+  updateBar() {
+    const map = this.mapEl;
+    if (map && this.els.size) {
+      // Četvrtina vidljivog dela, da čitač ekrana čuje promenu pri skrolu.
       const g = this.rowsGeo();
       const b = this.band();
       const { start, end } = this.M.frame;
-      const pct = (m: number) => clamp(((m - start) / this.M.LEN) * 100, 0, 100);
-      const t0 = this.yToTime(g, b.top + window.scrollY);
-      const t1 = this.yToTime(g, b.bottom + window.scrollY);
-      v.style.left = `${pct(t0)}%`;
-      v.style.width = `${Math.max(1, pct(t1) - pct(t0))}%`;
-      // Klizač mape: vreme od kog ←/→ skaču (četvrtina vidljivog dela), da čitač ekrana čuje promenu.
-      const map = this.mapEl;
-      if (map) {
-        const m = clamp(Math.round(this.yToTime(g, b.top + window.scrollY + (b.bottom - b.top) * 0.25)), start, end);
-        const now = String(m - start);
-        if (map.getAttribute('aria-valuenow') !== now) {
-          map.setAttribute('aria-valuenow', now);
-          map.setAttribute('aria-valuetext', fmtClock(m));
-        }
+      const m = clamp(Math.round(this.yToTime(g, b.top + window.scrollY + (b.bottom - b.top) * 0.25)), start, end);
+      const now = String(m - start);
+      if (map.getAttribute('aria-valuenow') !== now) {
+        map.setAttribute('aria-valuenow', now);
+        map.setAttribute('aria-valuetext', fmtClock(m));
       }
     }
     const bar = this.barEl;
@@ -780,13 +909,13 @@ export class StackController {
       return false;
     }
     this.hist = historyRecord(this.hist, { items: prev, sel: this.sel }, { tag: o.coalesce ?? null, at: performance.now() });
-    if (!o.keepFam) this.splitFam = null;
     this.moveSt = null;
     this.splitSt = null;
-    this.renaming = false;
+    this.ratePop = null;
+    // Svaka druga izmena prekida prolaz kroz ocene.
+    if ((o.kind ?? 'edit') !== 'rate') this.review = false;
     const first = o.first ?? (orderChanged(prev, next) ? this.measure() : null);
     this.apply(next, o.select !== undefined ? o.select : this.sel, first);
-    this.selByTap = false;
     const moved = this.M.movedBlocks(prev, next, o.target);
     moved.forEach((m) => this.flash(m.id, 'is-shifted'));
     if (o.msg) {
@@ -812,9 +941,9 @@ export class StackController {
 
   cancelTransient() {
     this.splitSt = null;
-    this.splitFam = null;
     this.moveSt = null;
-    this.renaming = false;
+    this.ratePop = null;
+    this.review = false;
   }
 
   undo() {
@@ -829,7 +958,6 @@ export class StackController {
     const first = orderChanged(this.items, r.snap.items) ? this.measure() : null;
     this.hist = r.history;
     this.apply([...r.snap.items], r.snap.sel, first);
-    this.selByTap = false;
     this.closeMsg();
     this.say(this.t('blocks.msg.undone'));
     this.emitHistory(prev, 'undo');
@@ -868,157 +996,488 @@ export class StackController {
 
   // ======================= Izbor =======================
 
-  select(id: ItemId | null, o: { byTap?: boolean; reveal?: boolean } = {}) {
+  /** Izbor bloka (list bloka se otvara). `review`: deo prolaza kroz ocene (čip "● N"). */
+  select(id: ItemId | null, o: { reveal?: boolean; review?: boolean } = {}) {
     if (this.splitSt && this.splitSt.id !== id) this.splitSt = null;
-    if (this.splitFam && id != null && !this.splitFam.ids.includes(id)) this.splitFam = null;
-    this.renaming = false;
     this.moveSt = null;
+    this.ratePop = null;
+    this.review = !!o.review && id != null;
     this.sel = id;
-    this.selByTap = !!o.byTap;
-    this.selAt = performance.now();
+    if (this.msg?.about != null && this.msg.about !== id) this.closeMsg();
     this.emit();
     if (id != null && o.reveal !== false) this.reveal(id);
+    // Prvi izbor ikad: savet u listu bloka (ručice i prevlačenje), jednom.
+    if (id != null && firstTime(TIP_KEY)) this.message(this.t(finePointer() ? 'blocks.tip.fine' : 'blocks.tip.touch'));
   }
 
   deselect() {
-    if (this.sel == null && !this.splitSt && !this.moveSt) return;
+    if (this.sel == null && !this.splitSt && !this.moveSt && this.ratePop == null) return;
     this.sel = null;
     this.cancelTransient();
     this.emit();
   }
 
-  /** × u traci akcija: traka se zatvara, fokus ostaje na bloku (ne pada na <body>). */
+  /** × u listu bloka: list se zatvara, fokus ostaje na bloku (ne pada na <body>). */
   closeDock() {
     const id = this.sel;
     this.deselect();
     this.focusRow(id);
   }
 
-  // ======================= Akcije bloka =======================
+  // ======================= Ocena =======================
 
-  setStatus(id: ItemId, s: Exclude<BlockStatus, 'pending'>) {
+  /**
+   * Ocena bloka; ista ocena ponovo vraća "čeka". Bez poruke (samo najava i Poništi u traci): krug se kratko "napumpa".
+   * Prva ocena jednim dodirom na krug dobija jednokratnu napomenu; u prolazu kroz ocene posle ocene izabranog bloka
+   * (posle 380 ms) dolazi sledeći koji čeka.
+   */
+  rate(id: ItemId, s: Exclude<BlockStatus, 'pending'>, via: RateVia) {
     const c = this.items.find((x) => x.id === id);
     if (!c || c.kind !== 'block') return;
+    const at = performance.now();
+    const lr = this.lastRate;
+    // Dvostruki dodir na ocenu u listu (i u prolazu kroz ocene): drugi dodir istog dugmeta ne vraća upravo datu ocenu
+    // na "čeka" — to je poseban, nameran dodir. (Izbor uz krug se posle ocene zatvara, a drugi dodir guta guardTap.)
+    if (via === 'sheet' && lr && lr.id === id && lr.s === s && c.status === s && at - lr.at < RERATE_MS) return;
+    const ra = this.reviewAt;
+    if (via === 'sheet' && ra && ra.id === id && at - ra.at < REVIEW_GUARD_MS) return;
     const next = this.M.opRate(this.items, id, s);
     const status = c.status === s ? 'pending' : s;
-    this.commit(next, {
+    const reviewing = this.review && this.sel === id;
+    const ok = this.commit(next, {
       say: this.t('blocks.msg.status', { name: c.title, status: this.statusWord(status) }),
-      keepFam: true,
       fieldsOnly: true,
       trusted: true,
       kind: 'rate',
       rateId: id,
     });
+    if (!ok) return;
+    this.lastRate = status === 'pending' ? null : { id, s, at };
+    this.flash(id, 'is-pop');
+    if (via === 'check') {
+      vibrate(8);
+      // Napomena ne imenuje blok: dok je izabran drugi blok (njegov list je otvoren) čeka sledeću priliku.
+      if (status === 'done' && (this.sel == null || this.sel === id) && firstTime(RATE_HINT_KEY))
+        this.message(this.t(finePointer() ? 'blocks.rate.hintFine' : 'blocks.rate.hint'), { undo: true, target: id, about: id });
+    }
+    if (reviewing && status !== 'pending') this.reviewNext(id);
   }
 
-  resizeTo(id: ItemId, dur: number, o: { coalesce?: string; ended?: boolean } = {}) {
+  /**
+   * Ocena nije sačuvana (greška čuvanja): blok se odmah vraća na ono što server ima (`back`) — ako je na ekranu još
+   * poslata ocena (`sent`; noviju ocenu rešava njen zahtev). Ako je poslednji korak istorije baš ta ocena, otpada
+   * (Poništi ne nudi korak koji ništa ne radi); napomena posle prve ocene nestaje.
+   */
+  revertRate(id: ItemId, sent: Pick<StackBlock, 'status' | 'actualMin'>, back: Pick<StackBlock, 'status' | 'actualMin'>) {
+    const i = this.M.idxOf(this.items, id);
+    const c = this.items[i];
+    if (!c || c.kind !== 'block' || c.status !== sent.status || c.actualMin !== sent.actualMin) return;
+    if (c.status === back.status && c.actualMin === back.actualMin) return;
+    const top = this.hist.past[this.hist.past.length - 1];
+    const prev = top?.snap.items;
+    const was = prev?.[i];
+    const onlyThis =
+      !!prev &&
+      prev.length === this.items.length &&
+      was?.kind === 'block' &&
+      was.id === id &&
+      was.status === back.status &&
+      was.actualMin === back.actualMin &&
+      prev.every((x, k) => k === i || x === this.items[k]);
+    if (onlyThis) {
+      this.hist = { ...this.hist, past: this.hist.past.slice(0, -1) };
+      this.items = [...prev];
+    } else this.items = this.items.map((x, k) => (k === i ? { ...c, ...back } : x));
+    if (this.lastRate?.id === id) this.lastRate = null;
+    if (this.msg?.about === id) this.closeMsg();
+    this.emit();
+  }
+
+  /** Blokovi koji čekaju ocenu, od najranijeg. */
+  dueIds(): ItemId[] {
+    const st = this.M.startsOf(this.items);
+    return this.items.filter((c, i) => this.isDue(c, st[i])).map((c) => c.id);
+  }
+
+  /** Čip "● N" u traci: izabran najraniji blok koji čeka ocenu, fokus na ocenu (red u traci ili krug na kartici). */
+  startReview() {
+    const first = this.dueIds()[0];
+    if (first == null) return;
+    this.select(first, { review: true });
+    this.focusRating(first);
+  }
+
+  private reviewNext(from: ItemId) {
+    window.clearTimeout(this.reviewTimer);
+    this.reviewTimer = window.setTimeout(() => {
+      if (!this.review || this.sel !== from) return;
+      const next = this.dueIds()[0];
+      if (next != null) {
+        this.select(next, { review: true });
+        this.reviewAt = { id: next, at: performance.now() };
+        this.focusRating(next);
+        return;
+      }
+      // Sve je ocenjeno: list se zatvara, fokus ostaje na poslednjem ocenjenom bloku (ne pada na <body>).
+      this.review = false;
+      this.deselect();
+      this.focusRow(from);
+      this.message(this.t('blocks.review.allDone'));
+    }, 380);
+  }
+
+  private focusRating(id: ItemId) {
+    this.after(() => {
+      const el = this.dockEl?.querySelector<HTMLElement>('.blk-rate button') ?? this.boxOf(id)?.querySelector<HTMLElement>('.blk-check');
+      el?.focus({ preventScroll: true });
+    });
+  }
+
+  /** Izbor ocene uz krug (dodir na ocenjen krug ili držanje bilo kog). */
+  openRatePop(id: ItemId) {
+    const c = this.items.find((x) => x.id === id);
+    if (this.cfg.mode !== 'day' || !c || c.kind !== 'block') return;
+    this.ratePop = id;
+    this.emit();
+  }
+
+  closeRatePop(focusCheck = false) {
+    const id = this.ratePop;
+    if (id == null) return;
+    this.ratePop = null;
+    this.popClosed = { id, at: performance.now() };
+    this.emit();
+    if (focusCheck) this.focusCheck(id);
+  }
+
+  /** Fokus na krug ocene bloka (posle izbora ocene ili Esc u izboru). */
+  focusCheck(id: ItemId) {
+    this.after(() => this.boxOf(id)?.querySelector<HTMLElement>('.blk-check')?.focus({ preventScroll: true }));
+  }
+
+  private clearChk() {
+    if (this.chk) window.clearTimeout(this.chk.timer);
+    this.chk = null;
+  }
+
+  // ======================= Akcije bloka =======================
+
+  /** Kraj / početak bloka za najavu posle tihog koraka ("Kraj 15:05"). */
+  private edgeSay(edge: 'start' | 'end', list: readonly StackItem[], id: ItemId): string {
+    const i = this.M.idxOf(list, id);
+    const st = this.M.startsOf(list)[i] ?? 0;
+    return `${this.t(edge === 'start' ? 'blocks.time.start' : 'blocks.time.end')} ${fmtClock(edge === 'start' ? st : st + (list[i]?.dur ?? 0))}`;
+  }
+
+  /** Tekući niz koraka ove ivice: isti blok, ≤ 4 s od poslednjeg koraka i bez druge izmene između. */
+  private liveStep(id: ItemId, edge: StepEdge): StepSession | null {
+    const s = this.stepSess;
+    return s && s.id === id && s.edge === edge && s.last === this.items && performance.now() - s.at <= STEP_SESS_MS ? s : null;
+  }
+
+  /**
+   * Korak iste ivice: niz koraka (≤ 4 s između njih) pamti vrednost i raspored sa početka (za "· +25m" uz oznaku u
+   * listu i da se svaki korak računa od tog rasporeda). Posle 4 s bez koraka oznaka nestaje (ponovno crtanje).
+   */
+  private stepMark(id: ItemId, edge: StepEdge, before: number) {
+    const s = this.liveStep(id, edge);
+    this.stepSess = { id, edge, from: s ? s.from : before, at: performance.now(), base: s ? s.base : this.items, last: null };
+    window.clearTimeout(this.stepTimer);
+    this.stepTimer = window.setTimeout(() => {
+      this.stepSess = null;
+      this.emit();
+    }, STEP_SESS_MS + 50);
+  }
+
+  /**
+   * Posle koraka: uspeo = niz pamti raspored koji je napravio; nije = niz ostaje kakav je bio. Niz koji se vratio tačno
+   * na početak više ništa ne menja: njegov korak istorije otpada (Poništi ne nudi korak koji ništa ne radi).
+   */
+  private stepDone(ok: boolean, prev: StepSession | null) {
+    const s = this.stepSess;
+    if (!ok || !s) {
+      this.stepSess = prev;
+      return;
+    }
+    s.last = this.items;
+    const top = this.hist.past[this.hist.past.length - 1];
+    if (this.items === s.base && top?.snap.items === s.base) {
+      this.hist = { ...this.hist, past: this.hist.past.slice(0, -1) };
+      this.emit();
+    }
+  }
+
+  /** Pomak ivice od početka tekućeg niza koraka (min; null = nema niza ili nema pomaka). */
+  stepDelta(id: ItemId, edge: StepEdge): number | null {
+    const s = this.stepSess;
+    if (!s || s.id !== id || s.edge !== edge || performance.now() - s.at > STEP_SESS_MS) return null;
+    const i = this.M.idxOf(this.items, id);
+    if (i < 0) return null;
+    const st = this.M.startsOf(this.items)[i];
+    return (edge === 'end' ? st + this.items[i].dur : st) - s.from || null;
+  }
+
+  /**
+   * Novo trajanje (kraj se pomera). `quiet` (koraci u listu, ručice): bez poruke — vrednost se vidi uživo u listu i na
+   * kartici, Poništi je u traci; čitač ekrana čuje "Kraj 15:05".
+   */
+  resizeTo(id: ItemId, dur: number, o: { coalesce?: string; ended?: boolean; quiet?: boolean } = {}): boolean {
     const c = this.items.find((x) => x.id === id);
     const next = this.M.opResize(this.items, id, dur);
-    if (!next || !c) return;
-    const name = this.nameOf(c);
-    const range = this.rangeIn(next, id);
-    const msg = (o.ended ? this.t('blocks.msg.ended', { name, range }) : this.t('blocks.msg.resized', { name, range })) + ' · ' + fmtDuration(dur);
-    this.commit(next, { target: id, coalesce: o.coalesce, msg });
+    return !!next && !!c && this.commitDur(next, c, dur, o);
   }
 
-  resizeBy(id: ItemId, delta: number) {
+  /** Novo trajanje (kraj) stavke `c` je raspored `next`: tiho (najava) ili sa porukom. */
+  private commitDur(next: StackItem[], c: StackItem, dur: number, o: { coalesce?: string; ended?: boolean; quiet?: boolean }): boolean {
+    const id = c.id;
+    if (o.quiet) return this.commit(next, { target: id, coalesce: o.coalesce, say: this.edgeSay('end', next, id) });
+    const range = this.rangeIn(next, id);
+    // "Završeno sad": naziv je već u listu bloka, pa poruka staje u dva reda i sa "pomerena 2 bloka".
+    const msg = o.ended
+      ? this.t('blocks.msg.ended', { range })
+      : this.t('blocks.msg.resized', { name: this.nameOf(c), range }) + ' · ' + fmtDuration(dur);
+    return this.commit(next, { target: id, coalesce: o.coalesce, msg });
+  }
+
+  /**
+   * Kraj ±`delta` (Kraj −/+ u listu: ±5, Shift+↑↓: ±15, ↑↓ na donjoj ručici, upisano vreme); sledeće stavke upija
+   * prvo slobodno vreme. U nizu koraka iste ivice raspored se računa od početka niza (kao ručica od početka poteza):
+   * Kraj + ×8 pa − ×8 vraća i blok koji je bio pogurao, a ne povlači ga ranije nego što je bio.
+   * false = ne sme (kartica se trese, poruka kaže zašto; držanje dugmeta tada staje).
+   */
+  resizeBy(id: ItemId, delta: number, o: { quiet?: boolean } = {}): boolean {
     const list = this.items;
     const A = this.anch();
     const i = this.M.idxOf(list, id);
     const c = list[i];
-    if (!c) return;
+    if (!c) return false;
     if (this.cfg.locked) {
       this.shake(id);
       this.message(this.lockedMsg());
-      return;
+      return false;
     }
     if (!this.M.canResize(list, i, A) || this.cfg.pastDay) {
       this.shake(id);
       this.message(this.t('blocks.msg.past'));
-      return;
+      return false;
     }
     const dur = this.M.stepDur(list, id, delta, A);
     if (dur == null || dur === c.dur) {
-      if (delta < 0) {
-        this.shake(id);
-        this.message(this.t('blocks.msg.minLen'));
-      }
-      return;
+      this.shake(id);
+      // Tekući blok staje na "sada"; svi ostali na 5 min.
+      if (delta < 0) this.message(this.t(this.M.minDurAt(list, i, A) > this.M.MIN ? 'blocks.msg.currentMin' : 'blocks.msg.minLen'));
+      return false;
     }
     if (c.kind === 'free') {
       const next = this.M.opResize(list, id, dur);
-      if (next) this.commit(next, { target: id, coalesce: `len:${id}`, msg: `${this.t('blocks.freeTime')} ${this.rangeIn(next, id)}` });
-      return;
+      return !!next && this.commit(next, { target: id, coalesce: `len:${id}`, msg: `${this.t('blocks.freeTime')} ${this.rangeIn(next, id)}` });
     }
-    this.resizeTo(id, dur, { coalesce: `len:${id}` });
+    // Početak bloka je isti u oba rasporeda (menja se samo kraj), pa trajanje izračunato iz trenutnog važi i za početni.
+    const live = this.liveStep(id, 'end');
+    const b = live ? this.M.idxOf(live.base, id) : -1;
+    const fromBase = live && b >= 0 ? (live.base[b].dur === dur ? live.base : this.M.opResize(live.base, id, dur)) : null;
+    const prev = this.stepSess;
+    this.stepMark(id, 'end', this.M.startsOf(list)[i] + c.dur);
+    const opts = { coalesce: `len:${id}`, quiet: o.quiet };
+    const ok = fromBase ? this.commitDur(fromBase, c, dur, opts) : this.resizeTo(id, dur, opts);
+    this.stepDone(ok, prev);
+    return ok;
   }
 
-  /** Gornja ručica sa tastature: početak ±`delta` na mrežu (kraj ostaje). */
-  resizeStartBy(id: ItemId, delta: number) {
+  /**
+   * Početak ±`delta` na mrežu, kraj ostaje (Početak −/+ u listu, ↑↓ na gornjoj ručici). Raniji troši slobodno vreme
+   * pre bloka (pa gura ranije stavke u njihovo), kasniji ostavlja slobodno vreme pre bloka.
+   */
+  resizeStartBy(id: ItemId, delta: number, o: { quiet?: boolean } = {}): boolean {
     const list = this.items;
     const i = this.M.idxOf(list, id);
-    if (list[i]?.kind !== 'block') return;
+    if (list[i]?.kind !== 'block') return false;
     if (this.cfg.locked) {
       this.shake(id);
       this.message(this.lockedMsg());
-      return;
+      return false;
     }
     const range = this.cfg.pastDay ? null : this.M.startRange(list, id, this.anch());
     if (!range) {
       this.shake(id);
       this.message(this.t('blocks.msg.past'));
-      return;
+      return false;
     }
     const SNAP = this.M.SNAP;
+    const A = this.anch();
     const st = this.M.startsOf(list)[i];
     const raw = st + delta;
     const start = clamp(delta < 0 ? Math.ceil(raw / SNAP) * SNAP : Math.floor(raw / SNAP) * SNAP, range.min, range.max);
-    const next = start === st ? null : this.M.opResizeStart(list, id, start, this.anch());
+    // U nizu koraka od rasporeda na početku niza (kraj bloka je isti u oba): Početak − ×8 pa + ×8 vraća i ranije stavke
+    // koje je bio pogurao.
+    const live = start === st ? null : this.liveStep(id, 'start');
+    const bst = live ? this.M.startOf(live.base, id) : null;
+    const fromBase = live && bst != null ? (bst === start ? live.base : this.M.opResizeStart(live.base, id, start, A)) : null;
+    const next = start === st ? null : (fromBase ?? this.M.opResizeStart(list, id, start, A));
     if (!next) {
       this.shake(id);
       this.message(this.t(delta < 0 ? 'blocks.msg.noFreeUp' : 'blocks.msg.minLen'));
-      return;
+      return false;
     }
+    const prev = this.stepSess;
+    this.stepMark(id, 'start', st);
     const dur = next[this.M.idxOf(next, id)].dur;
-    this.commit(next, {
+    const ok = this.commit(next, {
       target: id,
       coalesce: `start:${id}`,
-      msg: this.t('blocks.msg.resized', { name: this.nameOf(list[i]), range: this.rangeIn(next, id) }) + ' · ' + fmtDuration(dur),
+      ...(o.quiet
+        ? { say: this.edgeSay('start', next, id) }
+        : { msg: this.t('blocks.msg.resized', { name: this.nameOf(list[i]), range: this.rangeIn(next, id) }) + ' · ' + fmtDuration(dur) }),
     });
+    this.stepDone(ok, prev);
+    return ok;
   }
 
-  endNow(id: ItemId) {
+  /**
+   * Upisano vreme ivice ("HH:MM", polje u listu): minut u okviru dana (pre početka dana = sutra), na mrežu od 5 min.
+   * Kraj pre početka bloka je sutra (22:00 → 00:30) ako blok tako traje najviše pola dana, inače se odbija (greška u
+   * kucanju ne sme da skrati blok na 5 min); početak posle kraja se odbija. Opseg i dalje važi; poruka kaže stvaran
+   * rezultat (i kad je vreme moralo da se skrati).
+   */
+  setEdgeTime(id: ItemId, edge: 'start' | 'end', hhmm: string): boolean {
+    let m = this.typedMin(hhmm, edge === 'end');
+    const i = this.M.idxOf(this.items, id);
+    if (m == null || i < 0) return false;
+    const st = this.M.startsOf(this.items)[i];
+    const end = st + this.items[i].dur;
+    if (edge === 'end') {
+      if (m <= st && m + DAY_MIN - st <= NEXT_DAY_MAX) m += DAY_MIN;
+      // Po satu pre početka bloka, a posle njega samo zato što je pre početka dana (typedMin: sutra): ista granica od
+      // pola dana — rezultat ne sme da zavisi od toga kad dan počinje.
+      const wrapped = m > st && m % DAY_MIN < st % DAY_MIN && m - st > NEXT_DAY_MAX;
+      if (m <= st || wrapped) return this.refuse(id, 'blocks.msg.endBeforeStart');
+    } else {
+      // Blok koji prelazi ponoć: početak posle ponoći je sutrašnji (23:00–01:00, upisano 00:15).
+      if (m + DAY_MIN < end) m += DAY_MIN;
+      if (m >= end) return this.refuse(id, 'blocks.msg.startAfterEnd');
+    }
+    const cur = edge === 'start' ? st : end;
+    if (m === cur) return false;
+    return edge === 'start' ? this.resizeStartBy(id, m - cur) : this.resizeBy(id, m - cur);
+  }
+
+  /** Odbijena izmena: kartica se trese, poruka kaže zašto. */
+  private refuse(id: ItemId, key: Extract<MessageKey, 'blocks.msg.endBeforeStart' | 'blocks.msg.startAfterEnd'>): false {
+    this.shake(id);
+    this.message(this.t(key));
+    return false;
+  }
+
+  /** "HH:MM" iz polja za vreme → minut u okviru dana (pre početka dana = sutra; kraj u početak dana = kraj dana), na mrežu. */
+  private typedMin(hhmm: string, end = false): number | null {
+    const m0 = /^(\d{1,2}):(\d{2})/.exec(hhmm);
+    if (!m0) return null;
+    const { start } = this.M.frame;
+    let m = Number(m0[1]) * 60 + Number(m0[2]);
+    if (m < start || (end && m === start)) m += 1440;
+    return Math.round(m / this.M.SNAP) * this.M.SNAP;
+  }
+
+  endNow(id: ItemId): boolean {
     const next = this.M.opEndNow(this.items, id, this.anch());
-    if (!next) return;
+    if (!next) return false;
     const i = this.M.idxOf(next, id);
-    this.resizeTo(id, next[i].dur, { ended: true });
+    return this.resizeTo(id, next[i].dur, { ended: true });
   }
 
-  moveBy(id: ItemId, dir: -1 | 1) {
+  /**
+   * Za jedno mesto ranije / kasnije (Alt+↑↓, Ranije / Kasnije u listu). U režimu "Premesti" ostaje u njemu (sa novim
+   * mestima), da sledeći korak bude jedan dodir.
+   */
+  moveBy(id: ItemId, dir: -1 | 1): boolean {
     const list = this.items;
     const i = this.M.idxOf(list, id);
     const c = list[i];
-    if (!c) return;
+    if (!c) return false;
     const A = this.anch();
     const next = this.cfg.pastDay ? null : this.M.opMoveBy(list, id, dir, A);
     if (!next) {
       this.shake(id);
       if (this.cfg.locked) this.message(this.lockedMsg());
       else if (this.cfg.pastDay || (A && i <= this.M.info(list, A).ff)) this.message(this.t('blocks.msg.past'));
-      return;
+      return false;
     }
-    if (this.commit(next, { target: id, select: c.kind === 'free' ? null : id, msg: this.t('blocks.msg.moved', { name: this.nameOf(c), range: this.rangeIn(next, id) }) }))
-      this.reveal(id);
+    const stay = this.moveSt?.id === id;
+    if (!this.commit(next, { target: id, select: c.kind === 'free' ? null : id, msg: this.t('blocks.msg.moved', { name: this.nameOf(c), range: this.rangeIn(next, id) }) }))
+      return false;
+    if (stay) this.keepMoving(id);
+    this.reveal(id);
+    return true;
   }
 
-  nudge(id: ItemId, dir: -1 | 1) {
-    const next = this.cfg.pastDay ? null : this.M.opNudge(this.items, id, dir);
-    if (!next) {
+  /** Opseg bloka posle "Ranije" / "Kasnije" (pločice u režimu "Premesti"); null = nema mesta. */
+  moveResult(id: ItemId, dir: -1 | 1): string | null {
+    const A = this.anch();
+    const next = this.cfg.pastDay || this.cfg.locked ? null : this.M.opMoveBy(this.items, id, dir, A);
+    return next && this.M.pastOk(this.items, next, A) ? this.rangeIn(next, id) : null;
+  }
+
+  /** Ceo blok ±5 min kroz slobodno vreme pre / posle njega (Alt+Shift+↑↓, "Ceo blok" u režimu "Premesti"). */
+  nudge(id: ItemId, dir: -1 | 1, o: { quiet?: boolean; stay?: boolean } = {}): boolean {
+    const c = this.items.find((x) => x.id === id);
+    const next = this.cfg.pastDay || !c ? null : this.M.opNudge(this.items, id, dir);
+    if (!next || !c) {
+      this.shake(id);
       this.message(dir < 0 ? this.t('blocks.msg.noFreeUp') : this.t('blocks.msg.noFreeDown'));
-      return;
+      return false;
     }
-    const c = this.items.find((x) => x.id === id)!;
-    this.commit(next, { target: id, coalesce: `nudge:${id}`, msg: this.t('blocks.msg.moved', { name: this.nameOf(c), range: this.rangeIn(next, id) }) });
+    const stay = !!o.stay && this.moveSt?.id === id;
+    const prev = this.stepSess;
+    if (o.quiet) this.stepMark(id, 'nudge', this.M.startOf(this.items, id) ?? 0);
+    const text = this.t('blocks.msg.moved', { name: this.nameOf(c), range: this.rangeIn(next, id) });
+    const ok = this.commit(next, { target: id, coalesce: `nudge:${id}`, ...(o.quiet ? { say: text } : { msg: text }) });
+    if (o.quiet) this.stepDone(ok, prev);
+    if (!ok) return false;
+    if (stay) this.keepMoving(id);
+    return true;
+  }
+
+  /** "Ceo blok" −/+ ima kuda (slobodno vreme odmah pre / posle bloka, a početak ne ulazi u prošlost). */
+  canNudge(id: ItemId, dir: -1 | 1): boolean {
+    if (this.cfg.pastDay || this.cfg.locked) return false;
+    const next = this.M.opNudge(this.items, id, dir);
+    return !!next && this.M.pastOk(this.items, next, this.anch());
+  }
+
+  /** Posle koraka u režimu "Premesti": režim ostaje, sa mestima za novi raspored. */
+  private keepMoving(id: ItemId) {
+    const targets = this.targetsFor(id);
+    if (!targets.length) return;
+    this.moveSt = { id, targets };
+    this.emit();
+  }
+
+  /**
+   * Mesta za "Premesti" kako ih korisnik vidi, jedno po mestu: šav koji počinje isto kao slobodno vreme (isti opseg,
+   * druga reč) otpada — ostaje "U slobodno vreme". Šav odmah posle slobodnog vremena koje je cilj je isto mesto u nizu
+   * ("U slobodno vreme" pa "Pre „Učenje“"): ostaje jedno od dva — "U slobodno vreme", osim kad bi blok tamo prešao kraj
+   * dana, a na šavu ne (npr. "Na kraj dana": blok se završava tačno na kraju dana).
+   */
+  private calmTargets(T: MoveTarget[], id: ItemId): MoveTarget[] {
+    const spills = (x: MoveTarget) => {
+      const k = this.M.idxOf(x.next, id);
+      return k >= 0 && this.M.startsOf(x.next)[k] + x.next[k].dur > this.M.frame.end;
+    };
+    const free = T.filter((x) => x.kind === 'free');
+    const starts = new Set(free.map((x) => x.start));
+    const before = new Map(free.map((x) => [x.j + 1, x]));
+    const drop = new Set<MoveTarget>();
+    for (const x of T) {
+      if (x.kind !== 'seam') continue;
+      const f = before.get(x.k);
+      if (starts.has(x.start)) drop.add(x);
+      else if (f) drop.add(spills(f) && !spills(x) ? f : x);
+    }
+    return T.filter((x) => !drop.has(x));
+  }
+
+  private targetsFor(id: ItemId): MoveTarget[] {
+    return this.cfg.pastDay || this.cfg.locked ? [] : this.calmTargets(this.M.moveTargets(this.items, id, this.anch()), id);
   }
 
   closable(id: ItemId): boolean {
@@ -1047,7 +1506,7 @@ export class StackController {
         actions: after && holder ? [{ label: this.t('blocks.closeGap'), fn: () => this.closeGap(holder.id) }] : [],
       })
     )
-      // Fokus na slobodno vreme koje je ostalo (traka akcija se zatvara, red je možda spojen sa susedom).
+      // Fokus na slobodno vreme koje je ostalo (list bloka se zatvara, red je možda spojen sa susedom).
       this.focusRow(holder?.id ?? id);
   }
 
@@ -1067,86 +1526,12 @@ export class StackController {
       this.focusRow(focus ?? (next.some((c) => c.id === id) ? id : null));
   }
 
-  splitHalf(id: ItemId) {
-    const c = this.items.find((x) => x.id === id);
-    if (!c || c.kind !== 'block') return;
-    const cuts = this.M.cuts15(c.dur, 2);
-    const r = cuts && this.M.opSplit(this.items, id, cuts);
-    if (!r) {
-      this.shake(id);
-      this.message(this.t('blocks.split.tooShort'));
-      return;
-    }
-    const orig = this.items;
-    this.splitFam = { orig, origId: id, n: 2, ids: r.ids };
-    if (
-      !this.commit(r.list, {
-        trusted: true,
-        select: r.ids[1],
-        target: id,
-        keepFam: true,
-        say: this.t('blocks.msg.split', { n: 2, name: c.title }),
-      })
-    ) {
-      this.splitFam = null;
-      return;
-    }
-    this.closeMsg();
-    r.ids.forEach((p) => this.flash(p));
-    this.reveal(r.ids[1]);
-  }
-
-  resplit(n: number) {
-    const f = this.splitFam;
-    if (!f) return;
-    const c = f.orig.find((x) => x.id === f.origId);
-    const cuts = c && this.M.cuts15(c.dur, n);
-    const top = this.hist.past[this.hist.past.length - 1];
-    if (!c || c.kind !== 'block' || !cuts || top?.snap.items !== f.orig) return;
-    const r = this.M.opSplit(f.orig, f.origId, cuts);
-    if (!r) return;
-    this.splitFam = { ...f, n, ids: r.ids };
-    this.items = r.list;
-    this.hist = { past: this.hist.past, future: [] };
-    this.sel = r.ids[n - 1];
-    this.selByTap = false;
-    this.animateNext = true;
-    this.emit();
-    r.ids.forEach((p) => this.flash(p));
-    this.say(this.t('blocks.msg.split', { n, name: c.title }));
-    this.cfg.onCommit({ items: this.items, kind: 'edit' });
-  }
-
-  customCuts() {
-    const f = this.splitFam;
-    const top = this.hist.past[this.hist.past.length - 1];
-    if (!f || top?.snap.items !== f.orig) {
-      this.splitFam = null;
-      this.emit();
-      return;
-    }
-    this.hist = { past: this.hist.past.slice(0, -1), future: [] };
-    this.items = f.orig;
-    const c = f.orig.find((x) => x.id === f.origId)!;
-    this.sel = f.origId;
-    this.selByTap = false;
-    this.splitFam = null;
-    this.splitSt = { id: f.origId, cuts: this.M.cuts15(c.dur, f.n) ?? [] };
-    this.closeMsg();
-    this.animateNext = true;
-    this.emit();
-    this.fitSplit(f.origId);
-    this.focusCut();
-    this.cfg.onCommit({ items: this.items, kind: 'edit' });
-  }
-
   startSplitEditor(id: ItemId) {
     if (this.cfg.locked) return;
     const c = this.items.find((x) => x.id === id);
     if (!c || c.kind !== 'block' || c.dur < 2 * this.M.MIN) return;
-    this.renaming = false;
     this.moveSt = null;
-    this.splitFam = null;
+    this.review = false;
     this.closeMsg();
     this.splitSt = { id, cuts: this.M.cuts15(c.dur, 2) ?? [] };
     this.emit();
@@ -1154,14 +1539,14 @@ export class StackController {
     this.focusCut();
   }
 
-  /** Visina bloka u uređivaču rezova: clamp(2 × trajanje, 168, 400), na telefonu najviše koliko staje iznad trake. */
+  /** Visina bloka u uređivaču rezova: clamp(1,6 × trajanje, 184, 360), na telefonu najviše koliko staje iznad lista. */
   splitHeight(dur: number): number {
     const h = splitHeightOf(dur);
     return this.splitCap != null ? Math.max(Math.min(h, this.splitCap), Math.min(h, 168)) : h;
   }
 
   /**
-   * Uređivač rezova je otvoren: posle crtanja (traka akcija je tada viša) blok staje ceo između trake i trake akcija —
+   * Uređivač rezova je otvoren: posle crtanja (list bloka je tada viši) blok staje ceo između trake i lista —
    * na telefonu se po potrebi i skrati — i vrh mu je odmah ispod trake. Visina se računa iz ciljne, ne iz izmerene
    * (blok se izdužuje animacijom).
    */
@@ -1206,21 +1591,23 @@ export class StackController {
     const r = this.M.opSplit(this.items, c.id, cuts);
     if (!r) return;
     const n = r.ids.length;
+    // Izabran je prvi deo (sa nazivom), list ostaje otvoren za njega.
     if (
       this.commit(r.list, {
         trusted: true,
-        select: r.ids[n - 1],
+        select: r.ids[0],
         target: c.id,
         msg: this.t('blocks.msg.split', { n, name: msgName(c.title) }),
       })
     ) {
       r.ids.forEach((p) => this.flash(p));
-      this.focusRow(r.ids[n - 1]);
+      this.reveal(r.ids[0]);
+      this.focusRow(r.ids[0]);
     }
   }
 
   startMove(id: ItemId, viaKeys: boolean) {
-    const targets = this.cfg.pastDay || this.cfg.locked ? [] : this.M.moveTargets(this.items, id, this.anch());
+    const targets = this.targetsFor(id);
     if (!targets.length) {
       this.shake(id);
       this.message(this.cfg.locked ? this.lockedMsg() : this.t('blocks.move.none'));
@@ -1229,8 +1616,7 @@ export class StackController {
     const el = this.els.get(id);
     const y0 = el ? el.getBoundingClientRect().top : 0;
     this.splitSt = null;
-    this.renaming = false;
-    this.splitFam = null;
+    this.review = false;
     this.closeMsg();
     this.moveSt = { id, targets };
     this.emit();
@@ -1249,6 +1635,40 @@ export class StackController {
 
   moveTargetEls(): HTMLElement[] {
     return this.stackEl ? [...this.stackEl.querySelectorAll<HTMLElement>('.blk-slot-btn, .blk.is-target .blk-main')] : [];
+  }
+
+  /**
+   * Cilj u režimu "Premesti": natpis ("Pre „Ručak“", "Posle „…“", "U slobodno vreme", početak / kraj dana), opseg bloka
+   * na tom mestu, koliko drugih blokova pomera (zato opseg može biti raniji od susednih kartica) i da li bi blok (ili
+   * neki koji pomera) prešao kraj dana.
+   */
+  targetLabel(x: MoveTarget): { label: string; range: string; pushes: number; over: boolean } {
+    const t = this.t;
+    const id = this.moveSt?.id;
+    const list = this.items;
+    const range = id != null ? this.rangeIn(x.next, id) : '';
+    const pushes = id != null ? this.M.movedBlocks(list, x.next, id).length : 0;
+    const k = id != null ? this.M.idxOf(x.next, id) : -1;
+    const was = new Set(this.overNames(list));
+    const over =
+      (k >= 0 && this.M.startsOf(x.next)[k] + x.next[k].dur > this.M.frame.end) || this.overNames(x.next).some((n) => !was.has(n));
+    if (x.kind === 'free') return { label: t('blocks.intoFree'), range, pushes, over };
+    // Susedi šava, preskačući sam blok koji se premešta.
+    const near = (k: number, dir: 1 | -1) => {
+      while (list[k] && list[k].id === id) k += dir;
+      return list[k];
+    };
+    const after = near(x.k, 1);
+    const before = near(x.k - 1, -1);
+    const label =
+      after?.kind === 'block'
+        ? t('blocks.move.before', { name: msgName(after.title) })
+        : before?.kind === 'block'
+          ? t('blocks.move.after', { name: msgName(before.title) })
+          : x.k <= 0
+            ? t('blocks.move.atStart')
+            : t('blocks.move.atEnd');
+    return { label, range, pushes, over };
   }
 
   cancelMove() {
@@ -1281,55 +1701,34 @@ export class StackController {
     }
   }
 
-  startRename() {
-    if (!this.cur()) return;
-    this.renaming = true;
-    this.closeMsg();
-    this.emit();
-  }
-
-  cancelRename() {
-    this.renaming = false;
-    this.emit();
-    this.focusRow(this.sel);
-  }
-
-  rename(id: ItemId, name: string, cat?: number | null) {
-    const title = name.trim();
-    this.renaming = false;
-    const c = this.items.find((x) => x.id === id);
-    if (!c || c.kind !== 'block' || !title || (title === c.title && (cat === undefined || cat === c.categoryId))) {
-      this.emit();
-      return;
-    }
-    const patch: BlockFields = { title };
-    if (cat !== undefined) patch.categoryId = cat;
-    if (this.cfg.locked) {
-      this.cfg.onPatchFields?.(id, patch);
-      this.emit();
-      return;
-    }
-    this.commit(this.M.opUpdate(this.items, id, patch), { keepFam: true, fieldsOnly: true, trusted: true, msg: this.t('blocks.msg.renamed', { name: msgName(title) }) });
-  }
-
-  /** Akcije u traci za blok `i` (budući / tekući / prošao bez ocene / ocenjen / šablon). */
-  dockActions(list: readonly StackItem[], i: number): { acts: DockAction[]; past: boolean } {
+  /**
+   * Pločice u listu za blok `i` (najviše četiri): budući / šablon / unapred = Podeli · Premesti · Dodaj posle · Obriši;
+   * tekući = Završi sad (ili Dodaj posle) · Podeli · Premesti · Obriši; prošao bez ocene = Podeli · Premesti · Obriši;
+   * ocenjen ili raniji dan = Podeli · Obriši; zaključan raspored = ništa (samo ocena i Detalji).
+   */
+  tiles(list: readonly StackItem[], i: number): { acts: DockAction[]; past: boolean; locked: boolean } {
     const A = this.anch();
     const inf = this.M.info(list, A);
     const c = list[i];
     const past = !!A && inf.st[i] + c.dur <= A.now;
-    const current = !!A && i === inf.cur;
-    if (this.cfg.locked) return { acts: [{ act: 'details', icon: 'more' }], past };
-    const acts: DockAction[] = [{ act: 'split', icon: 'split', disabled: c.dur < 2 * this.M.MIN }];
-    if (!this.cfg.pastDay && this.M.canLift(list, i, A)) acts.push({ act: 'move', icon: 'move' });
-    if (current && this.M.minDurAt(list, i, A) < c.dur) acts.push({ act: 'endnow', icon: 'end-now', cls: 'is-now' });
-    if (!past)
-      acts.push(
-        { act: 'shorter', icon: 'shorter', disabled: c.dur <= this.M.minDurAt(list, i, A) },
-        { act: 'longer', icon: 'longer' },
-      );
-    acts.push({ act: 'delete', icon: 'trash', cls: 'is-danger' }, { act: 'details', icon: 'more' });
-    return { acts, past };
+    if (this.cfg.locked) return { acts: [], past, locked: true };
+    const split: DockAction = { act: 'split', icon: 'split', disabled: c.dur < 2 * this.M.MIN };
+    const move: DockAction | null = !this.cfg.pastDay && this.M.canLift(list, i, A) ? { act: 'move', icon: 'move' } : null;
+    const after: DockAction = { act: 'after', icon: 'add-after' };
+    const del: DockAction = { act: 'delete', icon: 'trash', cls: 'is-danger' };
+    let acts: Array<DockAction | null>;
+    if (A && i === inf.cur)
+      acts = [this.M.minDurAt(list, i, A) < c.dur ? { act: 'endnow', icon: 'end-now', cls: 'is-now' } : after, split, move, del];
+    else if (past) acts = [split, move, del];
+    else acts = [split, move, after, del];
+    return { acts: acts.filter((a): a is DockAction => a != null), past, locked: false };
+  }
+
+  /** Mesto za "Dodaj posle" (i N): u slobodno vreme odmah posle bloka (ništa se ne pomera), inače na šav posle njega. */
+  afterSpec(i: number): InsertSpec {
+    const n = this.items[i + 1];
+    const room = n?.kind === 'free' ? this.M.freeRoom(this.items, i + 1, this.insA()) : null;
+    return n && room != null ? { mode: 'free', freeId: n.id, off: room } : { mode: 'seam', at: i + 1 };
   }
 
   dockAction(act: DockAction['act'], viaKeyboard: boolean) {
@@ -1337,25 +1736,20 @@ export class StackController {
     if (!c) return;
     switch (act) {
       case 'split':
-        this.splitHalf(c.id);
+        this.startSplitEditor(c.id);
         break;
       case 'move':
         this.startMove(c.id, viaKeyboard);
         break;
       case 'endnow':
-        this.endNow(c.id);
+        // Pločica nestaje (na njenom mestu je "Dodaj posle"): fokus tastature ide na nju, ne pada na <body>.
+        if (this.endNow(c.id) && viaKeyboard) this.after(() => this.dockEl?.querySelector<HTMLElement>('.blk-tile')?.focus({ preventScroll: true }));
         break;
-      case 'shorter':
-        this.resizeBy(c.id, -LEN_STEP_MIN);
-        break;
-      case 'longer':
-        this.resizeBy(c.id, LEN_STEP_MIN);
+      case 'after':
+        this.openNew(this.afterSpec(this.M.idxOf(this.items, c.id)), c.id);
         break;
       case 'delete':
         this.del(c.id);
-        break;
-      case 'details':
-        this.openDetails(c.id);
         break;
     }
   }
@@ -1374,6 +1768,9 @@ export class StackController {
     const s = this.splitSt;
     const c = s && this.items.find((x) => x.id === s.id);
     if (!s || !c) return;
+    // Dodir tik uz postojeći rez (isprekidana linija; vuče se samo oznaka vremena desno) nije nov rez 5 min dalje.
+    const r = this.boxOf(c.id)?.getBoundingClientRect();
+    if (r && s.cuts.some((x) => Math.abs(r.top + (x / c.dur) * r.height - clientY) < CUT_TAP_PX)) return;
     const m = this.minuteAt(c, clientY);
     const cuts = this.M.cutAdd(c.dur, s.cuts, m);
     if (!cuts) return;
@@ -1416,7 +1813,56 @@ export class StackController {
       window.clearTimeout(this.pend.timer);
       this.pend = null;
     }
+    this.unlistenTouch();
   }
+
+  // Dodir uz prevlačenje: dok je blok podignut, prst nikad ne skroluje stranicu (i kad cilj dodira više nije u nizu),
+  // a ako browser ipak otkaže pokazivač (pointercancel), prevlačenje dalje vode dodiri na dokumentu.
+
+  private listenTouch() {
+    document.addEventListener('touchmove', this.onDocTouchMove, { passive: false });
+  }
+
+  private unlistenTouch() {
+    document.removeEventListener('touchmove', this.onDocTouchMove);
+    document.removeEventListener('touchend', this.onDocTouchEnd);
+    document.removeEventListener('touchcancel', this.onDocTouchCancel);
+    this.docTouch = false;
+  }
+
+  /** touchstart na nizu (stiže posle pointerdown-a): prst koji drži blok. */
+  onTouchStart = (e: TouchEvent) => {
+    if (this.pend && this.pend.type !== 'mouse' && this.touchId == null) this.touchId = e.changedTouches[0]?.identifier ?? null;
+  };
+
+  private ourTouch(l: TouchList): Touch | null {
+    for (let k = 0; k < l.length; k++) if (this.touchId == null || l[k].identifier === this.touchId) return l[k];
+    return null;
+  }
+
+  private onDocTouchMove = (e: TouchEvent) => {
+    if (!this.drag && !this.pend?.armed) return;
+    if (e.cancelable) e.preventDefault();
+    const t = this.docTouch && this.drag ? this.ourTouch(e.changedTouches) : null;
+    if (!t) return;
+    this.lastY = t.clientY;
+    markBlockGesture();
+    this.dragMove(t.clientY);
+  };
+
+  private onDocTouchEnd = (e: TouchEvent) => {
+    if (!this.ourTouch(e.changedTouches)) return;
+    window.setTimeout(() => (this.suppressClick = false), 350);
+    this.dropDrag();
+    this.clearPend();
+  };
+
+  private onDocTouchCancel = (e: TouchEvent) => {
+    if (!this.ourTouch(e.changedTouches)) return;
+    window.setTimeout(() => (this.suppressClick = false), 350);
+    this.cancelDrag();
+    this.clearPend();
+  };
 
   /** Dok je blok podignut (ili se menja trajanje / pomera rez) stranica se ne skroluje prstom. */
   blocksTouchScroll(): boolean {
@@ -1440,13 +1886,29 @@ export class StackController {
       this.startCutDrag(e, Number(cut.dataset.cut));
       return;
     }
-    // Dugmad (ocena, "+", ×, zatvori prazninu): samo klik — ni držanje ni prevlačenje.
-    if (tg.closest('.day-status, .blk-ins, .cut-x, .blk-gap')) return;
+    // Krug ocene: dodir = Urađeno (odlučuje klik, vidi onStackClick), držanje = izbor ocene; nikad prevlačenje.
+    if (tg.closest('.blk-check')) {
+      this.clearChk();
+      const k: CheckPress = { id, pointerId: e.pointerId, x0: e.clientX, y0: e.clientY, sy0: window.scrollY, sy1: NaN, moved: false, fired: false, timer: 0 };
+      k.timer = window.setTimeout(() => {
+        if (this.chk !== k || k.moved) return;
+        k.fired = true;
+        this.suppressClick = true;
+        markBlockGesture();
+        this.openRatePop(k.id);
+      }, LONG_PRESS_MS);
+      this.chk = k;
+      this.listenMoves();
+      return;
+    }
+    // Ostala dugmad (× reza, mesto za "Premesti"): samo klik — ni držanje ni prevlačenje.
+    if (tg.closest('.cut-x, .blk-slot-btn')) return;
     if (this.splitSt || this.moveSt || !tg.closest('.blk-box')) return;
     const i = this.M.idxOf(this.items, id);
     if (i < 0) return;
     const lift = !this.cfg.pastDay && !this.cfg.locked && this.M.canLift(this.items, i, this.anch());
     this.pend = { id, pointerId: e.pointerId, type: e.pointerType, x0: e.clientX, y0: e.clientY, lift, armed: false, timer: 0 };
+    this.touchId = null;
     this.lastY = e.clientY;
     if (e.pointerType !== 'mouse') this.pend.timer = window.setTimeout(this.onHold, LONG_PRESS_MS);
     this.listenMoves();
@@ -1476,6 +1938,11 @@ export class StackController {
   };
 
   private onMove = (e: PointerEvent) => {
+    const k = this.chk;
+    if (k && e.pointerId === k.pointerId && !k.moved && Math.hypot(e.clientX - k.x0, e.clientY - k.y0) > TOUCH_SLOP) {
+      k.moved = true;
+      window.clearTimeout(k.timer);
+    }
     if (this.pend && e.pointerId !== this.pend.pointerId) return;
     this.lastY = e.clientY;
     if (this.drag) {
@@ -1509,6 +1976,11 @@ export class StackController {
 
   private onUp = () => {
     if (this.suppressClick) window.setTimeout(() => (this.suppressClick = false), 350);
+    // Krug ocene: zapis ostaje za klik koji sledi (skrol između pritiska i puštanja = nije dodir).
+    if (this.chk) {
+      window.clearTimeout(this.chk.timer);
+      this.chk.sy1 = window.scrollY;
+    }
     if (this.drag) this.dropDrag();
     else if (this.rs) this.endResize(false);
     else if (this.cutDrag) this.endCutDrag();
@@ -1516,8 +1988,17 @@ export class StackController {
     this.unlistenMoves();
   };
 
-  private onCancel = () => {
+  private onCancel = (e: PointerEvent) => {
+    // Browser je preuzeo dodir usred prevlačenja: blok ostaje podignut, dalje ga vode dodiri na dokumentu.
+    if (this.drag && this.pend && this.pend.type !== 'mouse' && e.pointerId === this.pend.pointerId && !this.docTouch) {
+      this.docTouch = true;
+      this.unlistenMoves();
+      document.addEventListener('touchend', this.onDocTouchEnd);
+      document.addEventListener('touchcancel', this.onDocTouchCancel);
+      return;
+    }
     if (this.suppressClick) window.setTimeout(() => (this.suppressClick = false), 350);
+    this.clearChk();
     if (this.drag) this.cancelDrag();
     else if (this.rs) this.endResize(true);
     else if (this.cutDrag) this.endCutDrag();
@@ -1553,6 +2034,16 @@ export class StackController {
       // pokazivač je već pušten
     }
     const started = !!A && from < inf.ff;
+    // Blok koji nije počeo ostavlja na svom mestu samo čip (red se skupi na CH): redovi ispod se podignu za H − CH —
+    // računa se odmah, ne meri (skupljanje traje 140 ms).
+    if (!started) {
+      const r = rects[from];
+      rects[from] = { top: r.top, h: CH, mid: r.top + CH / 2, bottom: r.top + CH };
+      for (let j = from + 1; j < rects.length; j++) {
+        const q = rects[j];
+        rects[j] = { top: q.top - (H - CH), h: q.h, mid: q.mid - (H - CH), bottom: q.bottom - (H - CH) };
+      }
+    }
     this.drag = {
       id,
       from,
@@ -1566,7 +2057,8 @@ export class StackController {
       CH,
       grab: clamp(clientY - br.top, 16, CH - 16),
       top0: br.top + window.scrollY,
-      shift: H + ROW_GAP,
+      // HOLE (čip + razmak = 70 px); blok niži od čipa otvara rupu svoje visine.
+      shift: HOLE - (CHIP_H - CH),
       mode: 'none',
       to: from,
       k: from,
@@ -1577,6 +2069,8 @@ export class StackController {
       hyp: null,
       extra: null,
       slot: null,
+      slotUnder: false,
+      push: false,
       hole: started,
     };
     this.suppressClick = true;
@@ -1584,6 +2078,7 @@ export class StackController {
     this.sel = null;
     this.closeMsg();
     this.emit();
+    this.listenTouch();
     vibrate(8);
     this.say(this.t('blocks.msg.lifted', { name: this.nameOf(c) }));
     this.dragMove(clientY);
@@ -1601,8 +2096,18 @@ export class StackController {
     return (this.bsEl?.getBoundingClientRect().top ?? 0) + window.scrollY;
   }
 
-  private setSlot(d: DragState, topDoc: number, h: number, push = false) {
-    d.slot = { top: topDoc - this.bsTop(), h: Math.max(18, h), push };
+  /** Mesto pada (isprekidano, sa opsegom na koji blok pada), u koordinatama odeljka niza. */
+  private setSlot(d: DragState, topDoc: number, h: number) {
+    d.slot = { top: topDoc - this.bsTop(), h: Math.max(18, h) };
+    this.slotCover(d, d.top0 + (parseFloat(d.el.style.getPropertyValue('--dy')) || 0));
+  }
+
+  /** Da li čip (vrh `boxTop` u koordinatama dokumenta) pokriva mesto pada; crta se ponovo samo kad se to promeni. */
+  private slotCover(d: DragState, boxTop: number) {
+    const under = !!d.slot && Math.abs(d.slot.top + this.bsTop() - boxTop) < d.CH / 2;
+    if (under === d.slotUnder) return;
+    d.slotUnder = under;
+    this.emit();
   }
 
   private paintNone(d: DragState) {
@@ -1611,6 +2116,7 @@ export class StackController {
     d.hyp = null;
     d.extra = null;
     d.slot = null;
+    d.push = false;
     d.hole = d.started;
     this.emit();
   }
@@ -1624,6 +2130,7 @@ export class StackController {
     const fy = clientY + window.scrollY;
     const boxTop = fy - d.grab;
     d.el.style.setProperty('--dy', `${boxTop - d.top0}px`);
+    this.slotCover(d, boxTop);
     // 1) Iznad slobodnog vremena: blok ide u njega od vremena pod gornjom ivicom; ništa drugo se ne pomera.
     let fi = -1;
     if (d.c.kind === 'block') {
@@ -1644,28 +2151,28 @@ export class StackController {
       });
     }
     if (fi >= 0) {
+      // Red slobodnog vremena je stalne visine: blok ide na početak praznine (ili od "sada"); red se sam istakne.
       const f = list[fi];
-      const r = d.rects[fi];
       const room = this.M.freeRoom(list, fi, A) ?? 0;
-      const raw = ((boxTop - r.top) / r.h) * f.dur;
-      const off = clamp(Math.round(raw / this.M.SNAP) * this.M.SNAP, room, Math.max(room, f.dur - d.c.dur));
-      const key = `f${f.id}:${off}`;
+      const key = `f${f.id}`;
       if (d.key !== key) {
         if (d.mode !== 'free') d.enterShift = this.shiftOf(d, fi);
         d.mode = 'free';
         d.key = key;
         d.target = f.id;
-        d.off = off;
+        d.off = room;
         d.hole = true;
-        const hyp = this.M.opPlace(list, d.id, f.id, off, A);
+        const hyp = this.M.opPlace(list, d.id, f.id, room, A);
         if (!hyp || !this.M.pastOk(list, hyp, A)) {
           this.paintNone(d);
           return;
         }
         d.hyp = hyp;
-        d.extra = this.t('blocks.intoFreeShort');
-        const top = r.top + (off / f.dur) * r.h;
-        this.setSlot(d, top, Math.min(r.bottom - top, (d.c.dur / f.dur) * r.h), d.c.dur > f.dur - off);
+        d.slot = null;
+        d.push = d.c.dur > f.dur - room;
+        const pushes = this.M.movedBlocks(list, hyp, d.id).length;
+        // Posledica prva: na uskom čipu se skraćuje "u slobodno vreme" (to kaže i istaknut red), ne "pomera 1 blok".
+        d.extra = (pushes ? this.t('blocks.move.pushes', { n: pushes }) + ' · ' : '') + this.t('blocks.intoFreeShort');
         this.emit();
       }
       return;
@@ -1673,6 +2180,7 @@ export class StackController {
     if (d.mode === 'free') {
       d.mode = 'none';
       d.key = '';
+      d.push = false;
       d.hole = d.started;
     }
     // 2) Između blokova: mesto određuje prst (ne veličina bloka).
@@ -1699,7 +2207,7 @@ export class StackController {
       d.key = key;
       d.hyp = hyp;
       d.extra = null;
-      this.setSlot(d, k < n ? d.rects[k].top : d.rects[n - 1].bottom + ROW_GAP, d.H);
+      this.setSlot(d, k < n ? d.rects[k].top : d.rects[n - 1].bottom + ROW_GAP, d.CH);
       this.emit();
       return;
     }
@@ -1722,7 +2230,7 @@ export class StackController {
     const hyp = to === d.from ? list : this.M.opMoveTo(list, d.id, to > d.from ? to + 1 : to, A);
     d.hyp = hyp ?? list;
     d.extra = null;
-    this.setSlot(d, to > d.from ? d.rects[to].bottom - d.H : d.rects[to].top, d.H);
+    this.setSlot(d, to > d.from ? d.rects[to].bottom - d.CH : d.rects[to].top, d.CH);
     this.emit();
   }
 
@@ -1760,7 +2268,7 @@ export class StackController {
   };
 
   /**
-   * Ručica uz miš (dodir nema automatski skrol): tek kad je pokazivač iza ivice vidljivog dela (preko trake akcija ili
+   * Ručica uz miš (dodir nema automatski skrol): tek kad je pokazivač iza ivice vidljivog dela (preko lista bloka ili
    * iznad trake), jedan korak mreže na RS_AUTO_MS, bez obzira na dubinu, i najviše ±2h po potezu.
    */
   private resizeAutoScroll() {
@@ -1796,6 +2304,7 @@ export class StackController {
     cancelAnimationFrame(this.raf);
     this.asIndEl?.classList.remove('is-on');
     d.el.style.removeProperty('--dy');
+    this.unlistenTouch();
   }
 
   private dropDrag() {
@@ -1859,7 +2368,6 @@ export class StackController {
     if (this.sel !== id) {
       this.sel = id;
       this.splitSt = null;
-      this.renaming = false;
       this.moveSt = null;
     }
     const box = this.boxOf(id);
@@ -1888,7 +2396,7 @@ export class StackController {
     this.listenMoves();
     this.emit();
     cancelAnimationFrame(this.raf);
-    // Dodir: trajanje prati samo prst (opseg je u traci i na oznaci kraja); dalje od ekrana = Duže ili prevlačenje.
+    // Dodir: trajanje prati samo prst (vreme je u listu i na oznaci uz ivicu); dalje od ekrana = Kraj + ili prevlačenje.
     // Gornja ručica nema automatski skrol (donja ivica bloka stoji, skrol je drži na mestu).
     if (e.pointerType === 'mouse' && edge === 'end') this.raf = requestAnimationFrame(this.autoScroll);
   }
@@ -1957,9 +2465,16 @@ export class StackController {
     }
     const r = box.getBoundingClientRect();
     const top = rs.edge === 'start';
+    // Vreme ivice koja se vuče i pomak od početka poteza ("+30m" / "−15m"; početak ranije = minus).
+    const dm = top ? rs.d0 - rs.cur : rs.cur - rs.d0;
     pill.hidden = false;
-    pill.textContent = fmtClock(top ? rs.st + rs.d0 - rs.cur : rs.st + rs.cur);
-    pill.style.top = `${(top ? r.top : r.bottom) + window.scrollY - this.bsTop()}px`;
+    const te = pill.querySelector('.t');
+    const de = pill.querySelector('.d');
+    if (te) te.textContent = fmtClock(top ? rs.st + rs.d0 - rs.cur : rs.st + rs.cur);
+    if (de) de.textContent = dm ? `${dm > 0 ? '+' : '−'}${fmtDuration(Math.abs(dm))}` : '';
+    // Nikad preko zalepljene trake (ivica tik ispod nje).
+    const y = Math.max((top ? r.top : r.bottom) - 13, (this.barEl?.getBoundingClientRect().bottom ?? -Infinity) + 4);
+    pill.style.top = `${y + window.scrollY - this.bsTop()}px`;
   }
 
   private endResize(cancel: boolean) {
@@ -1973,15 +2488,8 @@ export class StackController {
       this.emit();
       return;
     }
-    const c = r.base.find((x) => x.id === r.id);
-    if (
-      this.commit(next, {
-        target: r.id,
-        msg: this.t('blocks.msg.resized', { name: c ? this.nameOf(c) : '', range: this.rangeIn(next, r.id) }) + ' · ' + fmtDuration(r.cur),
-      }) &&
-      r.edge === 'start'
-    )
-      this.keepBottom(r.id, r.b0);
+    // Tiho (vreme se videlo na oznaci uz ivicu, Poništi je u traci): ništa ne iskače preko kartice.
+    if (this.commit(next, { target: r.id, say: this.edgeSay(r.edge, next, r.id) }) && r.edge === 'start') this.keepBottom(r.id, r.b0);
   }
 
   // --- Rezovi ---
@@ -2038,18 +2546,18 @@ export class StackController {
     const i = id == null ? -1 : this.M.idxOf(list, id);
     const c = list[i];
     if (id == null || !c) return;
-    const sb = tg.closest<HTMLElement>('.day-status-btn');
-    if (sb) {
-      this.setStatus(id, sb.dataset.status as Exclude<BlockStatus, 'pending'>);
-      return;
-    }
-    const ins = tg.closest<HTMLElement>('.blk-ins');
-    if (ins) {
-      this.openNew({ mode: 'seam', at: ins.classList.contains('is-top') ? i : i + 1 });
-      return;
-    }
-    if (tg.closest('.blk-gap')) {
-      this.closeGap(id);
+    if (tg.closest('.blk-check')) {
+      const k = this.chk;
+      this.chk = null;
+      if (c.kind !== 'block') return;
+      // Tastatura se uvek računa; dodir samo ako je pušten pre držanja, bez pomeranja prsta i bez skrola stranice.
+      const clean = e.detail === 0 || (!!k && k.id === id && !k.fired && !k.moved && k.sy1 === k.sy0);
+      if (!clean) return;
+      // Isti dodir je upravo zatvorio izbor ocene (uz ovaj ili drugi krug): samo zatvara, ništa ne ocenjuje.
+      const pc = this.popClosed;
+      if (e.detail !== 0 && pc && performance.now() - pc.at < 500) return;
+      if (c.status === 'pending') this.rate(id, 'done', 'check');
+      else this.openRatePop(id);
       return;
     }
     const cx = tg.closest<HTMLElement>('.cut-x');
@@ -2077,35 +2585,24 @@ export class StackController {
     if (!tg.closest('.blk-main')) return;
     if (c.kind === 'free') {
       if (this.sel != null) {
-        // prvi dodir samo zatvara traku akcija
+        // prvi dodir samo zatvara list bloka
         this.deselect();
         return;
       }
+      // Uvek od početka praznine (ili od "sada"): red je stalne visine, pa mesto dodira ne znači vreme.
       const room = this.M.freeRoom(list, i, this.insA());
       if (room == null) return;
-      // Od početka praznine (natpis "+ Slobodno" je po sredini reda, a visina reda nije srazmerna trajanju). Samo u
-      // praznini dužoj od 2h dodir ispod natpisa bira vreme pod prstom (srazmerni deo visine, bez 19 px gore i dole).
-      let off = room;
-      if (e.detail !== 0 && c.dur > 120) {
-        const r = (row.querySelector('.blk-box') as HTMLElement).getBoundingClientRect();
-        const label = row.querySelector('.blk-text')?.getBoundingClientRect();
-        if (label && e.clientY > label.bottom) {
-          const m = ((e.clientY - r.top - 19) / Math.max(1, r.height - 38)) * c.dur;
-          off = Math.floor(m / this.M.SNAP) * this.M.SNAP;
-        }
-      }
-      this.openNew({ mode: 'free', freeId: id, off: clamp(off, room, Math.max(room, c.dur - this.M.MIN)) });
+      // Drugi dodir dvostrukog dodira bi pao na list "Novi blok" (pozadina ga zatvara).
+      guardTap(e);
+      this.openNew({ mode: 'free', freeId: id, off: room });
       return;
     }
     if (this.sel === id) {
-      if (this.selByTap && performance.now() - this.selAt > 300) this.openDetails(id);
-      else {
-        this.selByTap = true;
-        this.selAt = performance.now();
-      }
+      // Ponovni dodir izabranog bloka ne radi ništa (Detalji su u traci); Enter na izabranom redu otvara Detalje.
+      if (e.detail === 0) this.openDetails(id);
       return;
     }
-    this.select(id, { byTap: true });
+    this.select(id);
   };
 
   /** Dodir van blokova i trake zatvara izbor (skrol nije klik). */
@@ -2113,7 +2610,7 @@ export class StackController {
     if (this.sel == null && !this.splitSt && !this.moveSt) return;
     const tg = e.target as HTMLElement | null;
     if (!tg || !tg.isConnected) return;
-    if (tg.closest('.blk-stack, .blk-dock, dialog, .blk-toaster, .blk-bar, .day-menu, .day-menu-wrap, .shell-tabbar, .shell-side'))
+    if (tg.closest('.blk-stack, .blk-dock, .blk-pop, .blk-inspector-slot, dialog, .blk-toaster, .blk-bar, .day-menu, .day-menu-wrap, .shell-tabbar, .shell-side'))
       return;
     this.deselect();
   };
@@ -2145,13 +2642,22 @@ export class StackController {
       const id = this.idOfRow(grip.closest('.blk'));
       const d = e.key === 'ArrowUp' ? -this.M.SNAP : this.M.SNAP;
       if (id != null) {
-        if (grip.classList.contains('is-start')) this.resizeStartBy(id, d);
-        else this.resizeBy(id, d);
+        if (grip.classList.contains('is-start')) this.resizeStartBy(id, d, { quiet: true });
+        else this.resizeBy(id, d, { quiet: true });
       }
       return;
     }
     const vert = e.key === 'ArrowUp' || e.key === 'ArrowDown';
     const dir: -1 | 1 = e.key === 'ArrowUp' ? -1 : 1;
+    if (this.moveSt && vert && e.altKey) {
+      // "Premesti": Alt+↑↓ pomera blok koji se premešta (režim ostaje), Alt+Shift+↑↓ ceo blok kroz slobodno vreme.
+      e.preventDefault();
+      const id = this.moveSt.id;
+      if (e.shiftKey) this.nudge(id, dir, { quiet: true, stay: true });
+      else this.moveBy(id, dir);
+      this.focusRow(id);
+      return;
+    }
     if (this.moveSt && vert && !e.altKey && !e.shiftKey) {
       // "Premesti": strelice idu samo po mestima
       e.preventDefault();
@@ -2177,7 +2683,7 @@ export class StackController {
     if (vert && e.altKey && e.shiftKey) {
       e.preventDefault();
       ensureSel();
-      this.nudge(id, dir);
+      this.nudge(id, dir, { quiet: true });
       refocus();
     } else if (vert && e.altKey) {
       e.preventDefault();
@@ -2200,12 +2706,15 @@ export class StackController {
     } else if (e.key === 'F2' && c.kind === 'block') {
       e.preventDefault();
       ensureSel();
-      this.startRename();
+      this.openDetails(id, { focusName: true });
     } else if ((e.key === 's' || e.key === 'S') && c.kind === 'block' && plain) {
+      // Deljenje na 2 dela; fokus na rez (strelice ga pomeraju, Enter deli, Esc odustaje).
       e.preventDefault();
       ensureSel();
-      this.splitHalf(id);
-      this.focusRow(this.sel);
+      if (!this.cfg.locked && c.dur < 2 * this.M.MIN) {
+        this.shake(id);
+        this.message(this.t('blocks.split.tooShort'));
+      } else this.startSplitEditor(id);
     } else if ((e.key === 'm' || e.key === 'M') && plain) {
       e.preventDefault();
       ensureSel();
@@ -2215,16 +2724,16 @@ export class StackController {
       if (c.kind === 'free') {
         const room = this.M.freeRoom(this.items, i, this.insA());
         if (room != null) this.openNew({ mode: 'free', freeId: id, off: room });
-      } else if (!A || i + 1 >= inf.ff) this.openNew({ mode: 'seam', at: i + 1 });
+      } else if (!A || i + 1 >= inf.ff) this.openNew(this.afterSpec(i));
     } else if (['1', '2', '3'].includes(e.key) && plain && c.kind === 'block' && A && inf.st[i] <= A.now) {
       e.preventDefault();
-      this.setStatus(id, (['done', 'partial', 'skipped'] as const)[Number(e.key) - 1]);
+      this.rate(id, (['done', 'partial', 'skipped'] as const)[Number(e.key) - 1], 'key');
     }
   };
 
   onDocKey = (e: KeyboardEvent) => {
     const tg = e.target as HTMLElement | null;
-    // Polja za unos: prečice niza ne rade; Esc samo u poljima niza i trake akcija (ne u Beleškama ili Zadacima).
+    // Polja za unos: prečice niza ne rade; Esc samo u poljima niza i lista bloka (ne u Beleškama ili Zadacima).
     const field = tg?.closest?.('input, textarea, select, [contenteditable]');
     if (field && (e.key !== 'Escape' || !field.closest('.blk-dock, .blk-stack'))) return;
     if (document.querySelector('dialog[open]')) return;
@@ -2243,6 +2752,11 @@ export class StackController {
     }
     if (e.key === 'Escape') {
       if (document.querySelector('[role="menu"]')) return;
+      if (this.ratePop != null) {
+        e.preventDefault();
+        this.closeRatePop(true);
+        return;
+      }
       if (this.drag) {
         this.cancelDrag();
         this.clearPend();
@@ -2259,11 +2773,6 @@ export class StackController {
         this.splitSt = null;
         this.emit();
         this.focusRow(this.sel);
-        return;
-      }
-      if (this.renaming) {
-        e.preventDefault();
-        this.cancelRename();
         return;
       }
       if (this.sel != null) {
@@ -2290,7 +2799,7 @@ export class StackController {
     return this.M.defaultInsertSpec(this.items, A);
   }
 
-  openNew(spec?: InsertSpec) {
+  openNew(spec?: InsertSpec, from: ItemId | null = null) {
     if (this.drag || this.rs) return;
     if (this.cfg.locked) {
       this.message(this.lockedMsg());
@@ -2314,6 +2823,7 @@ export class StackController {
       effect: '',
       effectCls: '',
       canCloseGap: prep.spec.mode === 'free' && this.closable(prep.spec.freeId),
+      from,
     };
     this.updateNewPreview();
   }
@@ -2425,6 +2935,48 @@ export class StackController {
     this.updateNewPreview();
   }
 
+  /**
+   * "Počinje u" (samo u slobodnom vremenu): početak novog bloka i dozvoljen opseg — od početka praznine (danas od
+   * "sada") do 5 min pre njenog kraja. Trajanje ostaje; duži blok gura ono posle praznine.
+   */
+  nbStartInfo(): { start: number; min: number; max: number } | null {
+    const nb = this.nb;
+    if (!nb || nb.spec.mode !== 'free') return null;
+    const j = this.M.idxOf(this.items, nb.spec.freeId);
+    const f = this.items[j];
+    const room = j < 0 ? null : this.M.freeRoom(this.items, j, this.insA());
+    if (!f || room == null) return null;
+    const st = this.M.startsOf(this.items)[j];
+    return { start: st + nb.spec.off, min: st + room, max: st + Math.max(room, f.dur - this.M.MIN) };
+  }
+
+  /** Početak novog bloka −/+ `d` na mrežu. false = granica (držanje dugmeta staje). */
+  nbStepStart(d: number): boolean {
+    const r = this.nbStartInfo();
+    if (!r) return false;
+    const SNAP = this.M.SNAP;
+    const raw = r.start + d;
+    return this.nbStartAt(d < 0 ? Math.ceil(raw / SNAP) * SNAP : Math.floor(raw / SNAP) * SNAP);
+  }
+
+  /** Upisan početak novog bloka ("HH:MM"). */
+  nbSetStart(hhmm: string): boolean {
+    const m = this.typedMin(hhmm);
+    return m != null && this.nbStartAt(m);
+  }
+
+  private nbStartAt(m: number): boolean {
+    const nb = this.nb;
+    const r = this.nbStartInfo();
+    if (!nb || !r || nb.spec.mode !== 'free') return false;
+    const start = clamp(m, r.min, r.max);
+    if (start === r.start) return false;
+    nb.spec = { ...nb.spec, off: nb.spec.off + start - r.start };
+    this.updateNewPreview();
+    this.say(`${this.t('blocks.new.start')} ${fmtClock(start)}`);
+    return true;
+  }
+
   nbSetFree(on: boolean) {
     const nb = this.nb;
     if (!nb) return;
@@ -2452,7 +3004,18 @@ export class StackController {
       this.insertNew(item, spec);
       return true;
     }
+    // Otkaži posle "Dodaj posle": nazad u list bloka, fokus na tu pločicu (ne na <body>).
+    const back = result === 'cancel' && nb.from != null && this.items.some((c) => c.id === nb.from && c.kind === 'block') ? nb.from : null;
+    if (back != null) this.sel = back;
     this.emit();
+    if (back != null) {
+      this.reveal(back);
+      this.after(() => {
+        const tile = this.dockEl?.isConnected ? this.dockEl.querySelector<HTMLElement>('.blk-tile[data-act="after"]') : null;
+        if (tile) tile.focus({ preventScroll: true });
+        else this.focusRow(back);
+      });
+    }
     if (result === 'gap' && nb.spec.mode === 'free') this.closeGap(nb.spec.freeId);
     return true;
   }
@@ -2484,7 +3047,7 @@ export class StackController {
     ) {
       this.flash(item.id);
       this.reveal(item.id);
-      // Fokus na nov blok (traka akcija pokazuje njega): sledeća prečica menja njega, ne blok sa kog je list otvoren.
+      // Fokus na nov blok (list bloka pokazuje njega): sledeća prečica menja njega, ne blok sa kog je list otvoren.
       // Slobodno vreme se može spojiti sa susednim — fokus na red koji ga sada sadrži.
       const holder = this.items.some((c) => c.id === item.id) ? item.id : at != null ? (this.itemAt(at)?.id ?? null) : null;
       this.focusRow(holder);
@@ -2493,10 +3056,13 @@ export class StackController {
 
   // ======================= Detalji =======================
 
-  openDetails(id: ItemId) {
+  /** Detalji bloka ("Detalji ›" u listu, Enter na izabranom redu; F2 = naziv odmah izabran). */
+  openDetails(id: ItemId, o: { focusName?: boolean } = {}) {
     const c = this.items.find((x) => x.id === id);
     if (!c || c.kind !== 'block') return;
     this.detId = id;
+    this.detFocusName = !!o.focusName;
+    this.ratePop = null;
     this.emit();
   }
 
@@ -2530,7 +3096,6 @@ export class StackController {
     const fixed: BlockFields = { ...patch };
     if (patch.status && !isActive(patch.status)) fixed.actualMin = null;
     this.commit(this.M.opUpdate(this.items, id, fixed), {
-      keepFam: true,
       fieldsOnly: true,
       trusted: true,
       msg: this.t('blocks.msg.saved', { name: msgName(patch.title ?? c.title) }),

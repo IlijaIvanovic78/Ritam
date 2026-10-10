@@ -1,15 +1,17 @@
 // List "Novi blok": naziv prvo (fokus odmah), predlozi samo od korisnikovih naziva (dan + šabloni, po
-// učestalosti; izabran predlog donosi i kategoriju), "Slobodno vreme", kategorija, trajanje. U nizu se uživo
-// vidi isprekidan blok na mestu gde će stati i blokovi koje pomera; red ispod naslova kaže šta se pomera.
+// učestalosti; izabran predlog donosi i kategoriju), "Slobodno vreme", kategorija, trajanje i — u slobodnom vremenu —
+// "Počinje u" (koraci od 5 min, vreme se dodirne da se upiše). U nizu se uživo vidi isprekidan blok na mestu gde će
+// stati i blokovi koje pomera; red ispod naslova kaže gde, sledeći šta se pomera.
 
 import { useEffect, useLayoutEffect, useRef } from 'react';
 import type { Category } from '../../../../shared/types.ts';
-import { fmtDuration } from '../../../../shared/time.ts';
+import { fmtClock, fmtDuration } from '../../../../shared/time.ts';
 import { useT } from '../../i18n/index.ts';
 import { createInlineCategory } from '../../lib/categories.ts';
 import { Button, CategoryDot, CategoryPicker, Sheet, cx } from '../../ui/index.ts';
 import type { StackController } from './controller.ts';
-import { fold } from './geometry.ts';
+import { fold, guardTap } from './geometry.ts';
+import { Stepper, TimeValue } from './Stepper.tsx';
 
 const DURS = [15, 30, 45, 60, 90, 120, 180];
 
@@ -58,6 +60,8 @@ export function NewBlockSheet({ ctl, categories }: { ctl: StackController; categ
   // Kategorija koju naziv donosi a koja je u međuvremenu obrisana: prikaži je kao izabranu.
   const own = nb.cat != null && !categories.some((c) => c.id === nb.cat) ? ctl.cfg.catMap.get(nb.cat) : undefined;
   const pickerCats = own ? [...categories, own] : categories;
+  const start = ctl.nbStartInfo();
+  const SNAP = ctl.M.SNAP;
 
   const add = () => {
     ctl.closeNew('ok');
@@ -70,17 +74,37 @@ export function NewBlockSheet({ ctl, categories }: { ctl: StackController; categ
       onClose={() => ctl.closeNew('cancel')}
       title={t('day.block.newTitle')}
       footer={
+        // List se zatvara: drugi brzi dodir bi pao na ono ispod njega (donja traka, blok) — guardTap ga proguta.
         <>
           {nb.canCloseGap && (
-            <Button variant="ghost" className="blk-nb-gap" onClick={() => ctl.closeNew('gap')}>
+            <Button
+              variant="ghost"
+              className="blk-nb-gap"
+              onClick={(e) => {
+                guardTap(e);
+                ctl.closeNew('gap');
+              }}
+            >
               {t('blocks.closeGap')}
             </Button>
           )}
           <span className="blk-sheet-spacer" />
-          <Button variant="ghost" onClick={() => ctl.closeNew('cancel')}>
+          <Button
+            variant="ghost"
+            onClick={(e) => {
+              guardTap(e);
+              ctl.closeNew('cancel');
+            }}
+          >
             {t('common.cancel')}
           </Button>
-          <Button variant="primary" onClick={add}>
+          <Button
+            variant="primary"
+            onClick={(e) => {
+              guardTap(e);
+              add();
+            }}
+          >
             {t('common.add')}
           </Button>
         </>
@@ -122,9 +146,11 @@ export function NewBlockSheet({ ctl, categories }: { ctl: StackController; categ
           </label>
         )}
         {(names.length > 0 || offerFree) && (
+          <div className="field">
+            {names.length > 0 && <span className="field-label">{t('blocks.yourNames')}</span>}
           <div className="chips blk-nb-sugs" role="group" aria-label={t('blocks.yourNames')}>
             {names.map((s) => (
-              <button key={s.name} type="button" className="chip" onClick={() => ctl.nbPick(s.name, s.cat)}>
+              <button key={s.name} type="button" className="chip" title={s.name} onClick={() => ctl.nbPick(s.name, s.cat)}>
                 <CategoryDot color={ctl.catColor(s.cat)} />
                 <span>{s.name}</span>
               </button>
@@ -140,11 +166,31 @@ export function NewBlockSheet({ ctl, categories }: { ctl: StackController; categ
               </button>
             )}
           </div>
+          </div>
         )}
         {!nb.free && (
           <div className="field blk-nb-cats">
             <span className="field-label">{t('day.block.category')}</span>
             <CategoryPicker categories={pickerCats} value={nb.cat} onChange={(id) => ctl.nbSetCat(id)} onCreate={createInlineCategory} />
+          </div>
+        )}
+        {start && (
+          <div className="field blk-nb-start">
+            <span className="field-label">{t('blocks.new.start')}</span>
+            <Stepper
+              minus={() => ctl.nbStepStart(-SNAP)}
+              plus={() => ctl.nbStepStart(SNAP)}
+              canMinus={start.start > start.min}
+              canPlus={start.start < start.max}
+              minusLabel={t('blocks.time.startEarlier')}
+              plusLabel={t('blocks.time.startLater')}
+            >
+              <TimeValue
+                minute={start.start}
+                label={t('blocks.time.type', { edge: t('blocks.new.start'), time: fmtClock(start.start) })}
+                onSet={(v) => void ctl.nbSetStart(v)}
+              />
+            </Stepper>
           </div>
         )}
         <div className="field">

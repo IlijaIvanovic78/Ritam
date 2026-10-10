@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { DayPayload, Template } from '../../../shared/types.ts';
-import { DAY_MIN, addDays, isoWeekday, weekdayNameAcc } from '../../../shared/time.ts';
+import { DAY_MIN, addDays, capitalize, fmtDateMedium, isoWeekday, weekdayNameAcc } from '../../../shared/time.ts';
 import { summarizeBlocks } from '../../../shared/summary.ts';
 import { t as tNow, useLang, useT } from '../i18n/index.ts';
 import { useIsDesktop, useLogicalNow } from '../lib/hooks.ts';
@@ -98,6 +98,8 @@ export default function DayPage({ date: routeDate }: { date: string | null }) {
   // dana i dalje popuni. Ako raspored na ovom uređaju kasni, a server u pregledu vrati blokove
   // (šablon dodeljen na drugom uređaju), dan se ipak pravi.
   const [previewPlanned, setPreviewPlanned] = useState<string | null>(null);
+  // Mesto za list izabranog bloka u desnoj koloni (desktop ≥ 1000 px; BlockStack ga tamo prikazuje).
+  const [inspectorEl, setInspectorEl] = useState<HTMLDivElement | null>(null);
   const planned = weekdays[isoWeekday(date)] != null || previewPlanned === date;
   const ensure = (isToday || held) && planned;
   // ISO datumi se porede leksikografski.
@@ -132,9 +134,9 @@ export default function DayPage({ date: routeDate }: { date: string | null }) {
   // Sheet koji je stvarno na ekranu (zadatak obrisan na drugom uređaju više nema sheet).
   const editTask = taskId != null ? (day?.tasks.find((x) => x.id === taskId) ?? null) : null;
   const sheetOpen = ctl.nb != null || ctl.detId != null || editTask != null || (pickerOpen && day != null);
-  // Rad u nizu koji bi prelazak na novi dan prekinuo: preimenovanje u traci, "Premesti", rezovi, prevlačenje,
-  // ručica (sam izbor bloka ne zadržava dan — inače bi mogao da ostane zauvek).
-  const stackBusy = useSyncExternalStore(ctl.subscribe, () => ctl.renaming || ctl.moveSt != null || ctl.splitSt != null || ctl.isBusy());
+  // Rad u nizu koji bi prelazak na novi dan prekinuo: "Premesti", rezovi, prevlačenje, ručica (sam izbor bloka ne
+  // zadržava dan — inače bi mogao da ostane zauvek).
+  const stackBusy = useSyncExternalStore(ctl.subscribe, () => ctl.moveSt != null || ctl.splitSt != null || ctl.isBusy());
 
   // Na "/" logičko danas — posle "dan počinje u" se sam prebaci na novi dan, ali tek kad ništa
   // nije otvoreno (sheet bloka/zadatka, kucanje beleške, rad u nizu), da se izmene u toku ne izgube.
@@ -442,9 +444,12 @@ export default function DayPage({ date: routeDate }: { date: string | null }) {
         {empty && (
           <div className="blk-notice">
             <span className="blk-notice-text">{t('day.timeline.empty')}</span>
-            <Button size="sm" icon="plus" onClick={openNew} disabled={applying}>
-              {t('day.addBlock')}
-            </Button>
+            {/* Kartica dobrodošlice (iznad) već nudi dodavanje bloka: jedan poziv, ne dva jedan ispod drugog. */}
+            {anyWeekday && (
+              <Button size="sm" icon="plus" onClick={openNew} disabled={applying}>
+                {t('day.addBlock')}
+              </Button>
+            )}
             {templates.length > 0 && (
               <Button size="sm" variant="ghost" onClick={() => setPickerOpen(true)} disabled={applying}>
                 {t('day.timeline.applyTemplate')}
@@ -480,9 +485,18 @@ export default function DayPage({ date: routeDate }: { date: string | null }) {
                 onAddBlock={openNew}
               />
             )}
-            <BlockStack ctl={ctl} categories={categories} notice={notice} carryOver={carryOver} scrollKey={date} />
+            <BlockStack
+              ctl={ctl}
+              categories={categories}
+              notice={notice}
+              carryOver={carryOver}
+              scrollKey={date}
+              inspector={inspectorEl}
+              dayLabel={date === yesterday ? t('common.yesterday') : capitalize(fmtDateMedium(date, lang))}
+            />
           </div>
           <div className="day-col day-col-side">
+            <div className="blk-inspector-slot" ref={setInspectorEl} />
             {/* Prazan dan nema šta da sabere. Desktop: Pregled i Tastatura su na vrhu kolone (uvek na oku). */}
             {!empty && <SummaryCard summary={summary} catMap={catMap} preview={!day.initialized} />}
             <KeysCard />
